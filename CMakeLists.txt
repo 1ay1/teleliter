@@ -10,6 +10,9 @@ include(${wxWidgets_USE_FILE})
 add_executable(teleliter
     src/App.cpp
     src/MainFrame.cpp
+    src/MediaPopup.cpp
+    src/FileDropTarget.cpp
+    src/TransferManager.cpp
     src/main.cpp
 )
 

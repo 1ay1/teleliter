@@ -1,6 +1,7 @@
 #include "MainFrame.h"
 #include <wx/artprov.h>
 #include <wx/settings.h>
+#include <wx/filename.h>
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(wxID_EXIT, MainFrame::OnExit)
@@ -13,6 +14,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(ID_CONTACTS, MainFrame::OnContacts)
     EVT_MENU(ID_SEARCH, MainFrame::OnSearch)
     EVT_MENU(ID_SAVED_MESSAGES, MainFrame::OnSavedMessages)
+    EVT_MENU(ID_UPLOAD_FILE, MainFrame::OnUploadFile)
     EVT_MENU(ID_PREFERENCES, MainFrame::OnPreferences)
     EVT_MENU(ID_CLEAR_WINDOW, MainFrame::OnClearWindow)
     EVT_MENU(ID_SHOW_CHAT_LIST, MainFrame::OnToggleChatList)
@@ -35,13 +37,18 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
       m_currentUser(""),
       m_currentChatId(0),
       m_currentChatTitle(""),
-      m_currentChatType(TelegramChatType::Private)
+      m_currentChatType(TelegramChatType::Private),
+      m_mediaPopup(nullptr)
 {
     SetupColors();
     SetupFonts();
     CreateMenuBar();
     CreateMainLayout();
     CreateStatusBar();
+    
+    // Create media popup (hidden initially)
+    m_mediaPopup = new MediaPopup(this);
+    
     PopulateDummyData();
     
     SetMinSize(wxSize(800, 600));
@@ -66,15 +73,15 @@ void MainFrame::SetupColors()
     // Message colors
     m_timestampColor = wxColour(0x88, 0x88, 0x88);
     m_textColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_serviceColor = wxColour(0x88, 0x88, 0x88);      // Gray for service messages
-    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);    // Orange for mentions
-    m_linkColor = wxColour(0x72, 0x9F, 0xCF);         // Blue for links
-    m_mediaColor = wxColour(0x8A, 0xE2, 0x34);        // Green for media
-    m_editedColor = wxColour(0x88, 0x88, 0x88);       // Gray for (edited)
-    m_forwardColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for forwards
-    m_replyColor = wxColour(0x88, 0x88, 0x88);        // Gray for reply context
+    m_serviceColor = wxColour(0x88, 0x88, 0x88);
+    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);
+    m_linkColor = wxColour(0x72, 0x9F, 0xCF);
+    m_mediaColor = wxColour(0x8A, 0xE2, 0x34);
+    m_editedColor = wxColour(0x88, 0x88, 0x88);
+    m_forwardColor = wxColour(0x72, 0x9F, 0xCF);
+    m_replyColor = wxColour(0x88, 0x88, 0x88);
     
-    // User colors (for sender names in groups)
+    // User colors (for sender names)
     m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
     m_userColors[1]  = wxColour(0x35, 0x36, 0xB2);
     m_userColors[2]  = wxColour(0x2A, 0x8C, 0x2A);
@@ -141,6 +148,8 @@ void MainFrame::CreateMenuBar()
     menuTelegram->Append(ID_SEARCH, "Search...\tCtrl+F");
     menuTelegram->AppendSeparator();
     menuTelegram->Append(ID_SAVED_MESSAGES, "Saved Messages");
+    menuTelegram->AppendSeparator();
+    menuTelegram->Append(ID_UPLOAD_FILE, "Upload File...\tCtrl+U");
     menuBar->Append(menuTelegram, "&Telegram");
     
     // Edit menu
@@ -149,7 +158,7 @@ void MainFrame::CreateMenuBar()
     menuEdit->Append(wxID_COPY, "Copy\tCtrl+C");
     menuEdit->Append(wxID_PASTE, "Paste\tCtrl+V");
     menuEdit->AppendSeparator();
-    menuEdit->Append(ID_CLEAR_WINDOW, "Clear Chat Window\tCtrl+L");
+    menuEdit->Append(ID_CLEAR_WINDOW, "Clear Chat Window\tCtrl+Shift+L");
     menuEdit->AppendSeparator();
     menuEdit->Append(ID_PREFERENCES, "Preferences\tCtrl+E");
     menuBar->Append(menuEdit, "&Edit");
@@ -304,6 +313,11 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     m_chatDisplay->SetDefaultStyle(defaultStyle);
     m_chatDisplay->SetBasicStyle(defaultStyle);
     
+    // Bind mouse events for hover detection
+    m_chatDisplay->Bind(wxEVT_MOTION, &MainFrame::OnChatDisplayMouseMove, this);
+    m_chatDisplay->Bind(wxEVT_LEAVE_WINDOW, &MainFrame::OnChatDisplayMouseLeave, this);
+    m_chatDisplay->Bind(wxEVT_LEFT_DOWN, &MainFrame::OnChatDisplayLeftDown, this);
+    
     sizer->Add(m_chatDisplay, 1, wxEXPAND);
     
     // Bottom separator
@@ -324,13 +338,24 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     m_inputBox->SetBackgroundColour(m_inputBgColor);
     m_inputBox->SetForegroundColour(m_inputFgColor);
     m_inputBox->SetFont(m_inputFont);
-    m_inputBox->SetHint("Write a message...");
+    m_inputBox->SetHint("Write a message... (drop files here to upload)");
+    
+    // Bind key events for clipboard paste
+    m_inputBox->Bind(wxEVT_KEY_DOWN, &MainFrame::OnInputKeyDown, this);
+    
     inputSizer->Add(m_inputBox, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
     
     inputPanel->SetSizer(inputSizer);
     sizer->Add(inputPanel, 0, wxEXPAND | wxALL, 2);
     
     parent->SetSizer(sizer);
+    
+    // Set up drag and drop for file uploads
+    FileDropTarget* dropTarget = new FileDropTarget(this, 
+        [this](const wxArrayString& files) {
+            OnFilesDropped(files);
+        });
+    m_chatDisplay->SetDropTarget(dropTarget);
 }
 
 void MainFrame::CreateMemberList(wxWindow* parent)
@@ -362,14 +387,100 @@ void MainFrame::CreateMemberList(wxWindow* parent)
 
 void MainFrame::CreateStatusBar()
 {
-    wxStatusBar* statusBar = wxFrame::CreateStatusBar(3);
+    wxStatusBar* statusBar = wxFrame::CreateStatusBar(4);
+    statusBar->SetBackgroundColour(m_bgColor);
     
-    int widths[] = {-3, 120, 80};
-    statusBar->SetStatusWidths(3, widths);
+    // Field widths: chat info | progress label | progress gauge | connection status
+    int widths[] = {-3, 150, 100, 80};
+    statusBar->SetStatusWidths(4, widths);
+    
+    // Create progress label (in field 1)
+    m_progressLabel = new wxStaticText(statusBar, wxID_ANY, "");
+    m_progressLabel->SetForegroundColour(m_fgColor);
+    m_progressLabel->SetBackgroundColour(m_bgColor);
+    m_progressLabel->Hide();
+    
+    // Create progress gauge (in field 2)
+    m_progressGauge = new wxGauge(statusBar, wxID_ANY, 100,
+        wxDefaultPosition, wxSize(90, 16), wxGA_HORIZONTAL | wxGA_SMOOTH);
+    m_progressGauge->SetBackgroundColour(m_bgColor);
+    m_progressGauge->Hide();
+    
+    // Position the widgets in the status bar
+    wxRect labelRect, gaugeRect;
+    statusBar->GetFieldRect(1, labelRect);
+    statusBar->GetFieldRect(2, gaugeRect);
+    
+    m_progressLabel->SetPosition(wxPoint(labelRect.x + 2, labelRect.y + 2));
+    m_progressLabel->SetSize(labelRect.width - 4, labelRect.height - 4);
+    
+    m_progressGauge->SetPosition(wxPoint(gaugeRect.x + 2, gaugeRect.y + 2));
+    m_progressGauge->SetSize(gaugeRect.width - 4, gaugeRect.height - 4);
     
     SetStatusText("Not logged in", 0);
-    SetStatusText("Offline", 1);
-    SetStatusText("", 2);
+    SetStatusText("Offline", 3);
+    
+    // Setup transfer manager callbacks
+    m_transferManager.SetProgressCallback([this](const TransferInfo& info) {
+        UpdateTransferProgress(info);
+    });
+    m_transferManager.SetCompleteCallback([this](const TransferInfo& info) {
+        OnTransferComplete(info);
+    });
+    m_transferManager.SetErrorCallback([this](const TransferInfo& info) {
+        OnTransferError(info);
+    });
+}
+
+void MainFrame::UpdateTransferProgress(const TransferInfo& info)
+{
+    // Show progress widgets
+    m_progressLabel->Show();
+    m_progressGauge->Show();
+    
+    // Update label: "⬆ photo.jpg 45%"
+    wxString label = info.GetDirectionSymbol() + " " + info.fileName;
+    m_progressLabel->SetLabel(label);
+    
+    // Update gauge
+    m_progressGauge->SetValue(info.GetProgressPercent());
+    
+    // If multiple transfers, show count
+    int activeCount = m_transferManager.GetActiveCount();
+    if (activeCount > 1) {
+        m_progressLabel->SetLabel(wxString::Format("%s (%d)", label, activeCount));
+    }
+}
+
+void MainFrame::OnTransferComplete(const TransferInfo& info)
+{
+    // Show completion briefly
+    m_progressLabel->SetLabel(info.GetDirectionSymbol() + " " + info.fileName + " Done");
+    m_progressGauge->SetValue(100);
+    
+    // Hide after a short delay if no more active transfers
+    if (!m_transferManager.HasActiveTransfers()) {
+        // Use CallAfter to hide after UI updates
+        CallAfter([this]() {
+            wxMilliSleep(1500);
+            if (!m_transferManager.HasActiveTransfers()) {
+                m_progressLabel->Hide();
+                m_progressGauge->Hide();
+            }
+        });
+    }
+}
+
+void MainFrame::OnTransferError(const TransferInfo& info)
+{
+    // Show error in status bar
+    SetStatusText("Error: " + info.fileName + " - " + info.error, 0);
+    
+    // Hide progress if no more active transfers
+    if (!m_transferManager.HasActiveTransfers()) {
+        m_progressLabel->Hide();
+        m_progressGauge->Hide();
+    }
 }
 
 wxColour MainFrame::GetUserColor(const wxString& username)
@@ -380,6 +491,49 @@ wxColour MainFrame::GetUserColor(const wxString& username)
         hash = static_cast<unsigned long>(username[i].GetValue()) + (hash << 6) + (hash << 16) - hash;
     }
     return m_userColors[hash % 16];
+}
+
+void MainFrame::AddMediaSpan(long startPos, long endPos, const MediaInfo& info)
+{
+    MediaSpan span;
+    span.startPos = startPos;
+    span.endPos = endPos;
+    span.info = info;
+    m_mediaSpans.push_back(span);
+}
+
+MediaSpan* MainFrame::GetMediaSpanAtPosition(long pos)
+{
+    for (auto& span : m_mediaSpans) {
+        if (span.Contains(pos)) {
+            return &span;
+        }
+    }
+    return nullptr;
+}
+
+void MainFrame::ClearMediaSpans()
+{
+    m_mediaSpans.clear();
+}
+
+void MainFrame::OpenMedia(const MediaInfo& info)
+{
+    // Open the media file or URL
+    wxString pathToOpen;
+    
+    if (!info.localPath.IsEmpty()) {
+        pathToOpen = info.localPath;
+    } else if (!info.remoteUrl.IsEmpty()) {
+        pathToOpen = info.remoteUrl;
+    } else {
+        // No path available - show error in status bar
+        SetStatusText("Error: Media not yet downloaded", 0);
+        return;
+    }
+    
+    // Open with default application
+    wxLaunchDefaultApplication(pathToOpen);
 }
 
 void MainFrame::PopulateDummyData()
@@ -442,7 +596,12 @@ void MainFrame::PopulateDummyData()
     AppendReplyMessage("12:00:58", "David", "Alice: Just installed Arch btw", 
                        "Congrats! The Arch wiki is your best friend now");
     
-    AppendMediaMessage("12:01:10", "Eve", "Photo", "Look at my desktop!");
+    // Sample media message with MediaInfo
+    MediaInfo photoInfo;
+    photoInfo.type = MediaType::Photo;
+    photoInfo.caption = "Look at my desktop!";
+    photoInfo.id = "photo123";
+    AppendMediaMessage("12:01:10", "Eve", photoInfo, "Look at my desktop!");
     
     AppendMessage("12:01:25", "Frank", "That looks clean! What DE are you using?");
     AppendMessage("12:01:32", "Eve", "It's KDE Plasma with some custom themes");
@@ -460,11 +619,22 @@ void MainFrame::PopulateDummyData()
     AppendMessage("12:02:45", "Alice", "Yes! Been using it for months, very stable");
     AppendMessage("12:02:58", "Bob", "Still having some issues with screen sharing in Discord");
     
-    AppendMediaMessage("12:03:10", "Charlie", "File", "linux-guide.pdf");
+    // Sample file message
+    MediaInfo fileInfo;
+    fileInfo.type = MediaType::File;
+    fileInfo.fileName = "linux-guide.pdf";
+    fileInfo.fileSize = "2.4 MB";
+    AppendMediaMessage("12:03:10", "Charlie", fileInfo, "");
     
     AppendLeaveMessage("12:03:20", "OldUser");
     
     AppendMessage("12:03:30", "David", "Check out this link: https://kernel.org");
+    
+    // Sample sticker
+    MediaInfo stickerInfo;
+    stickerInfo.type = MediaType::Sticker;
+    stickerInfo.emoji = "😎";
+    AppendMediaMessage("12:03:45", "Eve", stickerInfo, "");
     
     m_chatDisplay->EndSuppressUndo();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
@@ -524,9 +694,9 @@ void MainFrame::AppendLeaveMessage(const wxString& timestamp, const wxString& us
 }
 
 void MainFrame::AppendMediaMessage(const wxString& timestamp, const wxString& sender,
-                                   const wxString& mediaType, const wxString& caption)
+                                   const MediaInfo& media, const wxString& caption)
 {
-    // Format: [HH:MM:SS] <sender> [Photo/Video/File/etc] caption
+    // Format: [HH:MM:SS] <sender> [Photo] caption
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
     m_chatDisplay->EndTextColour();
@@ -535,22 +705,65 @@ void MainFrame::AppendMediaMessage(const wxString& timestamp, const wxString& se
     m_chatDisplay->WriteText("<" + sender + "> ");
     m_chatDisplay->EndTextColour();
     
+    // Get position before media tag for hover tracking
+    long startPos = m_chatDisplay->GetLastPosition();
+    
+    // Media tag
     m_chatDisplay->BeginTextColour(m_mediaColor);
-    m_chatDisplay->WriteText("[" + mediaType + "]");
+    m_chatDisplay->BeginUnderline();
+    
+    wxString mediaLabel;
+    switch (media.type) {
+        case MediaType::Photo:
+            mediaLabel = "[Photo]";
+            break;
+        case MediaType::Video:
+            mediaLabel = "[Video]";
+            break;
+        case MediaType::Sticker:
+            mediaLabel = "[Sticker " + media.emoji + "]";
+            break;
+        case MediaType::GIF:
+            mediaLabel = "[GIF]";
+            break;
+        case MediaType::Voice:
+            mediaLabel = "[Voice]";
+            break;
+        case MediaType::VideoNote:
+            mediaLabel = "[Video Message]";
+            break;
+        case MediaType::File:
+            mediaLabel = "[File: " + media.fileName + "]";
+            break;
+        default:
+            mediaLabel = "[Media]";
+            break;
+    }
+    
+    m_chatDisplay->WriteText(mediaLabel);
+    m_chatDisplay->EndUnderline();
     m_chatDisplay->EndTextColour();
     
+    // Get position after media tag
+    long endPos = m_chatDisplay->GetLastPosition();
+    
+    // Store media span for hover detection
+    AddMediaSpan(startPos, endPos, media);
+    
+    // Caption
     if (!caption.IsEmpty()) {
         m_chatDisplay->BeginTextColour(m_textColor);
         m_chatDisplay->WriteText(" " + caption);
         m_chatDisplay->EndTextColour();
     }
+    
     m_chatDisplay->WriteText("\n");
 }
 
 void MainFrame::AppendReplyMessage(const wxString& timestamp, const wxString& sender,
                                    const wxString& replyTo, const wxString& message)
 {
-    // Format: [HH:MM:SS] <sender> [Reply: replyTo] message
+    // Format: [HH:MM:SS] <sender> [> replyTo] message
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
     m_chatDisplay->EndTextColour();
@@ -610,7 +823,173 @@ void MainFrame::AppendEditedMessage(const wxString& timestamp, const wxString& s
     m_chatDisplay->EndTextColour();
 }
 
-// Event Handlers
+// Mouse event handlers for hover detection
+
+void MainFrame::OnChatDisplayMouseMove(wxMouseEvent& event)
+{
+    event.Skip();
+    
+    wxPoint pos = event.GetPosition();
+    long textPos;
+    
+    // Hit test to find text position
+    wxTextCtrlHitTestResult result = m_chatDisplay->HitTest(pos, &textPos);
+    
+    if (result == wxTE_HT_ON_TEXT) {
+        MediaSpan* span = GetMediaSpanAtPosition(textPos);
+        
+        if (span) {
+            // We're over a media span - show popup instantly
+            wxPoint screenPos = m_chatDisplay->ClientToScreen(pos);
+            screenPos.x += 10;  // Offset slightly
+            screenPos.y += 10;
+            m_mediaPopup->ShowMedia(span->info, screenPos);
+            
+            // Change cursor to hand
+            m_chatDisplay->SetCursor(wxCursor(wxCURSOR_HAND));
+        } else {
+            // Not over a media span - hide popup
+            if (m_mediaPopup->IsShown()) {
+                m_mediaPopup->Hide();
+            }
+            m_chatDisplay->SetCursor(wxCursor(wxCURSOR_IBEAM));
+        }
+    } else {
+        if (m_mediaPopup->IsShown()) {
+            m_mediaPopup->Hide();
+        }
+        m_chatDisplay->SetCursor(wxCursor(wxCURSOR_IBEAM));
+    }
+}
+
+void MainFrame::OnChatDisplayMouseLeave(wxMouseEvent& event)
+{
+    event.Skip();
+    
+    // Hide popup when mouse leaves chat display
+    if (m_mediaPopup && m_mediaPopup->IsShown()) {
+        m_mediaPopup->Hide();
+    }
+}
+
+void MainFrame::OnChatDisplayLeftDown(wxMouseEvent& event)
+{
+    event.Skip();
+    
+    wxPoint pos = event.GetPosition();
+    long textPos;
+    
+    wxTextCtrlHitTestResult result = m_chatDisplay->HitTest(pos, &textPos);
+    
+    if (result == wxTE_HT_ON_TEXT) {
+        MediaSpan* span = GetMediaSpanAtPosition(textPos);
+        
+        if (span) {
+            // Clicked on media - open it
+            OpenMedia(span->info);
+        }
+    }
+}
+
+// File drop handler
+
+void MainFrame::OnFilesDropped(const wxArrayString& files)
+{
+    wxDateTime now = wxDateTime::Now();
+    wxString timestamp = now.Format("%H:%M:%S");
+    
+    for (const auto& file : files) {
+        wxFileName fn(file);
+        wxString filename = fn.GetFullName();
+        
+        FileMediaType type = GetMediaTypeFromExtension(file);
+        
+        MediaInfo media;
+        media.localPath = file;
+        media.fileName = filename;
+        
+        switch (type) {
+            case FileMediaType::Image:
+                media.type = MediaType::Photo;
+                break;
+            case FileMediaType::Video:
+                media.type = MediaType::Video;
+                break;
+            case FileMediaType::Audio:
+                media.type = MediaType::Voice;
+                break;
+            default:
+                media.type = MediaType::File;
+                break;
+        }
+        
+        // Start upload with transfer manager
+        wxFile wxf(file);
+        int64_t fileSize = wxf.IsOpened() ? wxf.Length() : 0;
+        wxf.Close();
+        int transferId = m_transferManager.StartUpload(file, fileSize);
+        
+        // TODO: Actually upload via TDLib
+        // For now, simulate progress and complete
+        AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
+                          media, "");
+        
+        // Simulate completion (will be replaced by TDLib callbacks)
+        m_transferManager.CompleteTransfer(transferId, file);
+    }
+    
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+}
+
+void MainFrame::OnUploadFile(wxCommandEvent& event)
+{
+    wxFileDialog dialog(this, "Select file to upload", "", "",
+        "All files (*.*)|*.*|"
+        "Images (*.jpg;*.png;*.gif)|*.jpg;*.jpeg;*.png;*.gif;*.webp|"
+        "Videos (*.mp4;*.mkv;*.avi)|*.mp4;*.mkv;*.avi;*.mov;*.webm|"
+        "Documents (*.pdf;*.doc;*.txt)|*.pdf;*.doc;*.docx;*.txt",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+    
+    if (dialog.ShowModal() == wxID_OK) {
+        wxArrayString files;
+        dialog.GetPaths(files);
+        OnFilesDropped(files);
+    }
+}
+
+void MainFrame::OnInputKeyDown(wxKeyEvent& event)
+{
+    // Check for Ctrl+V (paste)
+    if (event.ControlDown() && event.GetKeyCode() == 'V') {
+        HandleClipboardPaste();
+    }
+    event.Skip();
+}
+
+void MainFrame::HandleClipboardPaste()
+{
+    if (wxTheClipboard->Open()) {
+        // Check if clipboard has an image
+        if (wxTheClipboard->IsSupported(wxDF_BITMAP)) {
+            wxBitmapDataObject bitmapData;
+            if (wxTheClipboard->GetData(bitmapData)) {
+                wxBitmap bitmap = bitmapData.GetBitmap();
+                if (bitmap.IsOk()) {
+                    // Save to temp file and "upload"
+                    wxString tempPath = wxFileName::GetTempDir() + "/teleliter_paste.png";
+                    bitmap.SaveFile(tempPath, wxBITMAP_TYPE_PNG);
+                    
+                    wxArrayString files;
+                    files.Add(tempPath);
+                    OnFilesDropped(files);
+                }
+            }
+        }
+        wxTheClipboard->Close();
+    }
+}
+
+// Menu event handlers
 
 void MainFrame::OnExit(wxCommandEvent& event)
 {
@@ -622,7 +1001,12 @@ void MainFrame::OnAbout(wxCommandEvent& event)
     wxMessageBox("Teleliter\n\n"
                  "Telegram client with HexChat-style interface\n"
                  "Built with TDLib\n\n"
-                 "Version 0.1.0",
+                 "Version 0.1.0\n\n"
+                 "Features:\n"
+                 "- Hover over [Photo], [Video], [Sticker] to preview\n"
+                 "- Click to open the file\n"
+                 "- Drag & drop files to upload\n"
+                 "- Ctrl+V to paste images",
                  "About Teleliter",
                  wxOK | wxICON_INFORMATION, this);
 }
@@ -647,7 +1031,6 @@ void MainFrame::OnNewChat(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter username or phone number:", "New Private Chat");
     if (dlg.ShowModal() == wxID_OK) {
         wxString contact = dlg.GetValue();
-        // TODO: Implement with TDLib - search user and create private chat
         AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Starting chat with " + contact);
     }
@@ -658,7 +1041,6 @@ void MainFrame::OnNewGroup(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter group name:", "New Group");
     if (dlg.ShowModal() == wxID_OK) {
         wxString groupName = dlg.GetValue();
-        // TODO: Implement with TDLib - create group
         AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Creating group: " + groupName);
     }
@@ -669,7 +1051,6 @@ void MainFrame::OnNewChannel(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter channel name:", "New Channel");
     if (dlg.ShowModal() == wxID_OK) {
         wxString channelName = dlg.GetValue();
-        // TODO: Implement with TDLib - create channel
         AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Creating channel: " + channelName);
     }
@@ -677,7 +1058,6 @@ void MainFrame::OnNewChannel(wxCommandEvent& event)
 
 void MainFrame::OnContacts(wxCommandEvent& event)
 {
-    // TODO: Implement contacts dialog with TDLib
     wxMessageBox("Contacts dialog will be implemented.", "Contacts", wxOK, this);
 }
 
@@ -686,7 +1066,6 @@ void MainFrame::OnSearch(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Search messages, chats, and users:", "Search");
     if (dlg.ShowModal() == wxID_OK) {
         wxString query = dlg.GetValue();
-        // TODO: Implement with TDLib - search
         AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Searching for: " + query);
     }
@@ -694,7 +1073,6 @@ void MainFrame::OnSearch(wxCommandEvent& event)
 
 void MainFrame::OnSavedMessages(wxCommandEvent& event)
 {
-    // TODO: Open Saved Messages chat
     m_currentChatTitle = "Saved Messages";
     m_currentChatType = TelegramChatType::SavedMessages;
     m_chatInfoBar->SetValue("Saved Messages");
@@ -709,6 +1087,7 @@ void MainFrame::OnPreferences(wxCommandEvent& event)
 void MainFrame::OnClearWindow(wxCommandEvent& event)
 {
     m_chatDisplay->Clear();
+    ClearMediaSpans();
 }
 
 void MainFrame::OnToggleChatList(wxCommandEvent& event)
@@ -776,7 +1155,6 @@ void MainFrame::OnMemberListItemActivated(wxListEvent& event)
         username = username.Left(parenPos);
     }
     
-    // TODO: Open user profile or start private chat
     AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                         "Opening profile: " + username);
 }
@@ -815,9 +1193,4 @@ void MainFrame::OnInputEnter(wxCommandEvent& event)
     
     m_inputBox->Clear();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
-}
-
-void MainFrame::OnInputKeyDown(wxKeyEvent& event)
-{
-    event.Skip();
 }

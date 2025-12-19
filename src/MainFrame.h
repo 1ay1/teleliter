@@ -7,6 +7,13 @@
 #include <wx/listctrl.h>
 #include <wx/richtext/richtextctrl.h>
 #include <wx/fontenum.h>
+#include <wx/clipbrd.h>
+#include <wx/gauge.h>
+#include <vector>
+
+#include "MediaPopup.h"
+#include "FileDropTarget.h"
+#include "TransferManager.h"
 
 // Menu IDs - Telegram client menu structure
 enum {
@@ -22,6 +29,7 @@ enum {
     ID_CONTACTS,
     ID_SEARCH,
     ID_SAVED_MESSAGES,
+    ID_UPLOAD_FILE,
     
     // Edit menu
     ID_CLEAR_WINDOW,
@@ -79,6 +87,9 @@ class MainFrame : public wxFrame
 public:
     MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size);
     
+    // Called when files are dropped onto the chat
+    void OnFilesDropped(const wxArrayString& files);
+    
 private:
     // UI Setup methods
     void CreateMenuBar();
@@ -87,6 +98,9 @@ private:
     void CreateChatPanel(wxWindow* parent);
     void CreateMemberList(wxWindow* parent);
     void CreateStatusBar();
+    void UpdateTransferProgress(const TransferInfo& info);
+    void OnTransferComplete(const TransferInfo& info);
+    void OnTransferError(const TransferInfo& info);
     void SetupColors();
     void SetupFonts();
     void PopulateDummyData();
@@ -97,15 +111,26 @@ private:
     void AppendServiceMessage(const wxString& timestamp, const wxString& message);
     void AppendJoinMessage(const wxString& timestamp, const wxString& user);
     void AppendLeaveMessage(const wxString& timestamp, const wxString& user);
+    
+    // Media message methods - returns the MediaSpan for hover tracking
     void AppendMediaMessage(const wxString& timestamp, const wxString& sender,
-                            const wxString& mediaType, const wxString& caption = "");
+                            const MediaInfo& media, const wxString& caption = "");
     void AppendReplyMessage(const wxString& timestamp, const wxString& sender,
                             const wxString& replyTo, const wxString& message);
     void AppendForwardMessage(const wxString& timestamp, const wxString& sender,
                               const wxString& forwardFrom, const wxString& message);
     void AppendEditedMessage(const wxString& timestamp, const wxString& sender,
                              const wxString& message);
+    
     wxColour GetUserColor(const wxString& username);
+    
+    // Media span tracking for hover detection
+    void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
+    MediaSpan* GetMediaSpanAtPosition(long pos);
+    void ClearMediaSpans();
+    
+    // Open media file or URL
+    void OpenMedia(const MediaInfo& info);
     
     // Event handlers - Menu
     void OnExit(wxCommandEvent& event);
@@ -118,6 +143,7 @@ private:
     void OnContacts(wxCommandEvent& event);
     void OnSearch(wxCommandEvent& event);
     void OnSavedMessages(wxCommandEvent& event);
+    void OnUploadFile(wxCommandEvent& event);
     void OnPreferences(wxCommandEvent& event);
     void OnClearWindow(wxCommandEvent& event);
     void OnToggleChatList(wxCommandEvent& event);
@@ -132,6 +158,14 @@ private:
     void OnMemberListRightClick(wxListEvent& event);
     void OnInputEnter(wxCommandEvent& event);
     void OnInputKeyDown(wxKeyEvent& event);
+    
+    // Chat display mouse events for hover detection
+    void OnChatDisplayMouseMove(wxMouseEvent& event);
+    void OnChatDisplayMouseLeave(wxMouseEvent& event);
+    void OnChatDisplayLeftDown(wxMouseEvent& event);
+    
+    // Clipboard paste handler
+    void HandleClipboardPaste();
     
     // Main splitter windows
     wxSplitterWindow* m_mainSplitter;      // Splits chat list from rest
@@ -158,6 +192,15 @@ private:
     wxListCtrl* m_memberList;
     wxStaticText* m_memberCountLabel;
     
+    // Media popup for hover previews
+    MediaPopup* m_mediaPopup;
+    std::vector<MediaSpan> m_mediaSpans;
+    
+    // Transfer progress
+    TransferManager m_transferManager;
+    wxGauge* m_progressGauge;
+    wxStaticText* m_progressLabel;
+    
     // HexChat-style colors
     wxColour m_bgColor;
     wxColour m_fgColor;
@@ -174,13 +217,13 @@ private:
     // Message colors
     wxColour m_timestampColor;
     wxColour m_textColor;
-    wxColour m_serviceColor;        // For service messages (user joined, etc.)
-    wxColour m_highlightColor;      // For mentions
-    wxColour m_linkColor;           // For URLs
-    wxColour m_mediaColor;          // For media messages
-    wxColour m_editedColor;         // For (edited) indicator
-    wxColour m_forwardColor;        // For forwarded messages
-    wxColour m_replyColor;          // For reply context
+    wxColour m_serviceColor;
+    wxColour m_highlightColor;
+    wxColour m_linkColor;
+    wxColour m_mediaColor;
+    wxColour m_editedColor;
+    wxColour m_forwardColor;
+    wxColour m_replyColor;
     
     // User colors (for sender names)
     wxColour m_userColors[16];
