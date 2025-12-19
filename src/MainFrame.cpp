@@ -1,82 +1,146 @@
 #include "MainFrame.h"
 #include <wx/artprov.h>
+#include <wx/settings.h>
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(wxID_EXIT, MainFrame::OnExit)
     EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
-    EVT_MENU(ID_CONNECT, MainFrame::OnConnect)
-    EVT_MENU(ID_DISCONNECT, MainFrame::OnDisconnect)
+    EVT_MENU(ID_LOGIN, MainFrame::OnLogin)
+    EVT_MENU(ID_LOGOUT, MainFrame::OnLogout)
+    EVT_MENU(ID_NEW_CHAT, MainFrame::OnNewChat)
+    EVT_MENU(ID_NEW_GROUP, MainFrame::OnNewGroup)
+    EVT_MENU(ID_NEW_CHANNEL, MainFrame::OnNewChannel)
+    EVT_MENU(ID_CONTACTS, MainFrame::OnContacts)
+    EVT_MENU(ID_SEARCH, MainFrame::OnSearch)
+    EVT_MENU(ID_SAVED_MESSAGES, MainFrame::OnSavedMessages)
     EVT_MENU(ID_PREFERENCES, MainFrame::OnPreferences)
     EVT_MENU(ID_CLEAR_WINDOW, MainFrame::OnClearWindow)
-    EVT_MENU(ID_SHOW_USERLIST, MainFrame::OnToggleUserList)
-    EVT_MENU(ID_SHOW_CHANNEL_TREE, MainFrame::OnToggleChannelTree)
+    EVT_MENU(ID_SHOW_CHAT_LIST, MainFrame::OnToggleChatList)
+    EVT_MENU(ID_SHOW_MEMBERS, MainFrame::OnToggleMembers)
+    EVT_MENU(ID_SHOW_CHAT_INFO, MainFrame::OnToggleChatInfo)
     EVT_MENU(ID_FULLSCREEN, MainFrame::OnFullscreen)
     EVT_TREE_SEL_CHANGED(ID_CHAT_TREE, MainFrame::OnChatTreeSelectionChanged)
-    EVT_LIST_ITEM_ACTIVATED(ID_USER_LIST, MainFrame::OnUserListItemActivated)
+    EVT_TREE_ITEM_ACTIVATED(ID_CHAT_TREE, MainFrame::OnChatTreeItemActivated)
+    EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST, MainFrame::OnMemberListItemActivated)
+    EVT_LIST_ITEM_RIGHT_CLICK(ID_MEMBER_LIST, MainFrame::OnMemberListRightClick)
     EVT_TEXT_ENTER(ID_INPUT_BOX, MainFrame::OnInputEnter)
 wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
     : wxFrame(NULL, wxID_ANY, title, pos, size),
-      m_showUserList(true),
-      m_showChannelTree(true),
-      m_currentNick("You")
+      m_showChatList(true),
+      m_showMembers(true),
+      m_showChatInfo(true),
+      m_isLoggedIn(false),
+      m_currentUser(""),
+      m_currentChatId(0),
+      m_currentChatTitle(""),
+      m_currentChatType(TelegramChatType::Private)
 {
     SetupColors();
+    SetupFonts();
     CreateMenuBar();
     CreateMainLayout();
     CreateStatusBar();
     PopulateDummyData();
     
-    // Set minimum size
     SetMinSize(wxSize(800, 600));
-    
-    // Set the background color for the frame
     SetBackgroundColour(m_bgColor);
 }
 
 void MainFrame::SetupColors()
 {
-    // HexChat dark theme colors
-    m_bgColor = wxColour(46, 52, 54);           // Dark gray background
-    m_fgColor = wxColour(211, 215, 207);        // Light gray text
-    m_inputBgColor = wxColour(46, 52, 54);      // Dark gray input
-    m_inputFgColor = wxColour(211, 215, 207);   // Light gray input text
-    m_treeItemBgColor = wxColour(46, 52, 54);   // Tree background
-    m_treeItemFgColor = wxColour(211, 215, 207);// Tree text
-    m_userListBgColor = wxColour(46, 52, 54);   // User list background
-    m_userListFgColor = wxColour(211, 215, 207);// User list text
-    m_topicBgColor = wxColour(85, 87, 83);      // Topic bar background
-    m_topicFgColor = wxColour(211, 215, 207);   // Topic bar text
-    m_timestampColor = wxColour(85, 87, 83);    // Gray timestamps
-    m_nicknameColor = wxColour(114, 159, 207);  // Blue nicknames
-    m_actionColor = wxColour(173, 127, 168);    // Purple actions
-    m_noticeColor = wxColour(252, 175, 62);     // Orange notices
-    m_highlightColor = wxColour(239, 41, 41);   // Red highlights
+    // HexChat-style dark theme
+    m_bgColor = wxColour(0x2B, 0x2B, 0x2B);
+    m_fgColor = wxColour(0xD3, 0xD7, 0xCF);
+    m_inputBgColor = wxColour(0x2B, 0x2B, 0x2B);
+    m_inputFgColor = wxColour(0xD3, 0xD7, 0xCF);
+    m_treeBgColor = wxColour(0x2B, 0x2B, 0x2B);
+    m_treeFgColor = wxColour(0xD3, 0xD7, 0xCF);
+    m_treeSelBgColor = wxColour(0x3C, 0x3C, 0x3C);
+    m_memberListBgColor = wxColour(0x2B, 0x2B, 0x2B);
+    m_memberListFgColor = wxColour(0xD3, 0xD7, 0xCF);
+    m_chatInfoBgColor = wxColour(0x23, 0x23, 0x23);
+    m_chatInfoFgColor = wxColour(0xD3, 0xD7, 0xCF);
+    
+    // Message colors
+    m_timestampColor = wxColour(0x88, 0x88, 0x88);
+    m_textColor = wxColour(0xD3, 0xD7, 0xCF);
+    m_serviceColor = wxColour(0x88, 0x88, 0x88);      // Gray for service messages
+    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);    // Orange for mentions
+    m_linkColor = wxColour(0x72, 0x9F, 0xCF);         // Blue for links
+    m_mediaColor = wxColour(0x8A, 0xE2, 0x34);        // Green for media
+    m_editedColor = wxColour(0x88, 0x88, 0x88);       // Gray for (edited)
+    m_forwardColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for forwards
+    m_replyColor = wxColour(0x88, 0x88, 0x88);        // Gray for reply context
+    
+    // User colors (for sender names in groups)
+    m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
+    m_userColors[1]  = wxColour(0x35, 0x36, 0xB2);
+    m_userColors[2]  = wxColour(0x2A, 0x8C, 0x2A);
+    m_userColors[3]  = wxColour(0xC3, 0x38, 0x38);
+    m_userColors[4]  = wxColour(0xC7, 0x38, 0x38);
+    m_userColors[5]  = wxColour(0x80, 0x00, 0x80);
+    m_userColors[6]  = wxColour(0xFF, 0x80, 0x00);
+    m_userColors[7]  = wxColour(0x80, 0x80, 0x00);
+    m_userColors[8]  = wxColour(0x33, 0xCC, 0x33);
+    m_userColors[9]  = wxColour(0x00, 0x80, 0x80);
+    m_userColors[10] = wxColour(0x33, 0xCC, 0xCC);
+    m_userColors[11] = wxColour(0x66, 0x66, 0xFF);
+    m_userColors[12] = wxColour(0xFF, 0x00, 0xFF);
+    m_userColors[13] = wxColour(0x80, 0x80, 0x80);
+    m_userColors[14] = wxColour(0xCC, 0xCC, 0xCC);
+    m_userColors[15] = wxColour(0x72, 0x9F, 0xCF);
+}
+
+void MainFrame::SetupFonts()
+{
+    wxArrayString monoFonts;
+    monoFonts.Add("Monospace");
+    monoFonts.Add("DejaVu Sans Mono");
+    monoFonts.Add("Consolas");
+    monoFonts.Add("Monaco");
+    monoFonts.Add("Menlo");
+    monoFonts.Add("Courier New");
+    
+    wxString fontName = "Monospace";
+    for (const auto& font : monoFonts) {
+        if (wxFontEnumerator::IsValidFacename(font)) {
+            fontName = font;
+            break;
+        }
+    }
+    
+    m_chatFont = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
+    m_treeFont = wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    m_memberListFont = wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    m_inputFont = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
 }
 
 void MainFrame::CreateMenuBar()
 {
     wxMenuBar* menuBar = new wxMenuBar;
     
-    // Teleliter menu (like HexChat menu)
-    wxMenu* menuTeleliter = new wxMenu;
-    menuTeleliter->Append(ID_NETWORK_LIST, "Network List...\tCtrl+S");
-    menuTeleliter->AppendSeparator();
-    menuTeleliter->Append(ID_NEW_CHAT, "New Chat...\tCtrl+N");
-    menuTeleliter->AppendSeparator();
-    menuTeleliter->Append(ID_RAW_LOG, "Raw Log...");
-    menuTeleliter->AppendSeparator();
-    menuTeleliter->Append(wxID_EXIT, "Quit\tCtrl+Q");
-    menuBar->Append(menuTeleliter, "&Teleliter");
+    // Teleliter menu
+    wxMenu* menuApp = new wxMenu;
+    menuApp->Append(ID_LOGIN, "Login...\tCtrl+L");
+    menuApp->Append(ID_LOGOUT, "Logout");
+    menuApp->AppendSeparator();
+    menuApp->Append(ID_RAW_LOG, "TDLib Log...");
+    menuApp->AppendSeparator();
+    menuApp->Append(wxID_EXIT, "Quit\tCtrl+Q");
+    menuBar->Append(menuApp, "&Teleliter");
     
-    // Telegram menu (like Server menu)
+    // Telegram menu
     wxMenu* menuTelegram = new wxMenu;
-    menuTelegram->Append(ID_CONNECT, "Connect\tCtrl+Shift+C");
-    menuTelegram->Append(ID_DISCONNECT, "Disconnect\tCtrl+Shift+D");
+    menuTelegram->Append(ID_NEW_CHAT, "New Private Chat...\tCtrl+N");
+    menuTelegram->Append(ID_NEW_GROUP, "New Group...\tCtrl+G");
+    menuTelegram->Append(ID_NEW_CHANNEL, "New Channel...");
     menuTelegram->AppendSeparator();
-    menuTelegram->Append(ID_JOIN_GROUP, "Join Group...\tCtrl+J");
-    menuTelegram->Append(ID_JOIN_CHANNEL, "Join Channel...\tCtrl+Shift+J");
+    menuTelegram->Append(ID_CONTACTS, "Contacts...\tCtrl+Shift+C");
+    menuTelegram->Append(ID_SEARCH, "Search...\tCtrl+F");
+    menuTelegram->AppendSeparator();
+    menuTelegram->Append(ID_SAVED_MESSAGES, "Saved Messages");
     menuBar->Append(menuTelegram, "&Telegram");
     
     // Edit menu
@@ -85,36 +149,36 @@ void MainFrame::CreateMenuBar()
     menuEdit->Append(wxID_COPY, "Copy\tCtrl+C");
     menuEdit->Append(wxID_PASTE, "Paste\tCtrl+V");
     menuEdit->AppendSeparator();
-    menuEdit->Append(ID_CLEAR_WINDOW, "Clear Window\tCtrl+L");
+    menuEdit->Append(ID_CLEAR_WINDOW, "Clear Chat Window\tCtrl+L");
     menuEdit->AppendSeparator();
-    menuEdit->Append(ID_PREFERENCES, "Preferences...\tCtrl+P");
+    menuEdit->Append(ID_PREFERENCES, "Preferences\tCtrl+E");
     menuBar->Append(menuEdit, "&Edit");
     
     // View menu
     wxMenu* menuView = new wxMenu;
-    menuView->AppendCheckItem(ID_SHOW_CHANNEL_TREE, "Channel Tree\tF7");
-    menuView->Check(ID_SHOW_CHANNEL_TREE, true);
-    menuView->AppendCheckItem(ID_SHOW_USERLIST, "User List\tF8");
-    menuView->Check(ID_SHOW_USERLIST, true);
-    menuView->AppendSeparator();
-    menuView->AppendCheckItem(ID_HIDE_JOIN_PART, "Hide Join/Part Messages");
+    menuView->AppendCheckItem(ID_SHOW_CHAT_LIST, "Chat List\tF9");
+    menuView->Check(ID_SHOW_CHAT_LIST, true);
+    menuView->AppendCheckItem(ID_SHOW_MEMBERS, "Members List\tF7");
+    menuView->Check(ID_SHOW_MEMBERS, true);
+    menuView->AppendCheckItem(ID_SHOW_CHAT_INFO, "Chat Info Bar");
+    menuView->Check(ID_SHOW_CHAT_INFO, true);
     menuView->AppendSeparator();
     menuView->Append(ID_FULLSCREEN, "Fullscreen\tF11");
     menuBar->Append(menuView, "&View");
     
     // Window menu
     wxMenu* menuWindow = new wxMenu;
-    menuWindow->Append(wxID_ANY, "Previous Tab\tCtrl+Page_Up");
-    menuWindow->Append(wxID_ANY, "Next Tab\tCtrl+Page_Down");
+    menuWindow->Append(wxID_ANY, "Previous Chat\tCtrl+Page_Up");
+    menuWindow->Append(wxID_ANY, "Next Chat\tCtrl+Page_Down");
     menuWindow->AppendSeparator();
-    menuWindow->Append(wxID_ANY, "Close Tab\tCtrl+W");
+    menuWindow->Append(wxID_ANY, "Close Chat\tCtrl+W");
     menuBar->Append(menuWindow, "&Window");
     
     // Help menu
     wxMenu* menuHelp = new wxMenu;
     menuHelp->Append(wxID_ANY, "Documentation\tF1");
     menuHelp->AppendSeparator();
-    menuHelp->Append(wxID_ABOUT, "About Teleliter");
+    menuHelp->Append(wxID_ABOUT, "About");
     menuBar->Append(menuHelp, "&Help");
     
     SetMenuBar(menuBar);
@@ -122,43 +186,44 @@ void MainFrame::CreateMenuBar()
 
 void MainFrame::CreateMainLayout()
 {
-    // Main panel to hold everything
     wxPanel* mainPanel = new wxPanel(this);
     mainPanel->SetBackgroundColour(m_bgColor);
     
-    // Main horizontal splitter (left tree | rest)
+    // Main horizontal splitter (chat list | rest)
     m_mainSplitter = new wxSplitterWindow(mainPanel, wxID_ANY, 
         wxDefaultPosition, wxDefaultSize, 
-        wxSP_LIVE_UPDATE | wxSP_3DSASH);
-    m_mainSplitter->SetBackgroundColour(m_bgColor);
-    m_mainSplitter->SetMinimumPaneSize(150);
+        wxSP_LIVE_UPDATE | wxSP_3DSASH | wxSP_NO_XP_THEME);
+    m_mainSplitter->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+    m_mainSplitter->SetSashGravity(0.0);
+    m_mainSplitter->SetMinimumPaneSize(120);
     
-    // Left panel for chat tree
+    // Left panel - Chat list
     m_leftPanel = new wxPanel(m_mainSplitter);
-    m_leftPanel->SetBackgroundColour(m_bgColor);
-    CreateChatTree(m_leftPanel);
+    m_leftPanel->SetBackgroundColour(m_treeBgColor);
+    CreateChatList(m_leftPanel);
     
-    // Right splitter (chat area | user list)
+    // Right splitter (chat area | member list)
     m_rightSplitter = new wxSplitterWindow(m_mainSplitter, wxID_ANY,
         wxDefaultPosition, wxDefaultSize,
-        wxSP_LIVE_UPDATE | wxSP_3DSASH);
-    m_rightSplitter->SetBackgroundColour(m_bgColor);
+        wxSP_LIVE_UPDATE | wxSP_3DSASH | wxSP_NO_XP_THEME);
+    m_rightSplitter->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+    m_rightSplitter->SetSashGravity(1.0);
     m_rightSplitter->SetMinimumPaneSize(100);
     
-    // Center panel for chat
+    // Center panel - Chat
     m_chatPanel = new wxPanel(m_rightSplitter);
     m_chatPanel->SetBackgroundColour(m_bgColor);
     CreateChatPanel(m_chatPanel);
     
-    // Right panel for user list
+    // Right panel - Member list
     m_rightPanel = new wxPanel(m_rightSplitter);
-    m_rightPanel->SetBackgroundColour(m_bgColor);
-    CreateUserList(m_rightPanel);
+    m_rightPanel->SetBackgroundColour(m_memberListBgColor);
+    CreateMemberList(m_rightPanel);
     
-    // Split the right splitter (chat | users)
-    m_rightSplitter->SplitVertically(m_chatPanel, m_rightPanel, -150);
+    // Split the right splitter (chat | members)
+    m_rightSplitter->SplitVertically(m_chatPanel, m_rightPanel, -130);
     
-    // Split the main splitter (tree | rest)
+    // Split the main splitter (chat list | rest)
     m_mainSplitter->SplitVertically(m_leftPanel, m_rightSplitter, 180);
     
     // Main sizer
@@ -172,32 +237,36 @@ void MainFrame::CreateMainLayout()
     SetSizer(frameSizer);
 }
 
-void MainFrame::CreateChatTree(wxWindow* parent)
+void MainFrame::CreateChatList(wxWindow* parent)
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
-    // Tree control
+    // Tree control for chat list
     m_chatTree = new wxTreeCtrl(parent, ID_CHAT_TREE,
         wxDefaultPosition, wxDefaultSize,
         wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT | wxTR_NO_LINES | 
-        wxTR_FULL_ROW_HIGHLIGHT | wxBORDER_NONE);
+        wxTR_FULL_ROW_HIGHLIGHT | wxBORDER_NONE | wxTR_SINGLE);
     
-    m_chatTree->SetBackgroundColour(m_treeItemBgColor);
-    m_chatTree->SetForegroundColour(m_treeItemFgColor);
+    m_chatTree->SetBackgroundColour(m_treeBgColor);
+    m_chatTree->SetForegroundColour(m_treeFgColor);
+    m_chatTree->SetFont(m_treeFont);
     
-    // Create root and category items
-    m_treeRoot = m_chatTree->AddRoot("Telegram");
-    m_savedMessages = m_chatTree->AppendItem(m_treeRoot, "📌 Saved Messages");
-    m_privateChats = m_chatTree->AppendItem(m_treeRoot, "👤 Private Chats");
-    m_groups = m_chatTree->AppendItem(m_treeRoot, "👥 Groups");
-    m_channels = m_chatTree->AppendItem(m_treeRoot, "📢 Channels");
-    m_bots = m_chatTree->AppendItem(m_treeRoot, "🤖 Bots");
+    // Create root
+    m_treeRoot = m_chatTree->AddRoot("Chats");
     
-    // Expand all categories
-    m_chatTree->Expand(m_privateChats);
-    m_chatTree->Expand(m_groups);
-    m_chatTree->Expand(m_channels);
-    m_chatTree->Expand(m_bots);
+    // Create categories
+    m_pinnedChats = m_chatTree->AppendItem(m_treeRoot, "Pinned");
+    m_privateChats = m_chatTree->AppendItem(m_treeRoot, "Private Chats");
+    m_groups = m_chatTree->AppendItem(m_treeRoot, "Groups");
+    m_channels = m_chatTree->AppendItem(m_treeRoot, "Channels");
+    m_bots = m_chatTree->AppendItem(m_treeRoot, "Bots");
+    
+    // Make categories bold
+    m_chatTree->SetItemBold(m_pinnedChats, true);
+    m_chatTree->SetItemBold(m_privateChats, true);
+    m_chatTree->SetItemBold(m_groups, true);
+    m_chatTree->SetItemBold(m_channels, true);
+    m_chatTree->SetItemBold(m_bots, true);
     
     sizer->Add(m_chatTree, 1, wxEXPAND);
     parent->SetSizer(sizer);
@@ -207,82 +276,87 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
-    // Topic bar at top
-    m_topicBar = new wxTextCtrl(parent, ID_TOPIC_BAR, "",
-        wxDefaultPosition, wxSize(-1, 24),
+    // Chat info bar (shows chat name and description)
+    m_chatInfoBar = new wxTextCtrl(parent, ID_CHAT_INFO_BAR, "",
+        wxDefaultPosition, wxSize(-1, 22),
         wxTE_READONLY | wxBORDER_NONE);
-    m_topicBar->SetBackgroundColour(m_topicBgColor);
-    m_topicBar->SetForegroundColour(m_topicFgColor);
-    m_topicBar->SetValue("Welcome to Teleliter - A Telegram client with HexChat interface");
-    sizer->Add(m_topicBar, 0, wxEXPAND | wxBOTTOM, 1);
+    m_chatInfoBar->SetBackgroundColour(m_chatInfoBgColor);
+    m_chatInfoBar->SetForegroundColour(m_chatInfoFgColor);
+    m_chatInfoBar->SetFont(m_chatFont);
+    sizer->Add(m_chatInfoBar, 0, wxEXPAND);
+    
+    // Separator line
+    wxPanel* separator = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
+    separator->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+    sizer->Add(separator, 0, wxEXPAND);
     
     // Chat display area
     m_chatDisplay = new wxRichTextCtrl(parent, ID_CHAT_DISPLAY,
         wxEmptyString, wxDefaultPosition, wxDefaultSize,
         wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
     m_chatDisplay->SetBackgroundColour(m_bgColor);
-    m_chatDisplay->SetBasicStyle(wxRichTextAttr());
+    m_chatDisplay->SetFont(m_chatFont);
+    
+    wxRichTextAttr defaultStyle;
+    defaultStyle.SetTextColour(m_textColor);
+    defaultStyle.SetBackgroundColour(m_bgColor);
+    defaultStyle.SetFont(m_chatFont);
+    m_chatDisplay->SetDefaultStyle(defaultStyle);
+    m_chatDisplay->SetBasicStyle(defaultStyle);
+    
     sizer->Add(m_chatDisplay, 1, wxEXPAND);
     
-    // Input area at bottom
-    CreateInputArea(parent);
+    // Bottom separator
+    wxPanel* separator2 = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
+    separator2->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+    sizer->Add(separator2, 0, wxEXPAND);
     
-    // Input panel
+    // Input area
     wxPanel* inputPanel = new wxPanel(parent);
     inputPanel->SetBackgroundColour(m_bgColor);
     
     wxBoxSizer* inputSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Nick label (like HexChat's nick box)
-    m_nickLabel = new wxStaticText(inputPanel, wxID_ANY, "[You]");
-    m_nickLabel->SetForegroundColour(m_nicknameColor);
-    m_nickLabel->SetBackgroundColour(m_bgColor);
-    wxFont nickFont = m_nickLabel->GetFont();
-    nickFont.SetWeight(wxFONTWEIGHT_BOLD);
-    m_nickLabel->SetFont(nickFont);
-    inputSizer->Add(m_nickLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
-    
     // Input text box
     m_inputBox = new wxTextCtrl(inputPanel, ID_INPUT_BOX, "",
-        wxDefaultPosition, wxSize(-1, 26),
-        wxTE_PROCESS_ENTER | wxBORDER_SIMPLE);
+        wxDefaultPosition, wxSize(-1, 24),
+        wxTE_PROCESS_ENTER | wxBORDER_NONE);
     m_inputBox->SetBackgroundColour(m_inputBgColor);
     m_inputBox->SetForegroundColour(m_inputFgColor);
-    m_inputBox->SetHint("Type a message...");
-    inputSizer->Add(m_inputBox, 1, wxEXPAND);
+    m_inputBox->SetFont(m_inputFont);
+    m_inputBox->SetHint("Write a message...");
+    inputSizer->Add(m_inputBox, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
     
     inputPanel->SetSizer(inputSizer);
-    sizer->Add(inputPanel, 0, wxEXPAND | wxTOP, 2);
+    sizer->Add(inputPanel, 0, wxEXPAND | wxALL, 2);
     
     parent->SetSizer(sizer);
 }
 
-void MainFrame::CreateInputArea(wxWindow* parent)
-{
-    // This is handled in CreateChatPanel for cleaner organization
-}
-
-void MainFrame::CreateUserList(wxWindow* parent)
+void MainFrame::CreateMemberList(wxWindow* parent)
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
-    // User count label at top
-    m_userCountLabel = new wxStaticText(parent, wxID_ANY, "0 users");
-    m_userCountLabel->SetForegroundColour(m_fgColor);
-    m_userCountLabel->SetBackgroundColour(m_bgColor);
-    sizer->Add(m_userCountLabel, 0, wxEXPAND | wxALL, 3);
-    
-    // User list
-    m_userList = new wxListCtrl(parent, ID_USER_LIST,
+    // Member list
+    m_memberList = new wxListCtrl(parent, ID_MEMBER_LIST,
         wxDefaultPosition, wxDefaultSize,
         wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER | wxBORDER_NONE);
-    m_userList->SetBackgroundColour(m_userListBgColor);
-    m_userList->SetForegroundColour(m_userListFgColor);
+    m_memberList->SetBackgroundColour(m_memberListBgColor);
+    m_memberList->SetForegroundColour(m_memberListFgColor);
+    m_memberList->SetFont(m_memberListFont);
     
-    // Add a single column
-    m_userList->InsertColumn(0, "Users", wxLIST_FORMAT_LEFT, 140);
+    // Single column for usernames
+    m_memberList->InsertColumn(0, "Members", wxLIST_FORMAT_LEFT, 120);
     
-    sizer->Add(m_userList, 1, wxEXPAND);
+    sizer->Add(m_memberList, 1, wxEXPAND);
+    
+    // Member count at bottom
+    m_memberCountLabel = new wxStaticText(parent, wxID_ANY, "0 members");
+    m_memberCountLabel->SetForegroundColour(m_treeFgColor);
+    m_memberCountLabel->SetBackgroundColour(m_memberListBgColor);
+    m_memberCountLabel->SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+    sizer->Add(m_memberCountLabel, 0, wxALL, 3);
+    
     parent->SetSizer(sizer);
 }
 
@@ -290,112 +364,250 @@ void MainFrame::CreateStatusBar()
 {
     wxStatusBar* statusBar = wxFrame::CreateStatusBar(3);
     
-    // Set field widths
-    int widths[] = {-3, -1, -1};
+    int widths[] = {-3, 120, 80};
     statusBar->SetStatusWidths(3, widths);
     
-    statusBar->SetBackgroundColour(m_bgColor);
-    
-    // Set initial status
-    SetStatusText("Not connected", 0);
-    SetStatusText("Lag: N/A", 1);
+    SetStatusText("Not logged in", 0);
+    SetStatusText("Offline", 1);
     SetStatusText("", 2);
+}
+
+wxColour MainFrame::GetUserColor(const wxString& username)
+{
+    // Hash the username to get consistent color
+    unsigned long hash = 0;
+    for (size_t i = 0; i < username.length(); i++) {
+        hash = static_cast<unsigned long>(username[i].GetValue()) + (hash << 6) + (hash << 16) - hash;
+    }
+    return m_userColors[hash % 16];
 }
 
 void MainFrame::PopulateDummyData()
 {
-    // Add some dummy chats to the tree
+    // Add sample chats to tree
+    m_chatTree->AppendItem(m_pinnedChats, "Saved Messages");
+    m_chatTree->AppendItem(m_pinnedChats, "Family Group");
+    
     m_chatTree->AppendItem(m_privateChats, "Alice");
     m_chatTree->AppendItem(m_privateChats, "Bob");
     m_chatTree->AppendItem(m_privateChats, "Charlie");
+    m_chatTree->AppendItem(m_privateChats, "David");
     
     m_chatTree->AppendItem(m_groups, "Family Group");
     m_chatTree->AppendItem(m_groups, "Work Team");
     m_chatTree->AppendItem(m_groups, "Linux Enthusiasts");
+    m_chatTree->AppendItem(m_groups, "Project Alpha");
     
     m_chatTree->AppendItem(m_channels, "Tech News");
+    m_chatTree->AppendItem(m_channels, "Telegram Tips");
     m_chatTree->AppendItem(m_channels, "Daily Memes");
     
     m_chatTree->AppendItem(m_bots, "BotFather");
-    m_chatTree->AppendItem(m_bots, "GitHubBot");
+    m_chatTree->AppendItem(m_bots, "GitHub Bot");
+    m_chatTree->AppendItem(m_bots, "IFTTT");
     
-    // Expand categories
-    m_chatTree->Expand(m_privateChats);
-    m_chatTree->Expand(m_groups);
-    m_chatTree->Expand(m_channels);
-    m_chatTree->Expand(m_bots);
+    m_chatTree->ExpandAll();
     
-    // Add some dummy users to the user list
-    wxListItem item;
-    item.SetId(0);
-    
+    // Add sample members (for a group chat)
     long idx = 0;
-    m_userList->InsertItem(idx++, "👑 Admin");
-    m_userList->InsertItem(idx++, "🔧 Moderator");
-    m_userList->InsertItem(idx++, "Alice");
-    m_userList->InsertItem(idx++, "Bob");
-    m_userList->InsertItem(idx++, "Charlie");
-    m_userList->InsertItem(idx++, "David");
-    m_userList->InsertItem(idx++, "Eve");
+    m_memberList->InsertItem(idx++, "Admin (owner)");
+    m_memberList->InsertItem(idx++, "Moderator (admin)");
+    m_memberList->InsertItem(idx++, "Alice");
+    m_memberList->InsertItem(idx++, "Bob");
+    m_memberList->InsertItem(idx++, "Charlie");
+    m_memberList->InsertItem(idx++, "David");
+    m_memberList->InsertItem(idx++, "Eve");
+    m_memberList->InsertItem(idx++, "Frank");
+    m_memberList->InsertItem(idx++, "Grace");
+    m_memberList->InsertItem(idx++, "Henry");
     
-    m_userCountLabel->SetLabel(wxString::Format("%ld users", idx));
+    m_memberCountLabel->SetLabel(wxString::Format("%ld members", idx));
     
-    // Add some dummy messages to the chat display
+    // Set chat info
+    m_currentChatTitle = "Linux Enthusiasts";
+    m_currentChatType = TelegramChatType::Supergroup;
+    m_chatInfoBar->SetValue("Linux Enthusiasts | 1,234 members | Welcome to the Linux discussion group!");
+    
+    // Add sample messages
     m_chatDisplay->BeginSuppressUndo();
     
-    // Welcome message
-    m_chatDisplay->BeginTextColour(m_noticeColor);
-    m_chatDisplay->WriteText("* Now talking in #Linux Enthusiasts\n");
-    m_chatDisplay->EndTextColour();
+    AppendServiceMessage("12:00:00", "You joined the group");
+    AppendServiceMessage("12:00:00", "Group created by Admin");
     
-    m_chatDisplay->BeginTextColour(m_noticeColor);
-    m_chatDisplay->WriteText("* Topic is: Welcome to the Linux Enthusiasts group! | Rules: Be nice, no spam\n");
-    m_chatDisplay->EndTextColour();
+    AppendMessage("12:00:15", "Alice", "Hey everyone! Just installed Arch btw :P");
+    AppendMessage("12:00:22", "Bob", "Hi Alice, how long did that take?");
+    AppendMessage("12:00:35", "Alice", "About 3 hours, but I learned a lot!");
+    AppendMessage("12:00:42", "Charlie", "Nice! I'm still on Ubuntu");
     
-    m_chatDisplay->BeginTextColour(m_noticeColor);
-    m_chatDisplay->WriteText("* Set by Admin on 2024-01-15\n\n");
-    m_chatDisplay->EndTextColour();
+    AppendReplyMessage("12:00:58", "David", "Alice: Just installed Arch btw", 
+                       "Congrats! The Arch wiki is your best friend now");
     
-    // Sample messages
-    AppendMessage("12:30:01", "Alice", "Hey everyone! Just installed Arch btw 🐧", false);
-    AppendMessage("12:30:15", "Bob", "Nice! How long did it take?", false);
-    AppendMessage("12:30:45", "Alice", "About 3 hours, but I learned a lot", false);
-    AppendMessage("12:31:02", "Charlie", "I use NixOS btw", false);
-    AppendMessage("12:31:30", "Admin", "Remember to check the wiki before asking questions!", false);
-    AppendMessage("12:32:00", "David", "Has anyone tried the new kernel 6.7?", false);
-    AppendMessage("12:32:15", "Eve", "Yes! The performance improvements are great", false);
+    AppendMediaMessage("12:01:10", "Eve", "Photo", "Look at my desktop!");
+    
+    AppendMessage("12:01:25", "Frank", "That looks clean! What DE are you using?");
+    AppendMessage("12:01:32", "Eve", "It's KDE Plasma with some custom themes");
+    
+    AppendForwardMessage("12:01:45", "Grace", "Tech News", 
+                         "Linux kernel 6.8 released with major performance improvements");
+    
+    AppendJoinMessage("12:01:55", "NewUser");
+    
+    AppendMessage("12:02:05", "Admin", "Welcome NewUser! Please read the pinned messages");
+    AppendMessage("12:02:15", "NewUser", "Thanks! Happy to be here");
+    
+    AppendEditedMessage("12:02:30", "Henry", "Has anyone tried Wayland yet? It works great now!");
+    
+    AppendMessage("12:02:45", "Alice", "Yes! Been using it for months, very stable");
+    AppendMessage("12:02:58", "Bob", "Still having some issues with screen sharing in Discord");
+    
+    AppendMediaMessage("12:03:10", "Charlie", "File", "linux-guide.pdf");
+    
+    AppendLeaveMessage("12:03:20", "OldUser");
+    
+    AppendMessage("12:03:30", "David", "Check out this link: https://kernel.org");
     
     m_chatDisplay->EndSuppressUndo();
-    
-    // Scroll to bottom
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
 }
 
-void MainFrame::AppendMessage(const wxString& timestamp, const wxString& nick, 
-                              const wxString& message, bool isAction)
+void MainFrame::AppendMessage(const wxString& timestamp, const wxString& sender,
+                              const wxString& message)
 {
-    // Timestamp
+    // Format: [HH:MM:SS] <sender> message
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
     m_chatDisplay->EndTextColour();
     
-    if (isAction) {
-        // Action message (* nick does something)
-        m_chatDisplay->BeginTextColour(m_actionColor);
-        m_chatDisplay->WriteText("* " + nick + " " + message + "\n");
-        m_chatDisplay->EndTextColour();
-    } else {
-        // Regular message
-        m_chatDisplay->BeginTextColour(m_nicknameColor);
-        m_chatDisplay->BeginBold();
-        m_chatDisplay->WriteText("<" + nick + "> ");
-        m_chatDisplay->EndBold();
-        m_chatDisplay->EndTextColour();
-        
-        m_chatDisplay->BeginTextColour(m_fgColor);
-        m_chatDisplay->WriteText(message + "\n");
+    m_chatDisplay->BeginTextColour(GetUserColor(sender));
+    m_chatDisplay->WriteText("<" + sender + "> ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_textColor);
+    m_chatDisplay->WriteText(message + "\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendServiceMessage(const wxString& timestamp, const wxString& message)
+{
+    // Format: [HH:MM:SS] * message
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->WriteText("* " + message + "\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendJoinMessage(const wxString& timestamp, const wxString& user)
+{
+    // Format: [HH:MM:SS] --> user joined the group
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->WriteText("--> " + user + " joined the group\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendLeaveMessage(const wxString& timestamp, const wxString& user)
+{
+    // Format: [HH:MM:SS] <-- user left the group
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->WriteText("<-- " + user + " left the group\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendMediaMessage(const wxString& timestamp, const wxString& sender,
+                                   const wxString& mediaType, const wxString& caption)
+{
+    // Format: [HH:MM:SS] <sender> [Photo/Video/File/etc] caption
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(GetUserColor(sender));
+    m_chatDisplay->WriteText("<" + sender + "> ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_mediaColor);
+    m_chatDisplay->WriteText("[" + mediaType + "]");
+    m_chatDisplay->EndTextColour();
+    
+    if (!caption.IsEmpty()) {
+        m_chatDisplay->BeginTextColour(m_textColor);
+        m_chatDisplay->WriteText(" " + caption);
         m_chatDisplay->EndTextColour();
     }
+    m_chatDisplay->WriteText("\n");
+}
+
+void MainFrame::AppendReplyMessage(const wxString& timestamp, const wxString& sender,
+                                   const wxString& replyTo, const wxString& message)
+{
+    // Format: [HH:MM:SS] <sender> [Reply: replyTo] message
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(GetUserColor(sender));
+    m_chatDisplay->WriteText("<" + sender + "> ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_replyColor);
+    m_chatDisplay->WriteText("[> " + replyTo + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_textColor);
+    m_chatDisplay->WriteText(message + "\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendForwardMessage(const wxString& timestamp, const wxString& sender,
+                                     const wxString& forwardFrom, const wxString& message)
+{
+    // Format: [HH:MM:SS] <sender> [Fwd: forwardFrom] message
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(GetUserColor(sender));
+    m_chatDisplay->WriteText("<" + sender + "> ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_forwardColor);
+    m_chatDisplay->WriteText("[Fwd: " + forwardFrom + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_textColor);
+    m_chatDisplay->WriteText(message + "\n");
+    m_chatDisplay->EndTextColour();
+}
+
+void MainFrame::AppendEditedMessage(const wxString& timestamp, const wxString& sender,
+                                    const wxString& message)
+{
+    // Format: [HH:MM:SS] <sender> message (edited)
+    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->WriteText("[" + timestamp + "] ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(GetUserColor(sender));
+    m_chatDisplay->WriteText("<" + sender + "> ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_textColor);
+    m_chatDisplay->WriteText(message + " ");
+    m_chatDisplay->EndTextColour();
+    
+    m_chatDisplay->BeginTextColour(m_editedColor);
+    m_chatDisplay->WriteText("(edited)\n");
+    m_chatDisplay->EndTextColour();
 }
 
 // Event Handlers
@@ -407,29 +619,91 @@ void MainFrame::OnExit(wxCommandEvent& event)
 
 void MainFrame::OnAbout(wxCommandEvent& event)
 {
-    wxMessageBox("Teleliter - A Telegram client with HexChat interface\n\n"
-                 "Version 0.1.0\n\n"
-                 "A modern Telegram client inspired by the classic HexChat IRC client.",
+    wxMessageBox("Teleliter\n\n"
+                 "Telegram client with HexChat-style interface\n"
+                 "Built with TDLib\n\n"
+                 "Version 0.1.0",
                  "About Teleliter",
                  wxOK | wxICON_INFORMATION, this);
 }
 
-void MainFrame::OnConnect(wxCommandEvent& event)
+void MainFrame::OnLogin(wxCommandEvent& event)
 {
-    SetStatusText("Connecting to Telegram...", 0);
-    // TODO: Implement actual Telegram connection
+    // TODO: Implement TDLib login flow
+    wxMessageBox("Login with Telegram will be implemented with TDLib integration.",
+                 "Login", wxOK | wxICON_INFORMATION, this);
 }
 
-void MainFrame::OnDisconnect(wxCommandEvent& event)
+void MainFrame::OnLogout(wxCommandEvent& event)
 {
-    SetStatusText("Disconnected", 0);
-    // TODO: Implement actual disconnection
+    // TODO: Implement TDLib logout
+    m_isLoggedIn = false;
+    SetStatusText("Not logged in", 0);
+    SetStatusText("Offline", 1);
+}
+
+void MainFrame::OnNewChat(wxCommandEvent& event)
+{
+    wxTextEntryDialog dlg(this, "Enter username or phone number:", "New Private Chat");
+    if (dlg.ShowModal() == wxID_OK) {
+        wxString contact = dlg.GetValue();
+        // TODO: Implement with TDLib - search user and create private chat
+        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+                            "Starting chat with " + contact);
+    }
+}
+
+void MainFrame::OnNewGroup(wxCommandEvent& event)
+{
+    wxTextEntryDialog dlg(this, "Enter group name:", "New Group");
+    if (dlg.ShowModal() == wxID_OK) {
+        wxString groupName = dlg.GetValue();
+        // TODO: Implement with TDLib - create group
+        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+                            "Creating group: " + groupName);
+    }
+}
+
+void MainFrame::OnNewChannel(wxCommandEvent& event)
+{
+    wxTextEntryDialog dlg(this, "Enter channel name:", "New Channel");
+    if (dlg.ShowModal() == wxID_OK) {
+        wxString channelName = dlg.GetValue();
+        // TODO: Implement with TDLib - create channel
+        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+                            "Creating channel: " + channelName);
+    }
+}
+
+void MainFrame::OnContacts(wxCommandEvent& event)
+{
+    // TODO: Implement contacts dialog with TDLib
+    wxMessageBox("Contacts dialog will be implemented.", "Contacts", wxOK, this);
+}
+
+void MainFrame::OnSearch(wxCommandEvent& event)
+{
+    wxTextEntryDialog dlg(this, "Search messages, chats, and users:", "Search");
+    if (dlg.ShowModal() == wxID_OK) {
+        wxString query = dlg.GetValue();
+        // TODO: Implement with TDLib - search
+        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+                            "Searching for: " + query);
+    }
+}
+
+void MainFrame::OnSavedMessages(wxCommandEvent& event)
+{
+    // TODO: Open Saved Messages chat
+    m_currentChatTitle = "Saved Messages";
+    m_currentChatType = TelegramChatType::SavedMessages;
+    m_chatInfoBar->SetValue("Saved Messages");
+    SetStatusText("Saved Messages", 0);
 }
 
 void MainFrame::OnPreferences(wxCommandEvent& event)
 {
-    wxMessageBox("Preferences dialog will be implemented soon.",
-                 "Preferences", wxOK | wxICON_INFORMATION, this);
+    wxMessageBox("Preferences dialog will be implemented.", "Preferences", wxOK, this);
 }
 
 void MainFrame::OnClearWindow(wxCommandEvent& event)
@@ -437,24 +711,31 @@ void MainFrame::OnClearWindow(wxCommandEvent& event)
     m_chatDisplay->Clear();
 }
 
-void MainFrame::OnToggleUserList(wxCommandEvent& event)
+void MainFrame::OnToggleChatList(wxCommandEvent& event)
 {
-    m_showUserList = !m_showUserList;
-    if (m_showUserList) {
-        m_rightSplitter->SplitVertically(m_chatPanel, m_rightPanel, -150);
+    m_showChatList = !m_showChatList;
+    if (m_showChatList) {
+        m_mainSplitter->SplitVertically(m_leftPanel, m_rightSplitter, 180);
+    } else {
+        m_mainSplitter->Unsplit(m_leftPanel);
+    }
+}
+
+void MainFrame::OnToggleMembers(wxCommandEvent& event)
+{
+    m_showMembers = !m_showMembers;
+    if (m_showMembers) {
+        m_rightSplitter->SplitVertically(m_chatPanel, m_rightPanel, -130);
     } else {
         m_rightSplitter->Unsplit(m_rightPanel);
     }
 }
 
-void MainFrame::OnToggleChannelTree(wxCommandEvent& event)
+void MainFrame::OnToggleChatInfo(wxCommandEvent& event)
 {
-    m_showChannelTree = !m_showChannelTree;
-    if (m_showChannelTree) {
-        m_mainSplitter->SplitVertically(m_leftPanel, m_rightSplitter, 180);
-    } else {
-        m_mainSplitter->Unsplit(m_leftPanel);
-    }
+    m_showChatInfo = !m_showChatInfo;
+    m_chatInfoBar->Show(m_showChatInfo);
+    m_chatPanel->Layout();
 }
 
 void MainFrame::OnFullscreen(wxCommandEvent& event)
@@ -468,33 +749,54 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
     if (item.IsOk()) {
         wxString chatName = m_chatTree->GetItemText(item);
         
-        // Don't do anything for category items
-        if (item == m_savedMessages || item == m_privateChats || 
-            item == m_groups || item == m_channels || item == m_bots) {
+        // Skip category items
+        if (m_chatTree->IsBold(item)) {
             return;
         }
         
-        // Update topic bar
-        m_topicBar->SetValue("Chat: " + chatName);
-        
-        // Update status bar
-        SetStatusText("Viewing: " + chatName, 0);
+        m_currentChatTitle = chatName;
+        m_chatInfoBar->SetValue(chatName);
+        SetStatusText(chatName, 0);
     }
 }
 
-void MainFrame::OnUserListItemActivated(wxListEvent& event)
+void MainFrame::OnChatTreeItemActivated(wxTreeEvent& event)
+{
+    OnChatTreeSelectionChanged(event);
+}
+
+void MainFrame::OnMemberListItemActivated(wxListEvent& event)
 {
     long index = event.GetIndex();
-    wxString username = m_userList->GetItemText(index);
+    wxString username = m_memberList->GetItemText(index);
     
-    // Remove emoji prefixes for display
-    if (username.StartsWith("👑 ") || username.StartsWith("🔧 ")) {
-        username = username.Mid(2);
+    // Remove role suffix if present
+    int parenPos = username.Find(" (");
+    if (parenPos != wxNOT_FOUND) {
+        username = username.Left(parenPos);
     }
     
-    wxMessageBox("User info for: " + username + "\n\n"
-                 "Double-click to start private chat.",
-                 "User Info", wxOK | wxICON_INFORMATION, this);
+    // TODO: Open user profile or start private chat
+    AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+                        "Opening profile: " + username);
+}
+
+void MainFrame::OnMemberListRightClick(wxListEvent& event)
+{
+    long index = event.GetIndex();
+    wxString username = m_memberList->GetItemText(index);
+    
+    wxMenu menu;
+    menu.Append(wxID_ANY, "View Profile");
+    menu.Append(wxID_ANY, "Send Message");
+    menu.AppendSeparator();
+    menu.Append(wxID_ANY, "Mention");
+    menu.AppendSeparator();
+    menu.Append(wxID_ANY, "Promote to Admin");
+    menu.Append(wxID_ANY, "Restrict");
+    menu.Append(wxID_ANY, "Remove from Group");
+    
+    PopupMenu(&menu);
 }
 
 void MainFrame::OnInputEnter(wxCommandEvent& event)
@@ -504,25 +806,18 @@ void MainFrame::OnInputEnter(wxCommandEvent& event)
         return;
     }
     
-    // Get current time
     wxDateTime now = wxDateTime::Now();
     wxString timestamp = now.Format("%H:%M:%S");
     
-    // Check for action command (/me)
-    if (message.StartsWith("/me ")) {
-        wxString action = message.Mid(4);
-        AppendMessage(timestamp, m_currentNick, action, true);
-    } else {
-        AppendMessage(timestamp, m_currentNick, message, false);
-    }
+    // For now, just display the message locally
+    // TODO: Send via TDLib
+    AppendMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, message);
     
-    // Clear input and scroll to bottom
     m_inputBox->Clear();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
 }
 
 void MainFrame::OnInputKeyDown(wxKeyEvent& event)
 {
-    // Handle special keys like tab completion, history, etc.
     event.Skip();
 }
