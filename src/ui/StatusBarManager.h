@@ -2,7 +2,6 @@
 #define STATUSBARMANAGER_H
 
 #include <wx/wx.h>
-#include <wx/gauge.h>
 #include <wx/stopwatch.h>
 #include <deque>
 #include "../telegram/TransferTypes.h"
@@ -54,10 +53,12 @@ private:
     wxFrame* m_parent;
     wxStatusBar* m_statusBar;
     
-    // Status bar widgets
+    // Status bar widgets (connection label for colored status)
+    wxStaticText* m_connectionLabel;
+    
+    // Legacy pointers (unused, kept for compatibility)
     wxGauge* m_progressGauge;
     wxStaticText* m_progressLabel;
-    wxStaticText* m_connectionLabel;
     
     // Transfer display state
     int m_transferAnimFrame;

@@ -4,9 +4,9 @@
 StatusBarManager::StatusBarManager(wxFrame* parent)
     : m_parent(parent),
       m_statusBar(nullptr),
+      m_connectionLabel(nullptr),
       m_progressGauge(nullptr),
       m_progressLabel(nullptr),
-      m_connectionLabel(nullptr),
       m_transferAnimFrame(0),
       m_lastTransferredBytes(0),
       m_currentSpeed(0.0),
@@ -39,50 +39,30 @@ void StatusBarManager::Setup()
 {
     if (!m_parent) return;
     
-    // Create status bar with 5 fields
-    // [chat info] [session time] [transfer label] [transfer gauge] [connection]
-    m_statusBar = m_parent->CreateStatusBar(5);
+    // Create status bar with 3 fields:
+    // [chat info / transfer progress] [session time] [connection status]
+    m_statusBar = m_parent->CreateStatusBar(3);
     m_statusBar->SetBackgroundColour(m_bgColor);
     
-    // Negative values are proportional: -3 for chat info, -2 for transfer label
-    // Positive values are fixed pixel widths
-    int widths[] = {-3, 80, -2, 100, 140};
-    m_statusBar->SetStatusWidths(5, widths);
+    // Field widths: main area (flexible), session time (fixed), connection (fixed)
+    int widths[] = {-1, 80, 120};
+    m_statusBar->SetStatusWidths(3, widths);
     
     // Bind size event to reposition widgets when status bar resizes
     m_statusBar->Bind(wxEVT_SIZE, &StatusBarManager::OnStatusBarResize, this);
     
-    // Create progress label (in field 2)
-    m_progressLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
-    m_progressLabel->SetForegroundColour(m_fgColor);
-    m_progressLabel->SetBackgroundColour(m_bgColor);
-    m_progressLabel->Hide();
-    
-    // Create progress gauge (in field 3)
-    m_progressGauge = new wxGauge(m_statusBar, wxID_ANY, 100,
-        wxDefaultPosition, wxSize(90, 16), wxGA_HORIZONTAL | wxGA_SMOOTH);
-    m_progressGauge->SetBackgroundColour(m_bgColor);
-    m_progressGauge->Hide();
-    
-    // Position the widgets in the status bar
-    wxRect labelRect, gaugeRect;
-    m_statusBar->GetFieldRect(2, labelRect);
-    m_statusBar->GetFieldRect(3, gaugeRect);
-    
-    m_progressLabel->SetPosition(wxPoint(labelRect.x + 2, labelRect.y + 2));
-    m_progressLabel->SetSize(labelRect.width - 4, labelRect.height - 4);
-    
-    m_progressGauge->SetPosition(wxPoint(gaugeRect.x + 2, gaugeRect.y + 2));
-    m_progressGauge->SetSize(gaugeRect.width - 4, gaugeRect.height - 4);
-    
-    // Create connection status label (in field 4) with color support
+    // Create connection status label (in field 2) with color support
     m_connectionLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
     m_connectionLabel->SetBackgroundColour(m_bgColor);
     
     wxRect connRect;
-    m_statusBar->GetFieldRect(4, connRect);
-    m_connectionLabel->SetPosition(wxPoint(connRect.x + 2, connRect.y + 2));
-    m_connectionLabel->SetSize(connRect.width - 4, connRect.height - 4);
+    m_statusBar->GetFieldRect(2, connRect);
+    m_connectionLabel->SetPosition(wxPoint(connRect.x + 4, connRect.y + 2));
+    m_connectionLabel->SetSize(connRect.width - 8, connRect.height - 4);
+    
+    // No separate progress label/gauge - we use the main status text field
+    m_progressLabel = nullptr;
+    m_progressGauge = nullptr;
     
     // Initial status
     m_parent->SetStatusText("Not logged in", 0);
@@ -93,28 +73,12 @@ void StatusBarManager::RepositionWidgets()
 {
     if (!m_statusBar) return;
     
-    // Reposition progress label
-    if (m_progressLabel) {
-        wxRect labelRect;
-        m_statusBar->GetFieldRect(2, labelRect);
-        m_progressLabel->SetPosition(wxPoint(labelRect.x + 2, labelRect.y + 2));
-        m_progressLabel->SetSize(labelRect.width - 4, labelRect.height - 4);
-    }
-    
-    // Reposition progress gauge
-    if (m_progressGauge) {
-        wxRect gaugeRect;
-        m_statusBar->GetFieldRect(3, gaugeRect);
-        m_progressGauge->SetPosition(wxPoint(gaugeRect.x + 2, gaugeRect.y + 2));
-        m_progressGauge->SetSize(gaugeRect.width - 4, gaugeRect.height - 4);
-    }
-    
     // Reposition connection label
     if (m_connectionLabel) {
         wxRect connRect;
-        m_statusBar->GetFieldRect(4, connRect);
-        m_connectionLabel->SetPosition(wxPoint(connRect.x + 2, connRect.y + 2));
-        m_connectionLabel->SetSize(connRect.width - 4, connRect.height - 4);
+        m_statusBar->GetFieldRect(2, connRect);
+        m_connectionLabel->SetPosition(wxPoint(connRect.x + 4, connRect.y + 2));
+        m_connectionLabel->SetSize(connRect.width - 8, connRect.height - 4);
     }
 }
 
@@ -128,25 +92,27 @@ void StatusBarManager::UpdateStatusBar()
 {
     if (!m_parent || !m_statusBar) return;
     
-    // Field 0: Chat info
-    wxString chatInfo;
-    if (m_isLoggedIn) {
-        if (m_currentChatId != 0) {
-            chatInfo = m_currentChatTitle;
-            if (m_currentChatMemberCount > 0) {
-                chatInfo += wxString::Format(" • %d members", m_currentChatMemberCount);
+    // Field 0: Chat info (only update if no active transfer)
+    if (!m_hasActiveTransfers) {
+        wxString chatInfo;
+        if (m_isLoggedIn) {
+            if (m_currentChatId != 0) {
+                chatInfo = m_currentChatTitle;
+                if (m_currentChatMemberCount > 0) {
+                    chatInfo += wxString::Format(" • %d members", m_currentChatMemberCount);
+                }
+            } else {
+                chatInfo = wxString::Format("%d chats", m_totalChats);
+                if (m_unreadChats > 0) {
+                    chatInfo += wxString::Format(" • %d unread", m_unreadChats);
+                }
             }
+            chatInfo += wxString::Format(" • @%s", m_currentUser);
         } else {
-            chatInfo = wxString::Format("%d chats", m_totalChats);
-            if (m_unreadChats > 0) {
-                chatInfo += wxString::Format(" • %d unread", m_unreadChats);
-            }
+            chatInfo = "Not logged in";
         }
-        chatInfo += wxString::Format(" • @%s", m_currentUser);
-    } else {
-        chatInfo = "Not logged in";
+        m_parent->SetStatusText(chatInfo, 0);
     }
-    m_parent->SetStatusText(chatInfo, 0);
     
     // Field 1: Session time
     long elapsed = m_sessionTimer.Time() / 1000;
@@ -156,7 +122,7 @@ void StatusBarManager::UpdateStatusBar()
     wxString sessionTime = wxString::Format("%02d:%02d:%02d", hours, minutes, seconds);
     m_parent->SetStatusText(sessionTime, 1);
     
-    // Field 4: Connection status with colors
+    // Field 2: Connection status with colors
     if (m_connectionLabel) {
         wxString connStatus;
         wxColour connColor;
@@ -186,13 +152,9 @@ void StatusBarManager::UpdateStatusBar()
 
 void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
 {
-    if (!m_progressLabel || !m_progressGauge) return;
+    if (!m_parent || !m_statusBar) return;
     
     m_hasActiveTransfers = true;
-    
-    // Show progress widgets
-    m_progressLabel->Show();
-    m_progressGauge->Show();
     
     // Animated spinner characters
     static const wxString spinners[] = {"◐", "◓", "◑", "◒"};
@@ -230,39 +192,42 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
         etaStr = FormatETA(remaining, m_currentSpeed);
     }
     
-    // Build progress bar (shorter width to save space)
+    // Build ASCII progress bar
     int percent = info.GetProgressPercent();
-    wxString progressBar = BuildProgressBar(percent, 6);
+    wxString progressBar = BuildProgressBar(percent, 10);
     
     // Direction symbol
     wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
     
     // Truncate filename if too long
     wxString fileName = info.fileName;
-    if (fileName.length() > 18) {
-        fileName = fileName.Left(15) + "...";
+    if (fileName.length() > 20) {
+        fileName = fileName.Left(17) + "...";
     }
     
-    // Build final label: "◐ ⬇ file.jpg ██░░ 1.2/5.0 MB 45% 1.2MB/s ~5s"
-    wxString sizeStr = FormatSizeProgress(info.transferredBytes, info.totalBytes);
-    wxString label = wxString::Format("%s%s %s %s %s %d%% %s%s",
-        spinner, dirSymbol, fileName, progressBar, sizeStr, percent, speedStr, etaStr);
+    // Build final label: "◐ ⬇ file.jpg [██████░░░░] 45% 1.2MB/s ~5s"
+    wxString label = wxString::Format("%s %s %s [%s] %d%%",
+        spinner, dirSymbol, fileName, progressBar, percent);
     
-    m_progressLabel->SetForegroundColour(m_fgColor);
-    m_progressLabel->SetLabel(label);
-    
-    // Update gauge
-    m_progressGauge->SetValue(percent);
+    if (!speedStr.IsEmpty()) {
+        label += " " + speedStr;
+    }
+    if (!etaStr.IsEmpty()) {
+        label += etaStr;
+    }
     
     // If multiple transfers, append count
     if (m_activeTransferCount > 1) {
-        m_progressLabel->SetLabel(label + wxString::Format(" (+%d)", m_activeTransferCount - 1));
+        label += wxString::Format(" (+%d more)", m_activeTransferCount - 1);
     }
+    
+    // Update the main status field with transfer progress
+    m_parent->SetStatusText(label, 0);
 }
 
 void StatusBarManager::OnTransferComplete(const TransferInfo& info)
 {
-    if (!m_progressLabel || !m_progressGauge) return;
+    if (!m_parent || !m_statusBar) return;
     
     // Reset speed tracking
     m_speedSamples.clear();
@@ -273,14 +238,13 @@ void StatusBarManager::OnTransferComplete(const TransferInfo& info)
     wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
     
     // Show completion with checkmark
-    m_progressLabel->SetForegroundColour(m_successColor);
-    m_progressLabel->SetLabel(wxString::Format("✓ %s %s ██████████ Done!", dirSymbol, info.fileName));
-    m_progressGauge->SetValue(100);
+    wxString label = wxString::Format("✓ %s %s [██████████] Done!", dirSymbol, info.fileName);
+    m_parent->SetStatusText(label, 0);
 }
 
 void StatusBarManager::OnTransferError(const TransferInfo& info)
 {
-    if (!m_progressLabel || !m_progressGauge) return;
+    if (!m_parent || !m_statusBar) return;
     
     // Reset speed tracking
     m_speedSamples.clear();
@@ -290,35 +254,24 @@ void StatusBarManager::OnTransferError(const TransferInfo& info)
     wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
     
     // Show error with X mark
-    m_progressLabel->SetForegroundColour(m_errorColor);
-    m_progressLabel->SetLabel(wxString::Format("✗ %s %s Failed: %s", dirSymbol, info.fileName, info.error));
-    m_progressGauge->SetValue(0);
-    
-    // Also show in main status
-    if (m_parent) {
-        m_parent->SetStatusText("Transfer failed: " + info.fileName, 0);
-    }
+    wxString label = wxString::Format("✗ %s %s Failed: %s", dirSymbol, info.fileName, info.error);
+    m_parent->SetStatusText(label, 0);
 }
 
 void StatusBarManager::HideTransferProgress()
 {
     m_hasActiveTransfers = false;
-    if (m_progressLabel) {
-        m_progressLabel->Hide();
-    }
-    if (m_progressGauge) {
-        m_progressGauge->Hide();
-    }
+    // The next UpdateStatusBar() call will restore the chat info
 }
 
 wxString StatusBarManager::FormatSpeed(double bytesPerSecond) const
 {
     if (bytesPerSecond >= 1024.0 * 1024.0) {
-        return wxString::Format("%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0));
+        return wxString::Format("%.1fMB/s", bytesPerSecond / (1024.0 * 1024.0));
     } else if (bytesPerSecond >= 1024.0) {
-        return wxString::Format("%.0f KB/s", bytesPerSecond / 1024.0);
+        return wxString::Format("%.0fKB/s", bytesPerSecond / 1024.0);
     } else if (bytesPerSecond > 0) {
-        return wxString::Format("%.0f B/s", bytesPerSecond);
+        return wxString::Format("%.0fB/s", bytesPerSecond);
     }
     return "";
 }
@@ -327,13 +280,13 @@ wxString StatusBarManager::FormatSize(int64_t bytes) const
 {
     double size = static_cast<double>(bytes);
     if (size >= 1024.0 * 1024.0 * 1024.0) {
-        return wxString::Format("%.2f GB", size / (1024.0 * 1024.0 * 1024.0));
+        return wxString::Format("%.2fGB", size / (1024.0 * 1024.0 * 1024.0));
     } else if (size >= 1024.0 * 1024.0) {
-        return wxString::Format("%.1f MB", size / (1024.0 * 1024.0));
+        return wxString::Format("%.1fMB", size / (1024.0 * 1024.0));
     } else if (size >= 1024.0) {
-        return wxString::Format("%.0f KB", size / 1024.0);
+        return wxString::Format("%.0fKB", size / 1024.0);
     }
-    return wxString::Format("%lld B", bytes);
+    return wxString::Format("%lldB", bytes);
 }
 
 wxString StatusBarManager::FormatSizeProgress(int64_t transferred, int64_t total) const
@@ -342,11 +295,11 @@ wxString StatusBarManager::FormatSizeProgress(int64_t transferred, int64_t total
     double tot = static_cast<double>(total);
     
     if (tot >= 1024.0 * 1024.0) {
-        return wxString::Format("%.1f/%.1f MB", t / (1024.0 * 1024.0), tot / (1024.0 * 1024.0));
+        return wxString::Format("%.1f/%.1fMB", t / (1024.0 * 1024.0), tot / (1024.0 * 1024.0));
     } else if (tot >= 1024.0) {
-        return wxString::Format("%.0f/%.0f KB", t / 1024.0, tot / 1024.0);
+        return wxString::Format("%.0f/%.0fKB", t / 1024.0, tot / 1024.0);
     }
-    return wxString::Format("%lld/%lld B", transferred, total);
+    return wxString::Format("%lld/%lldB", transferred, total);
 }
 
 wxString StatusBarManager::FormatETA(int64_t remaining, double speed) const
