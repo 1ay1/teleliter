@@ -1,6 +1,7 @@
 #include "TelegramClient.h"
 #include "../ui/MainFrame.h"
 #include "../ui/WelcomeChat.h"
+#include "../ui/MediaTypes.h"
 
 #include <iostream>
 #include <sstream>
@@ -595,6 +596,9 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
 {
     TDLOG("OpenChatAndLoadMessages called for chatId=%lld limit=%d", (long long)chatId, limit);
     
+    // Track current chat for download prioritization
+    m_currentChatId = chatId;
+    
     // Step 1: Open the chat - this tells TDLib we're viewing this chat
     // and triggers background sync of messages from server
     auto openRequest = td_api::make_object<td_api::openChat>();
@@ -651,6 +655,8 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
                         if (m_mainFrame) {
                             m_mainFrame->OnMessagesLoaded(chatId, msgList);
                         }
+                        // Smart auto-download: preemptively download visible media
+                        AutoDownloadChatMedia(chatId, 30);
                     });
                     
                     // If we got fewer messages than requested, TDLib may still be syncing
@@ -755,6 +761,12 @@ void TelegramClient::LoadMessagesWithRetry(int64_t chatId, int limit, int retryC
 void TelegramClient::CloseChat(int64_t chatId)
 {
     TDLOG("CloseChat called for chatId=%lld", (long long)chatId);
+    
+    // Clear current chat tracking if closing the active chat
+    if (m_currentChatId == chatId) {
+        m_currentChatId = 0;
+    }
+    
     auto request = td_api::make_object<td_api::closeChat>();
     request->chat_id_ = chatId;
     Send(std::move(request), nullptr);
@@ -1071,6 +1083,149 @@ DownloadState TelegramClient::GetDownloadState(int32_t fileId) const
     auto it = m_activeDownloads.find(fileId);
     if (it == m_activeDownloads.end()) return DownloadState::Pending;
     return it->second.state;
+}
+
+int TelegramClient::GetDownloadProgress(int32_t fileId) const
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+    auto it = m_activeDownloads.find(fileId);
+    if (it == m_activeDownloads.end()) return -1;
+    
+    if (it->second.state == DownloadState::Completed) return 100;
+    if (it->second.state != DownloadState::Downloading) return -1;
+    
+    if (it->second.totalSize <= 0) return 0;
+    return static_cast<int>((it->second.downloadedSize * 100) / it->second.totalSize);
+}
+
+void TelegramClient::BoostDownloadPriority(int32_t fileId)
+{
+    if (fileId == 0) return;
+    
+    TDLOG("BoostDownloadPriority: boosting fileId=%d to max priority", fileId);
+    
+    // Check if already downloading
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it != m_activeDownloads.end()) {
+            if (it->second.state == DownloadState::Completed) {
+                return;  // Already done
+            }
+        }
+    }
+    
+    // Send priority boost request to TDLib (priority 32 is max)
+    auto request = td_api::make_object<td_api::downloadFile>();
+    request->file_id_ = fileId;
+    request->priority_ = 32;  // Maximum priority
+    request->synchronous_ = false;
+    
+    Send(std::move(request), nullptr);
+}
+
+bool TelegramClient::ShouldAutoDownloadMedia(MediaType type, int64_t fileSize) const
+{
+    // Size limits for auto-download (in bytes)
+    static const int64_t MAX_PHOTO_SIZE = 10 * 1024 * 1024;      // 10 MB
+    static const int64_t MAX_STICKER_SIZE = 2 * 1024 * 1024;     // 2 MB
+    static const int64_t MAX_GIF_SIZE = 15 * 1024 * 1024;        // 15 MB
+    static const int64_t MAX_VOICE_SIZE = 5 * 1024 * 1024;       // 5 MB
+    static const int64_t MAX_VIDEO_NOTE_SIZE = 20 * 1024 * 1024; // 20 MB (video notes are small)
+    static const int64_t MAX_VIDEO_SIZE = 0;                      // Don't auto-download videos
+    
+    switch (type) {
+        case MediaType::Photo:
+            return fileSize <= MAX_PHOTO_SIZE;
+        case MediaType::Sticker:
+            return fileSize <= MAX_STICKER_SIZE;
+        case MediaType::GIF:
+            return fileSize <= MAX_GIF_SIZE;
+        case MediaType::Voice:
+            return fileSize <= MAX_VOICE_SIZE;
+        case MediaType::VideoNote:
+            return fileSize <= MAX_VIDEO_NOTE_SIZE;
+        case MediaType::Video:
+            return fileSize <= MAX_VIDEO_SIZE;  // Don't auto-download
+        case MediaType::File:
+        case MediaType::Reaction:
+        default:
+            return false;  // Don't auto-download documents/files
+    }
+}
+
+void TelegramClient::DownloadMediaFromMessage(const MessageInfo& msg, int basePriority)
+{
+    // Download thumbnails first (higher priority)
+    if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
+        DownloadFile(msg.mediaThumbnailFileId, basePriority + 3, "Thumbnail", 0);
+    }
+    
+    // Determine media type and size
+    MediaType type = MediaType::Photo;  // Default
+    int64_t fileSize = msg.mediaFileSize;
+    
+    if (msg.hasPhoto) type = MediaType::Photo;
+    else if (msg.hasVideo) type = MediaType::Video;
+    else if (msg.hasVideoNote) type = MediaType::VideoNote;
+    else if (msg.hasSticker) type = MediaType::Sticker;
+    else if (msg.hasAnimation) type = MediaType::GIF;
+    else if (msg.hasVoice) type = MediaType::Voice;
+    else if (msg.hasDocument) type = MediaType::File;
+    
+    // Download main file if within auto-download limits
+    if (msg.mediaFileId != 0 && msg.mediaLocalPath.IsEmpty()) {
+        if (ShouldAutoDownloadMedia(type, fileSize)) {
+            DownloadFile(msg.mediaFileId, basePriority, msg.mediaFileName.IsEmpty() ? "Media" : msg.mediaFileName, fileSize);
+        }
+    }
+}
+
+void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
+{
+    TDLOG("AutoDownloadChatMedia: starting for chatId=%lld limit=%d", chatId, messageLimit);
+    
+    // Get cached messages for this chat
+    std::vector<MessageInfo> messages;
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto it = m_messages.find(chatId);
+        if (it != m_messages.end()) {
+            // Get the most recent messages (up to limit)
+            size_t count = std::min(static_cast<size_t>(messageLimit), it->second.size());
+            if (count > 0) {
+                auto start = it->second.end() - count;
+                messages.assign(start, it->second.end());
+            }
+        }
+    }
+    
+    if (messages.empty()) {
+        TDLOG("AutoDownloadChatMedia: no messages cached for chatId=%lld", chatId);
+        return;
+    }
+    
+    TDLOG("AutoDownloadChatMedia: processing %zu messages", messages.size());
+    
+    // Process messages from newest to oldest (reverse order)
+    // Newest messages get higher priority
+    int priority = 10;  // Start with high priority
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        const MessageInfo& msg = *it;
+        
+        // Check if this message has any media
+        if (msg.hasPhoto || msg.hasVideo || msg.hasVideoNote || 
+            msg.hasSticker || msg.hasAnimation || msg.hasVoice) {
+            DownloadMediaFromMessage(msg, priority);
+        }
+        
+        // Decrease priority for older messages (but keep above 1)
+        if (priority > 3) {
+            priority--;
+        }
+    }
+    
+    TDLOG("AutoDownloadChatMedia: finished queuing downloads for chatId=%lld", chatId);
 }
 
 void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
@@ -1399,6 +1554,18 @@ void TelegramClient::OnNewMessage(td_api::object_ptr<td_api::message>& message)
     {
         std::lock_guard<std::mutex> lock(m_dataMutex);
         m_messages[msgInfo.chatId].push_back(msgInfo);
+    }
+    
+    // Auto-download media from new messages (for ALL chats, not just current)
+    // This ensures media is ready when user opens any chat
+    if (msgInfo.hasPhoto || msgInfo.hasVideo || msgInfo.hasVideoNote || 
+        msgInfo.hasSticker || msgInfo.hasAnimation || msgInfo.hasVoice) {
+        // Use HIGH priority for current chat, lower for background chats
+        bool isCurrentChat = (msgInfo.chatId == m_currentChatId);
+        int basePriority = isCurrentChat ? 15 : 5;  // Much higher for active chat
+        DownloadMediaFromMessage(msgInfo, basePriority);
+        TDLOG("OnNewMessage: auto-downloading media for chatId=%lld msgId=%lld priority=%d (current=%d)", 
+              (long long)msgInfo.chatId, (long long)msgInfo.id, basePriority, isCurrentChat ? 1 : 0);
     }
     
     PostToMainThread([this, msgInfo]() {

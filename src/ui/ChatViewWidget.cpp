@@ -3,6 +3,7 @@
 #include "MessageFormatter.h"
 #include "MediaPopup.h"
 #include <iostream>
+#include <algorithm>
 
 #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 // #define CVWLOG(msg) do {} while(0)
@@ -30,6 +31,8 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_downloadHideTimer(this),
       m_hoverTimer(this),
       m_hideTimer(this),
+      m_refreshTimer(this),
+      m_refreshPending(false),
       m_lastHoveredTextPos(-1),
       m_isOverMediaSpan(false),
       m_wasAtBottom(true),
@@ -45,6 +48,7 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
     Bind(wxEVT_TIMER, &ChatViewWidget::OnHoverTimer, this, m_hoverTimer.GetId());
     Bind(wxEVT_TIMER, &ChatViewWidget::OnHideTimer, this, m_hideTimer.GetId());
     Bind(wxEVT_TIMER, [this](wxTimerEvent&) { HideDownloadProgress(); }, m_downloadHideTimer.GetId());
+    Bind(wxEVT_TIMER, &ChatViewWidget::OnRefreshTimer, this, m_refreshTimer.GetId());
 
     // Bind size event for repositioning the new message button
     Bind(wxEVT_SIZE, &ChatViewWidget::OnSize, this);
@@ -83,7 +87,11 @@ void ChatViewWidget::CreateLayout()
 
     m_topicText = new wxStaticText(m_topicBar, wxID_ANY, "");
     m_topicText->SetForegroundColour(wxColour(0xD3, 0xD7, 0xCF));
+#ifdef __WXOSX__
+    m_topicText->SetFont(wxFont(13, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+#else
     m_topicText->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+#endif
 
     topicSizer->Add(m_topicText, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
     m_topicBar->SetSizer(topicSizer);
@@ -144,7 +152,11 @@ void ChatViewWidget::CreateNewMessageButton()
 
     m_newMessageButton->SetBackgroundColour(wxColour(0x72, 0x9F, 0xCF));
     m_newMessageButton->SetForegroundColour(wxColour(0xFF, 0xFF, 0xFF));
+#ifdef __WXOSX__
+    m_newMessageButton->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+#else
     m_newMessageButton->SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+#endif
     m_newMessageButton->Hide();
 
     Bind(wxEVT_BUTTON, &ChatViewWidget::OnNewMessageButtonClick, this, ID_NEW_MESSAGE_BUTTON);
@@ -210,30 +222,133 @@ void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo& info)
     }
 }
 
-void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
+void ChatViewWidget::SortMessages()
+{
+    // Sort messages by ID (primary) and date (secondary)
+    // Telegram message IDs are monotonically increasing within a chat
+    std::sort(m_messages.begin(), m_messages.end(),
+              [](const MessageInfo& a, const MessageInfo& b) {
+                  if (a.id != b.id) {
+                      return a.id < b.id;
+                  }
+                  return a.date < b.date;
+              });
+}
+
+bool ChatViewWidget::HasMessage(int64_t messageId) const
+{
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    return m_displayedMessageIds.count(messageId) > 0;
+}
+
+void ChatViewWidget::AddMessage(const MessageInfo& msg)
+{
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    
+    // Skip duplicates
+    if (msg.id != 0 && m_displayedMessageIds.count(msg.id) > 0) {
+        CVWLOG("AddMessage: skipping duplicate message id=" << msg.id);
+        return;
+    }
+    
+    m_messages.push_back(msg);
+    if (msg.id != 0) {
+        m_displayedMessageIds.insert(msg.id);
+    }
+}
+
+void ChatViewWidget::ScheduleRefresh()
+{
+    // If a refresh is already pending, don't schedule another
+    if (m_refreshPending) {
+        return;
+    }
+    
+    m_refreshPending = true;
+    
+    // Start or restart the debounce timer
+    if (m_refreshTimer.IsRunning()) {
+        m_refreshTimer.Stop();
+    }
+    m_refreshTimer.StartOnce(REFRESH_DEBOUNCE_MS);
+}
+
+void ChatViewWidget::OnRefreshTimer(wxTimerEvent& event)
+{
+    m_refreshPending = false;
+    RefreshDisplay();
+}
+
+void ChatViewWidget::RefreshDisplay()
+{
+    if (!m_messageFormatter || !m_chatArea) return;
+    
+    // Clear pending flag since we're refreshing now
+    m_refreshPending = false;
+    if (m_refreshTimer.IsRunning()) {
+        m_refreshTimer.Stop();
+    }
+    
+    CVWLOG("RefreshDisplay: rendering " << m_messages.size() << " messages");
+    
+    // Remember scroll position
+    bool wasAtBottom = IsAtBottom();
+    
+    // Clear display but keep message storage
+    m_chatArea->Clear();
+    ClearMediaSpans();
+    ClearEditSpans();
+    ClearLinkSpans();
+    
+    // Reset formatting state
+    m_messageFormatter->ResetGroupingState();
+    m_messageFormatter->ResetUnreadMarker();
+    m_lastDisplayedSender.Clear();
+    m_lastDisplayedTimestamp = 0;
+    m_lastDisplayedMessageId = 0;
+    
+    // Sort messages before rendering
+    {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        SortMessages();
+        
+        // Update tracking from sorted messages
+        m_displayedMessageIds.clear();
+        for (const auto& msg : m_messages) {
+            if (msg.id != 0) {
+                m_displayedMessageIds.insert(msg.id);
+                if (msg.id > m_lastDisplayedMessageId) {
+                    m_lastDisplayedMessageId = msg.id;
+                }
+            }
+        }
+    }
+    
+    // Freeze display for batch update
+    BeginBatchUpdate();
+    
+    // Render all messages in order
+    {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        for (const auto& msg : m_messages) {
+            RenderMessageToDisplay(msg);
+        }
+    }
+    
+    EndBatchUpdate();
+    
+    // Restore scroll position
+    if (wasAtBottom) {
+        ScrollToBottom();
+    }
+}
+
+void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
 {
     if (!m_messageFormatter) return;
 
-    // Track message ID to detect duplicates and out-of-order messages
-    if (msg.id != 0) {
-        // Skip if already displayed
-        if (m_displayedMessageIds.count(msg.id) > 0) {
-            CVWLOG("DisplayMessage: skipping duplicate message id=" << msg.id);
-            return;
-        }
-        m_displayedMessageIds.insert(msg.id);
-        
-        // Track the last displayed message ID
-        if (msg.id > m_lastDisplayedMessageId) {
-            m_lastDisplayedMessageId = msg.id;
-        }
-    }
-
     wxString timestamp = FormatTimestamp(msg.date);
     wxString sender = msg.senderName.IsEmpty() ? "Unknown" : msg.senderName;
-
-    // Date separator feature disabled for now - causing display issues
-    // TODO: Fix date separator logic to only show when day actually changes
 
     // Handle forwarded messages
     if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
@@ -271,8 +386,6 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        EnsureMediaDownloaded(info);
-
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
@@ -290,14 +403,6 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.caption = msg.mediaCaption;
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
-
-        // For video, ensure thumbnail is downloaded first
-        if (info.thumbnailFileId != 0 && info.thumbnailPath.IsEmpty()) {
-            MediaInfo thumbInfo = info;
-            thumbInfo.fileId = info.thumbnailFileId;
-            thumbInfo.localPath = ""; // Force download check for thumb
-            EnsureMediaDownloaded(thumbInfo);
-        }
 
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
@@ -363,8 +468,6 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        EnsureMediaDownloaded(info);
-
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
@@ -381,8 +484,6 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.caption = msg.mediaCaption;
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
-
-        EnsureMediaDownloaded(info);
 
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
@@ -439,14 +540,66 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     m_lastDisplayedTimestamp = msg.date;
 }
 
+void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
+{
+    if (!m_messageFormatter) return;
+
+    // Skip duplicates
+    if (msg.id != 0 && HasMessage(msg.id)) {
+        CVWLOG("DisplayMessage: skipping duplicate message id=" << msg.id);
+        return;
+    }
+    
+    // Add to storage
+    AddMessage(msg);
+    
+    // Trigger download for media if needed
+    if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation) {
+        MediaInfo info;
+        info.fileId = msg.mediaFileId;
+        info.localPath = msg.mediaLocalPath;
+        if (msg.hasPhoto) info.type = MediaType::Photo;
+        else if (msg.hasSticker) info.type = MediaType::Sticker;
+        else info.type = MediaType::GIF;
+        EnsureMediaDownloaded(info);
+    }
+    
+    // Schedule a debounced refresh to coalesce rapid message arrivals
+    ScheduleRefresh();
+}
+
 void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo>& messages)
 {
-    BeginBatchUpdate();
-    for (const auto& msg : messages) {
-        DisplayMessage(msg);
+    CVWLOG("DisplayMessages: adding " << messages.size() << " messages");
+    
+    // Add all messages to storage first
+    {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        for (const auto& msg : messages) {
+            // Skip duplicates
+            if (msg.id != 0 && m_displayedMessageIds.count(msg.id) > 0) {
+                continue;
+            }
+            m_messages.push_back(msg);
+            if (msg.id != 0) {
+                m_displayedMessageIds.insert(msg.id);
+            }
+            
+            // Trigger download for media if needed
+            if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation) {
+                MediaInfo info;
+                info.fileId = msg.mediaFileId;
+                info.localPath = msg.mediaLocalPath;
+                if (msg.hasPhoto) info.type = MediaType::Photo;
+                else if (msg.hasSticker) info.type = MediaType::Sticker;
+                else info.type = MediaType::GIF;
+                EnsureMediaDownloaded(info);
+            }
+        }
     }
-    EndBatchUpdate();
-    ScrollToBottomIfAtBottom();
+    
+    // Render all messages in proper order immediately (not debounced for bulk loads)
+    RefreshDisplay();
 }
 
 void ChatViewWidget::BeginBatchUpdate()
@@ -469,6 +622,16 @@ void ChatViewWidget::EndBatchUpdate()
 
 void ChatViewWidget::ClearMessages()
 {
+    CVWLOG("ClearMessages: clearing all messages");
+    
+    // Clear message storage
+    {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        m_messages.clear();
+        m_displayedMessageIds.clear();
+    }
+    
+    // Clear display
     if (m_chatArea) {
         m_chatArea->Clear();
     }
@@ -484,24 +647,18 @@ void ChatViewWidget::ClearMessages()
     }
     m_lastDisplayedSender.Clear();
     m_lastDisplayedTimestamp = 0;
-    
-    // Reset message ID tracking
-    m_displayedMessageIds.clear();
     m_lastDisplayedMessageId = 0;
 }
 
 bool ChatViewWidget::IsMessageOutOfOrder(int64_t messageId) const
 {
-    // A message is out of order if:
-    // 1. We have displayed messages and this message ID is less than the last one
-    // 2. This means it should have been inserted earlier, not appended
-    if (m_lastDisplayedMessageId == 0) {
-        return false;  // No messages displayed yet, so not out of order
-    }
-    
-    // If the message ID is less than the last displayed, it's out of order
-    // (Telegram message IDs are monotonically increasing)
-    return messageId < m_lastDisplayedMessageId;
+    // With the new vector-based storage and RefreshDisplay, messages are always
+    // displayed in order. We no longer need to detect out-of-order messages
+    // because RefreshDisplay sorts them before rendering.
+    // 
+    // However, we keep this method for backwards compatibility - it now just
+    // returns false since we handle ordering internally.
+    return false;
 }
 
 void ChatViewWidget::ScrollToBottom()
@@ -877,6 +1034,9 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
                     client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
                     AddPendingDownload(info.thumbnailFileId, info);
+                } else if (client && client->IsDownloading(info.thumbnailFileId)) {
+                    // Already downloading - boost priority since user is hovering
+                    client->BoostDownloadPriority(info.thumbnailFileId);
                 }
             }
         }
@@ -907,27 +1067,41 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     // If the file isn't downloaded yet, trigger a download
     // But only if we haven't already requested this download (prevent duplicates)
     if (info.localPath.IsEmpty() || !wxFileExists(info.localPath) || needsVideoDownload) {
-        if (info.fileId != 0 && m_mainFrame && !HasPendingDownload(info.fileId)) {
+        if (info.fileId != 0 && m_mainFrame) {
             TelegramClient* client = m_mainFrame->GetTelegramClient();
-            if (client && !client->IsDownloading(info.fileId)) {
-                // Start download with high priority for preview
-                wxString displayName = info.fileName;
-                if (displayName.IsEmpty()) {
-                    switch (info.type) {
-                        case MediaType::Photo: displayName = "Photo"; break;
-                        case MediaType::Video: displayName = "Video"; break;
-                        case MediaType::GIF: displayName = "GIF"; break;
-                        case MediaType::VideoNote: displayName = "Video Note"; break;
-                        case MediaType::Sticker: displayName = "Sticker"; break;
-                        case MediaType::Voice: displayName = "Voice Message"; break;
-                        default: displayName = "Media"; break;
+            if (client) {
+                if (!client->IsDownloading(info.fileId) && !HasPendingDownload(info.fileId)) {
+                    // Start download with high priority for preview
+                    wxString displayName = info.fileName;
+                    if (displayName.IsEmpty()) {
+                        switch (info.type) {
+                            case MediaType::Photo: displayName = "Photo"; break;
+                            case MediaType::Video: displayName = "Video"; break;
+                            case MediaType::GIF: displayName = "GIF"; break;
+                            case MediaType::VideoNote: displayName = "Video Note"; break;
+                            case MediaType::Sticker: displayName = "Sticker"; break;
+                            case MediaType::Voice: displayName = "Voice Message"; break;
+                            default: displayName = "Media"; break;
+                        }
                     }
+                    CVWLOG("ShowMediaPopup: downloading media file, fileId=" << info.fileId << " name=" << displayName.ToStdString());
+                    client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
+                    // Track this as a pending download so we can update popup when complete
+                    AddPendingDownload(info.fileId, info);
+                } else if (client->IsDownloading(info.fileId)) {
+                    // Already downloading - boost priority since user is hovering
+                    CVWLOG("ShowMediaPopup: boosting download priority for fileId=" << info.fileId);
+                    client->BoostDownloadPriority(info.fileId);
                 }
-                CVWLOG("ShowMediaPopup: downloading media file, fileId=" << info.fileId << " name=" << displayName.ToStdString());
-                client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
-                // Track this as a pending download so we can update popup when complete
-                AddPendingDownload(info.fileId, info);
             }
+        }
+    }
+    
+    // Also boost thumbnail download priority if it's in progress
+    if (info.thumbnailFileId != 0 && m_mainFrame) {
+        TelegramClient* client = m_mainFrame->GetTelegramClient();
+        if (client && client->IsDownloading(info.thumbnailFileId)) {
+            client->BoostDownloadPriority(info.thumbnailFileId);
         }
     }
 
@@ -1114,7 +1288,7 @@ wxString ChatViewWidget::FormatTimestamp(int64_t unixTime)
     }
     time_t t = static_cast<time_t>(unixTime);
     wxDateTime dt(t);
-    return dt.Format("%H:%M");
+    return dt.Format("%H:%M:%S");
 }
 
 wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime)
@@ -1130,7 +1304,7 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime)
     wxDateTime yesterday = today - wxDateSpan::Day();
     wxDateTime msgDate = dt.GetDateOnly();
 
-    wxString timeStr = dt.Format("%H:%M");
+    wxString timeStr = dt.Format("%H:%M:%S");
 
     if (msgDate == today) {
         return timeStr;  // Just time for today

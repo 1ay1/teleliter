@@ -115,7 +115,7 @@ void MessageFormatter::AppendContinuationMessage(const wxString& message)
     
     m_chatArea->ResetStyles();
     // Indented message without timestamp/nick (for grouped messages)
-    m_chatArea->WriteText("         ");  // Same width as "[HH:MM] "
+    m_chatArea->WriteText("            ");  // Same width as "[HH:MM:SS] "
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();

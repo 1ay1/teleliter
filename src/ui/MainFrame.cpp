@@ -42,9 +42,9 @@ static wxString FormatLastSeen(int64_t lastSeenTime)
         int hours = static_cast<int>(diff.GetHours());
         return wxString::Format("last seen %d hour%s ago", hours, hours == 1 ? "" : "s");
     } else if (diff.GetDays() == 1) {
-        return "last seen yesterday at " + lastSeen.Format("%H:%M");
+        return "last seen yesterday at " + lastSeen.Format("%H:%M:%S");
     } else if (diff.GetDays() < 7) {
-        return "last seen " + lastSeen.Format("%A at %H:%M");
+        return "last seen " + lastSeen.Format("%A at %H:%M:%S");
     } else {
         return "last seen " + lastSeen.Format("%b %d");
     }
@@ -270,10 +270,23 @@ void MainFrame::SetupFonts()
         }
     }
     
-    m_chatFont = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
-    m_treeFont = wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    m_memberListFont = wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    m_inputFont = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
+    // macOS renders fonts smaller, so use larger sizes on Mac
+#ifdef __WXOSX__
+    int chatFontSize = 13;
+    int treeFontSize = 12;
+    int memberFontSize = 12;
+    int inputFontSize = 13;
+#else
+    int chatFontSize = 10;
+    int treeFontSize = 9;
+    int memberFontSize = 9;
+    int inputFontSize = 10;
+#endif
+    
+    m_chatFont = wxFont(chatFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
+    m_treeFont = wxFont(treeFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    m_memberListFont = wxFont(memberFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    m_inputFont = wxFont(inputFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
 }
 
 void MainFrame::CreateMenuBar()
@@ -473,7 +486,11 @@ void MainFrame::CreateMemberList(wxWindow* parent)
     m_memberCountLabel = new wxStaticText(parent, wxID_ANY, "0 members");
     m_memberCountLabel->SetForegroundColour(m_treeFgColor);
     m_memberCountLabel->SetBackgroundColour(m_memberListBgColor);
+#ifdef __WXOSX__
+    m_memberCountLabel->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+#else
     m_memberCountLabel->SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+#endif
     sizer->Add(m_memberCountLabel, 0, wxALL, 3);
     
     parent->SetSizer(sizer);
@@ -777,7 +794,7 @@ void MainFrame::OnNewChat(wxCommandEvent& event)
     if (dlg.ShowModal() == wxID_OK) {
         wxString contact = dlg.GetValue();
         if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                                 "Starting chat with " + contact);
         }
     }
@@ -789,7 +806,7 @@ void MainFrame::OnNewGroup(wxCommandEvent& event)
     if (dlg.ShowModal() == wxID_OK) {
         wxString groupName = dlg.GetValue();
         if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                                 "Creating group: " + groupName);
         }
     }
@@ -801,7 +818,7 @@ void MainFrame::OnNewChannel(wxCommandEvent& event)
     if (dlg.ShowModal() == wxID_OK) {
         wxString channelName = dlg.GetValue();
         if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                                 "Creating channel: " + channelName);
         }
     }
@@ -818,7 +835,7 @@ void MainFrame::OnSearch(wxCommandEvent& event)
     if (dlg.ShowModal() == wxID_OK) {
         wxString query = dlg.GetValue();
         if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                                 "Searching for: " + query);
         }
     }
@@ -1105,7 +1122,7 @@ void MainFrame::OnMemberListItemActivated(wxListEvent& event)
     }
     
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Opening profile: " + username);
     }
 }
@@ -1146,12 +1163,12 @@ void MainFrame::ForwardInputToWelcomeChat(const wxString& input)
 wxString MainFrame::FormatTimestamp(int64_t unixTime)
 {
     if (unixTime <= 0) {
-        return wxDateTime::Now().Format("%H:%M");
+        return wxDateTime::Now().Format("%H:%M:%S");
     }
     
     time_t t = static_cast<time_t>(unixTime);
     wxDateTime dt(t);
-    return dt.Format("%H:%M");
+    return dt.Format("%H:%M:%S");
 }
 
 void MainFrame::OnConnected()
@@ -1340,145 +1357,26 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
         return;
     }
     
-    wxRichTextCtrl* display = m_chatViewWidget->GetDisplayCtrl();
-    if (display) {
-        display->Freeze();
-        display->BeginSuppressUndo();
-    }
-    
     // Clear reloading state now that we have fresh messages
     m_chatViewWidget->SetReloading(false);
+    
+    // Clear existing messages and display all new ones in bulk
+    // ChatViewWidget::DisplayMessages handles sorting internally
     m_chatViewWidget->ClearMessages();
+    m_chatViewWidget->DisplayMessages(messages);
     
-    // Sort messages by message ID (primary) then date (secondary) for correct order
-    // Telegram message IDs are monotonically increasing within a chat, making them
-    // more reliable for ordering than timestamps (which have second granularity)
-    std::vector<MessageInfo> sortedMessages = messages;
-    std::sort(sortedMessages.begin(), sortedMessages.end(),
-              [](const MessageInfo& a, const MessageInfo& b) {
-                  if (a.id != b.id) {
-                      return a.id < b.id;
-                  }
-                  return a.date < b.date;
-              });
-    
-    // Get last read message ID for this chat
-    int64_t lastReadId = GetLastReadMessageId(chatId);
-    bool unreadMarkerInserted = false;
-    
-    // Get unread count from chat info
-    int32_t unreadCount = 0;
-    if (m_telegramClient) {
-        bool found = false;
-        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
-        if (found) {
-            unreadCount = chat.unreadCount;
-        }
-    }
-    
-    // If we have local tracking for this chat and the lastReadId is the newest message,
-    // then we've already viewed this chat and there are no unread messages for us
-    if (lastReadId > 0 && !sortedMessages.empty()) {
-        int64_t newestMsgId = sortedMessages.back().id;
-        if (lastReadId >= newestMsgId) {
-            // We've already read up to or past the newest message - no marker needed
-            DBGLOG("Local tracking shows lastReadId=" << lastReadId << " >= newestMsgId=" << newestMsgId << ", no marker");
-            unreadCount = 0;
-        }
-    }
-    
-    DBGLOG("=== UNREAD MARKER DEBUG ===");
-    DBGLOG("Displaying " << sortedMessages.size() << " messages");
-    DBGLOG("  unreadCount=" << unreadCount);
-    DBGLOG("  lastReadId=" << lastReadId);
-    
-    // First pass: find the first unread INCOMING message
-    // We only care about incoming messages for the unread marker - 
-    // your own outgoing messages are never "unread" to you
-    int64_t firstUnreadIncomingId = 0;
-    if (unreadCount > 0 && lastReadId > 0) {
-        for (const auto& msg : sortedMessages) {
-            // Skip outgoing messages - only incoming can be unread
-            if (msg.isOutgoing) continue;
-            
-            // First incoming message after lastReadId is the first unread
-            if (msg.id > lastReadId) {
-                firstUnreadIncomingId = msg.id;
-                DBGLOG("  First unread incoming: id=" << msg.id << " from=" << msg.senderName.ToStdString() 
-                       << " (msg.id " << msg.id << " > lastReadId " << lastReadId << ")");
-                break;
-            } else {
-                DBGLOG("  Skipping incoming msg id=" << msg.id << " (not after lastReadId=" << lastReadId << ")");
-            }
-        }
-    }
-    
-    // If unreadCount > 0 but no unread incoming messages found, don't show marker
-    // This can happen when all "unread" messages are your own outgoing messages
-    if (unreadCount > 0 && firstUnreadIncomingId == 0 && lastReadId > 0) {
-        DBGLOG("  No unread incoming messages found despite unreadCount=" << unreadCount << ", skipping marker");
-    }
-    
-    // If unreadCount is 0, we should NOT show any marker - everything is read
-    if (unreadCount == 0) {
-        DBGLOG("  unreadCount=0, no marker will be shown");
-        firstUnreadIncomingId = 0;  // Ensure no marker
-    }
-    
-    DBGLOG("  Final firstUnreadIncomingId=" << firstUnreadIncomingId);
-    DBGLOG("=== END UNREAD MARKER DEBUG ===");
-    
-    // Display messages in chronological order (oldest first)
-    for (auto it = sortedMessages.begin(); it != sortedMessages.end(); ++it) {
-        // Insert unread marker before first unread INCOMING message (HexChat style)
-        if (!unreadMarkerInserted && firstUnreadIncomingId != 0 && it->id == firstUnreadIncomingId) {
-            MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
-            if (formatter) {
-                formatter->AppendUnreadMarker();
-            }
-            unreadMarkerInserted = true;
-        }
-        
-        // Fallback: If no lastReadId but has unread, insert marker based on unread count
-        // Only consider incoming messages for unread marker placement
-        if (!unreadMarkerInserted && unreadCount > 0 && lastReadId == 0 && !it->isOutgoing) {
-            // Count incoming messages before current position and total
-            size_t currentIncomingIndex = 0;
-            for (auto cit = sortedMessages.begin(); cit != it; ++cit) {
-                if (!cit->isOutgoing) currentIncomingIndex++;
-            }
-            size_t totalIncoming = 0;
-            for (const auto& m : sortedMessages) {
-                if (!m.isOutgoing) totalIncoming++;
-            }
-            // Place marker before the first message in the unread range
-            if (totalIncoming > 0 && 
-                currentIncomingIndex == totalIncoming - std::min(static_cast<size_t>(unreadCount), totalIncoming)) {
-                MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
-                if (formatter) {
-                    formatter->AppendUnreadMarker();
-                }
-                unreadMarkerInserted = true;
-            }
-        }
-        
-        DisplayMessage(*it);
-    }
-    
-    if (display) {
-        display->EndSuppressUndo();
-        display->Thaw();
-        display->LayoutContent();
-        display->Refresh();
-        display->Update();
-    }
+    // Scroll to bottom after loading
     m_chatViewWidget->ScrollToBottom();
     
     // Mark the chat as read now that messages are loaded and displayed
-    // This ensures the unread marker is shown first, then the chat is marked as read
-    if (m_telegramClient && !sortedMessages.empty()) {
-        // Find the last message ID (newest)
-        int64_t lastMsgId = sortedMessages.back().id;
+    if (m_telegramClient && !messages.empty()) {
+        // Find the last message ID (newest) - need to find max since messages may not be sorted
+        int64_t lastMsgId = 0;
+        for (const auto& msg : messages) {
+            if (msg.id > lastMsgId) {
+                lastMsgId = msg.id;
+            }
+        }
         if (lastMsgId > 0) {
             // Update our local tracking
             MarkMessageAsRead(chatId, lastMsgId);
@@ -1544,23 +1442,8 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
         }
     }
     
-    // Check if this message is out of order (e.g., sync delivered an older message)
-    // If so, we need to reload all messages to maintain correct ordering
-    if (m_chatViewWidget && message.id != 0 && m_chatViewWidget->IsMessageOutOfOrder(message.id)) {
-        DBGLOG("OnNewMessage: message id=" << message.id << " is out of order (last=" 
-               << m_chatViewWidget->GetLastDisplayedMessageId() << "), reloading chat");
-        // Set reloading flag to ignore incoming messages until reload completes
-        m_chatViewWidget->SetReloading(true);
-        // Clear display immediately to prevent stale content
-        m_chatViewWidget->ClearMessages();
-        // Reload all messages to get correct order
-        if (m_telegramClient) {
-            m_telegramClient->OpenChatAndLoadMessages(message.chatId);
-        }
-        return;
-    }
-    
-    // Display the new message (appending to end since it's in order)
+    // Display the new message - ChatViewWidget now handles ordering automatically
+    // Messages are stored in a sorted vector and re-rendered in correct order
     DisplayMessage(message);
     if (m_chatViewWidget) {
         // Use smart scrolling - only scroll if user was already at bottom
@@ -1609,7 +1492,7 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
         if (displayText.Length() > 500) {
             displayText = displayText.Left(500) + "...";
         }
-        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"),
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"),
                             wxString::Format("* %s edited: %s", sender, displayText));
         m_chatViewWidget->ScrollToBottomIfAtBottom();
     }

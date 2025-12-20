@@ -8,15 +8,16 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <mutex>
 
 #include "ChatArea.h"
 #include "MediaTypes.h"
+#include "../telegram/Types.h"
 
 // Forward declarations
 class MainFrame;
 class MessageFormatter;
 class MediaPopup;
-struct MessageInfo;
 
 class ChatViewWidget : public wxPanel
 {
@@ -24,15 +25,31 @@ public:
     ChatViewWidget(wxWindow* parent, MainFrame* mainFrame);
     virtual ~ChatViewWidget();
     
-    // Message display
+    // Message display - messages are stored and rendered in sorted order
     void DisplayMessage(const MessageInfo& msg);
     void DisplayMessages(const std::vector<MessageInfo>& messages);
     void ClearMessages();
     void ScrollToBottom();
     
+    // Refresh the display from the stored message vector
+    // This re-renders all messages in proper sorted order
+    void RefreshDisplay();
+    
+    // Schedule a debounced refresh (coalesces multiple rapid updates)
+    void ScheduleRefresh();
+    
+    // Add a message to storage without immediately rendering
+    // Call RefreshDisplay() after adding messages to update the view
+    void AddMessage(const MessageInfo& msg);
+    
+    // Get stored messages (for debugging/inspection)
+    const std::vector<MessageInfo>& GetMessages() const { return m_messages; }
+    size_t GetMessageCount() const { return m_messages.size(); }
+    
     // Message ordering
     bool IsMessageOutOfOrder(int64_t messageId) const;
     int64_t GetLastDisplayedMessageId() const { return m_lastDisplayedMessageId; }
+    bool HasMessage(int64_t messageId) const;
     
     // Reloading state - when true, new messages are ignored until reload completes
     void SetReloading(bool reloading) { m_isReloading = reloading; }
@@ -127,6 +144,15 @@ private:
     // Helper to ensure media is downloaded
     void EnsureMediaDownloaded(const MediaInfo& info);
     
+    // Render a single message to the display (internal - assumes display is ready)
+    void RenderMessageToDisplay(const MessageInfo& msg);
+    
+    // Sort messages by ID (primary) and date (secondary)
+    void SortMessages();
+    
+    // Timer callback for debounced refresh
+    void OnRefreshTimer(wxTimerEvent& event);
+    
     // Event handlers
     void OnMouseMove(wxMouseEvent& event);
     void OnMouseLeave(wxMouseEvent& event);
@@ -187,6 +213,11 @@ private:
     // Hover debouncing and popup management
     wxTimer m_hoverTimer;
     wxTimer m_hideTimer;
+    
+    // Debounced refresh timer - coalesces multiple rapid message updates
+    wxTimer m_refreshTimer;
+    bool m_refreshPending;
+    static const int REFRESH_DEBOUNCE_MS = 50;  // 50ms debounce
     MediaInfo m_pendingHoverMedia;
     wxPoint m_pendingHoverPos;
     MediaInfo m_currentlyShowingMedia;
@@ -206,7 +237,12 @@ private:
     wxString m_lastDisplayedSender;
     int64_t m_lastDisplayedTimestamp;
     
-    // Track displayed message IDs for ordering
+    // Stored messages - the source of truth for display
+    // Messages are kept sorted by ID for consistent ordering
+    std::vector<MessageInfo> m_messages;
+    mutable std::mutex m_messagesMutex;  // Protects m_messages
+    
+    // Track displayed message IDs for ordering (derived from m_messages)
     std::set<int64_t> m_displayedMessageIds;
     int64_t m_lastDisplayedMessageId;
     

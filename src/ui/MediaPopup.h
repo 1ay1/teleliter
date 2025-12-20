@@ -148,15 +148,15 @@ private:
     int64_t m_videoLoadStartTime;
     
     // Size constraints for stickers/emojis (smaller)
-    static constexpr int STICKER_MAX_WIDTH = 250;
-    static constexpr int STICKER_MAX_HEIGHT = 200;
+    static constexpr int STICKER_MAX_WIDTH = 180;
+    static constexpr int STICKER_MAX_HEIGHT = 150;
     
-    // Size constraints for photos/videos (larger for better preview)
-    static constexpr int PHOTO_MAX_WIDTH = 450;
-    static constexpr int PHOTO_MAX_HEIGHT = 400;
+    // Size constraints for photos/videos (compact preview)
+    static constexpr int PHOTO_MAX_WIDTH = 300;
+    static constexpr int PHOTO_MAX_HEIGHT = 260;
     
-    static constexpr int MIN_WIDTH = 120;
-    static constexpr int MIN_HEIGHT = 70;
+    static constexpr int MIN_WIDTH = 100;
+    static constexpr int MIN_HEIGHT = 60;
     static constexpr int PADDING = 8;
     static constexpr int BORDER_WIDTH = 1;
     

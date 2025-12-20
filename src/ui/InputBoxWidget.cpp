@@ -37,9 +37,9 @@ void InputBoxWidget::CreateLayout()
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Input text box
+    // Input text box - use default size, let it be natural height
     m_inputBox = new wxTextCtrl(this, wxID_ANY, "",
-        wxDefaultPosition, wxSize(-1, 28),
+        wxDefaultPosition, wxDefaultSize,
         wxTE_PROCESS_ENTER | wxBORDER_NONE);
     m_inputBox->SetBackgroundColour(m_bgColor);
     m_inputBox->SetForegroundColour(m_fgColor);
@@ -49,7 +49,8 @@ void InputBoxWidget::CreateLayout()
     m_inputBox->Bind(wxEVT_TEXT_ENTER, &InputBoxWidget::OnTextEnter, this);
     m_inputBox->Bind(wxEVT_KEY_DOWN, &InputBoxWidget::OnKeyDown, this);
     
-    sizer->Add(m_inputBox, 1, wxEXPAND | wxALL, 2);
+    // Use ALIGN_CENTER_VERTICAL instead of EXPAND to keep natural height
+    sizer->Add(m_inputBox, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 2);
     SetSizer(sizer);
 }
 
@@ -272,7 +273,16 @@ void InputBoxWidget::SetInputFont(const wxFont& font)
     
     if (m_inputBox) {
         m_inputBox->SetFont(m_font);
+        
+        // Let the text control determine its own best height based on font
+        // Don't force a size - wxTextCtrl knows its natural height
+        wxSize bestSize = m_inputBox->GetBestSize();
+        
+        // Set parent panel height to match
+        SetMinSize(wxSize(-1, bestSize.GetHeight() + 4));
+        
         m_inputBox->Refresh();
+        Layout();
     }
 }
 
@@ -313,7 +323,7 @@ void InputBoxWidget::ResetTabCompletion()
 wxString InputBoxWidget::GetCurrentTimestamp() const
 {
     wxDateTime now = wxDateTime::Now();
-    return now.Format("%H:%M");
+    return now.Format("%H:%M:%S");
 }
 
 void InputBoxWidget::OnTextEnter(wxCommandEvent& event)

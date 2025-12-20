@@ -15,6 +15,7 @@
 #include <queue>
 
 #include "Types.h"
+#include "../ui/MediaTypes.h"
 
 // Forward declarations
 class MainFrame;
@@ -55,6 +56,10 @@ public:
     void OpenChat(int64_t chatId);
     void CloseChat(int64_t chatId);
     void OpenChatAndLoadMessages(int64_t chatId, int limit = 100);
+    
+    // Track current active chat for download prioritization
+    void SetCurrentChatId(int64_t chatId) { m_currentChatId = chatId; }
+    int64_t GetCurrentChatId() const { return m_currentChatId; }
     void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 100);
     void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
     void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 100);
@@ -66,6 +71,16 @@ public:
     void RetryDownload(int32_t fileId);
     bool IsDownloading(int32_t fileId) const;
     DownloadState GetDownloadState(int32_t fileId) const;
+    
+    // Smart auto-download for chat media
+    // Call when opening a chat to preemptively download visible media
+    void AutoDownloadChatMedia(int64_t chatId, int messageLimit = 50);
+    
+    // Boost download priority for a file (e.g., when user hovers)
+    void BoostDownloadPriority(int32_t fileId);
+    
+    // Get download progress (0-100, or -1 if not downloading)
+    int GetDownloadProgress(int32_t fileId) const;
     
     UserInfo GetUser(int64_t userId, bool* found = nullptr) const;
     wxString GetUserDisplayName(int64_t userId) const;
@@ -84,6 +99,7 @@ private:
     
     AuthState m_authState;
     UserInfo m_currentUser;
+    int64_t m_currentChatId = 0;  // Currently viewed chat for download prioritization
     
     std::map<int64_t, ChatInfo> m_chats;
     std::map<int64_t, UserInfo> m_users;
@@ -121,6 +137,10 @@ private:
     void OnFileUpdate(td_api::object_ptr<td_api::file>& file);
     void OnDownloadError(int32_t fileId, const wxString& error);
     void CheckDownloadTimeouts();
+    
+    // Smart download helpers
+    void DownloadMediaFromMessage(const MessageInfo& msg, int basePriority);
+    bool ShouldAutoDownloadMedia(MediaType type, int64_t fileSize) const;
     void OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message);
     void OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessageId, int32_t unreadCount);
     void OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position);

@@ -26,7 +26,13 @@ void ChatArea::SetupColors()
     m_linkColor = wxColour(0x72, 0x9F, 0xCF);       // Blue
 
     // Monospace font - exactly like WelcomeChat
-    m_chatFont = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    // macOS renders fonts smaller, so use larger size on Mac
+#ifdef __WXOSX__
+    int fontSize = 13;
+#else
+    int fontSize = 10;
+#endif
+    m_chatFont = wxFont(fontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 
     // User colors - no grays (gray is reserved for current user)
     m_userColors[0]  = wxColour(0x35, 0x36, 0xB2);  // Blue
@@ -151,7 +157,7 @@ void ChatArea::EndBatchUpdate()
 
 wxString ChatArea::GetCurrentTimestamp()
 {
-    return wxDateTime::Now().Format("%H:%M");
+    return wxDateTime::Now().Format("%H:%M:%S");
 }
 
 void ChatArea::WriteTimestamp()
