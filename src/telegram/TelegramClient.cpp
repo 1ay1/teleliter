@@ -1133,16 +1133,22 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     auto& thumbSize = c.photo_->sizes_.front();
                     auto& fullSize = c.photo_->sizes_.back();
                     
+                    // Track full size photo
                     if (fullSize->photo_) {
                         info.mediaFileId = fullSize->photo_->id_;
                         info.mediaFileSize = fullSize->photo_->size_;
                         
                         if (fullSize->photo_->local_->is_downloading_completed_) {
                             info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
-                        } else if (thumbSize->photo_ && thumbSize->photo_->local_->is_downloading_completed_) {
-                            // Use thumbnail if full not downloaded
-                            info.mediaLocalPath = wxString::FromUTF8(thumbSize->photo_->local_->path_);
-                        } else if (thumbSize->photo_ && !thumbSize->photo_->local_->is_downloading_active_) {
+                        }
+                    }
+                    
+                    // Track thumbnail separately
+                    if (thumbSize->photo_) {
+                        info.mediaThumbnailFileId = thumbSize->photo_->id_;
+                        if (thumbSize->photo_->local_->is_downloading_completed_) {
+                            info.mediaThumbnailPath = wxString::FromUTF8(thumbSize->photo_->local_->path_);
+                        } else if (!thumbSize->photo_->local_->is_downloading_active_) {
                             // Auto-download thumbnail
                             this->DownloadFile(thumbSize->photo_->id_, 5);
                         }
@@ -1165,10 +1171,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         }
                     }
                     
-                    // If video not downloaded, use thumbnail for preview
-                    if (info.mediaLocalPath.IsEmpty() && c.video_->thumbnail_ && c.video_->thumbnail_->file_) {
+                    // Always track thumbnail separately (don't put thumbnail path in mediaLocalPath)
+                    if (c.video_->thumbnail_ && c.video_->thumbnail_->file_) {
+                        info.mediaThumbnailFileId = c.video_->thumbnail_->file_->id_;
                         if (c.video_->thumbnail_->file_->local_->is_downloading_completed_) {
-                            info.mediaLocalPath = wxString::FromUTF8(c.video_->thumbnail_->file_->local_->path_);
+                            info.mediaThumbnailPath = wxString::FromUTF8(c.video_->thumbnail_->file_->local_->path_);
                         } else if (!c.video_->thumbnail_->file_->local_->is_downloading_active_) {
                             // Auto-download video thumbnail
                             this->DownloadFile(c.video_->thumbnail_->file_->id_, 5);
@@ -1201,16 +1208,16 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileId = c.video_note_->video_->id_;
                         info.mediaFileSize = c.video_note_->video_->size_;
                         
-                        // Check if video note is downloaded
                         if (c.video_note_->video_->local_->is_downloading_completed_) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_note_->video_->local_->path_);
                         }
                     }
                     
-                    // If video note not downloaded, use thumbnail for preview
-                    if (info.mediaLocalPath.IsEmpty() && c.video_note_->thumbnail_ && c.video_note_->thumbnail_->file_) {
+                    // Always track thumbnail separately
+                    if (c.video_note_->thumbnail_ && c.video_note_->thumbnail_->file_) {
+                        info.mediaThumbnailFileId = c.video_note_->thumbnail_->file_->id_;
                         if (c.video_note_->thumbnail_->file_->local_->is_downloading_completed_) {
-                            info.mediaLocalPath = wxString::FromUTF8(c.video_note_->thumbnail_->file_->local_->path_);
+                            info.mediaThumbnailPath = wxString::FromUTF8(c.video_note_->thumbnail_->file_->local_->path_);
                         } else if (!c.video_note_->thumbnail_->file_->local_->is_downloading_active_) {
                             // Auto-download video note thumbnail
                             this->DownloadFile(c.video_note_->thumbnail_->file_->id_, 5);
@@ -1261,12 +1268,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         }
                     }
                     
-                    // Auto-download GIF thumbnail
+                    // Always track thumbnail separately
                     if (c.animation_->thumbnail_ && c.animation_->thumbnail_->file_) {
+                        info.mediaThumbnailFileId = c.animation_->thumbnail_->file_->id_;
                         if (c.animation_->thumbnail_->file_->local_->is_downloading_completed_) {
-                            if (info.mediaLocalPath.IsEmpty()) {
-                                info.mediaLocalPath = wxString::FromUTF8(c.animation_->thumbnail_->file_->local_->path_);
-                            }
+                            info.mediaThumbnailPath = wxString::FromUTF8(c.animation_->thumbnail_->file_->local_->path_);
                         } else if (!c.animation_->thumbnail_->file_->local_->is_downloading_active_) {
                             // Auto-download GIF thumbnail
                             this->DownloadFile(c.animation_->thumbnail_->file_->id_, 5);

@@ -852,6 +852,42 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int imgY = contentY;
         dc.DrawBitmap(m_bitmap, imgX, imgY, true);
         
+        // If this is a thumbnail and the main file is still downloading, show an overlay indicator
+        bool isShowingThumbnail = !m_mediaInfo.thumbnailPath.IsEmpty() && 
+                                   wxFileExists(m_mediaInfo.thumbnailPath) &&
+                                   (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+        bool needsDownload = m_mediaInfo.fileId != 0 && 
+                             (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+        
+        if (isShowingThumbnail && needsDownload && 
+            (m_mediaInfo.type == MediaType::Video || m_mediaInfo.type == MediaType::GIF || 
+             m_mediaInfo.type == MediaType::VideoNote)) {
+            // Draw a semi-transparent overlay with download indicator
+            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 128)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            
+            // Draw play button circle in center
+            int centerX = imgX + m_bitmap.GetWidth() / 2;
+            int centerY = imgY + m_bitmap.GetHeight() / 2;
+            int radius = 20;
+            
+            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF)));
+            dc.DrawCircle(centerX, centerY, radius);
+            
+            // Draw download arrow inside
+            dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
+            dc.DrawLine(centerX, centerY - 8, centerX, centerY + 5);
+            dc.DrawLine(centerX - 6, centerY, centerX, centerY + 8);
+            dc.DrawLine(centerX + 6, centerY, centerX, centerY + 8);
+            
+            // Draw "Click to download" text below
+            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+            dc.SetTextForeground(wxColour(0x72, 0x9F, 0xCF));
+            wxString hint = "Hover to download";
+            wxSize hintSize = dc.GetTextExtent(hint);
+            dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 5);
+        }
+        
         // Draw the label at the bottom
         DrawMediaLabel(dc, size);
         

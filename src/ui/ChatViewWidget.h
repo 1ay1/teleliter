@@ -28,6 +28,16 @@ public:
     void ClearMessages();
     void ScrollToBottom();
     
+    // Smart scrolling - only auto-scroll if at bottom
+    void ScrollToBottomIfAtBottom();
+    bool IsAtBottom() const;
+    void ShowNewMessageIndicator();
+    void HideNewMessageIndicator();
+    
+    // Batch updates (freeze/thaw for performance)
+    void BeginBatchUpdate();
+    void EndBatchUpdate();
+    
     // Media span tracking
     void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
     MediaSpan* GetMediaSpanAtPosition(long pos);
@@ -77,23 +87,47 @@ public:
     // Open media (external viewer or download)
     void OpenMedia(const MediaInfo& info);
     
+    // Loading state
+    void SetLoading(bool loading);
+    bool IsLoading() const { return m_isLoading; }
+    
 private:
     void CreateLayout();
     void SetupDisplayControl();
+    void CreateNewMessageButton();
     wxString FormatTimestamp(int64_t unixTime);
+    wxString FormatSmartTimestamp(int64_t unixTime);
     
     // Event handlers
     void OnMouseMove(wxMouseEvent& event);
     void OnMouseLeave(wxMouseEvent& event);
     void OnLeftDown(wxMouseEvent& event);
+    void OnRightDown(wxMouseEvent& event);
+    void OnKeyDown(wxKeyEvent& event);
     void OnHoverTimer(wxTimerEvent& event);
     void OnHideTimer(wxTimerEvent& event);
+    void OnScroll(wxScrollWinEvent& event);
+    void OnNewMessageButtonClick(wxCommandEvent& event);
+    void OnSize(wxSizeEvent& event);
+    
+    // Context menu handlers
+    void OnCopyText(wxCommandEvent& event);
+    void OnCopyLink(wxCommandEvent& event);
+    void OnOpenLink(wxCommandEvent& event);
+    void OnSaveMedia(wxCommandEvent& event);
+    void OnOpenMedia(wxCommandEvent& event);
+    
+    // Context menu helpers
+    void ShowContextMenu(const wxPoint& pos);
+    wxString GetSelectedText() const;
+    wxString GetLinkAtPosition(long pos) const;
     
     MainFrame* m_mainFrame;
     wxRichTextCtrl* m_chatDisplay;
     MessageFormatter* m_messageFormatter;
     MediaPopup* m_mediaPopup;
     wxPopupWindow* m_editHistoryPopup;
+    wxButton* m_newMessageButton;  // "↓ New Messages" button
     
     // Media spans for clickable media
     std::vector<MediaSpan> m_mediaSpans;
@@ -118,6 +152,17 @@ private:
     static const int HOVER_DELAY_MS = 200;  // Delay before showing popup
     static const int HIDE_DELAY_MS = 300;   // Delay before hiding popup
     
+    // Smart scrolling state
+    bool m_wasAtBottom;  // Track if we were at bottom before new messages
+    int m_newMessageCount;  // Count of unread messages when scrolled up
+    bool m_isLoading;  // Loading state
+    int m_batchUpdateDepth;  // Nested batch update counter
+    
+    // Context menu state
+    long m_contextMenuPos;  // Text position where context menu was opened
+    wxString m_contextMenuLink;  // Link URL if right-clicked on a link
+    MediaInfo m_contextMenuMedia;  // Media info if right-clicked on media
+    
     // Helper to check if two MediaInfo refer to the same media
     bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
     
@@ -137,6 +182,16 @@ private:
     wxColour m_userColors[16];
     
     wxFont m_font;
+    
+    // Menu IDs
+    enum {
+        ID_COPY_TEXT = wxID_HIGHEST + 1000,
+        ID_COPY_LINK,
+        ID_OPEN_LINK,
+        ID_SAVE_MEDIA,
+        ID_OPEN_MEDIA,
+        ID_NEW_MESSAGE_BUTTON
+    };
 };
 
 #endif // CHATVIEWWIDGET_H
