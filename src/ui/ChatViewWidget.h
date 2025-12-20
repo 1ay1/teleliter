@@ -38,6 +38,10 @@ public:
     void BeginBatchUpdate();
     void EndBatchUpdate();
     
+    // Topic bar (HexChat-style header showing chat name and info)
+    void SetTopicText(const wxString& chatName, const wxString& info = "");
+    void ClearTopicText();
+    
     // Media span tracking
     void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
     MediaSpan* GetMediaSpanAtPosition(long pos);
@@ -67,6 +71,10 @@ public:
                    const wxColour& highlight, const wxColour& notice);
     void SetUserColors(const wxColour* colors); // Array of 16 colors
     void SetChatFont(const wxFont& font);
+    
+    // Current user for mention/highlight detection (HexChat-style)
+    void SetCurrentUsername(const wxString& username) { m_currentUsername = username; }
+    wxString GetCurrentUsername() const { return m_currentUsername; }
     
     // Pending downloads
     void AddPendingDownload(int32_t fileId, const MediaInfo& info);
@@ -132,6 +140,10 @@ private:
     wxPopupWindow* m_editHistoryPopup;
     wxButton* m_newMessageButton;  // "↓ New Messages" button
     
+    // Topic bar (HexChat-style)
+    wxPanel* m_topicBar;
+    wxStaticText* m_topicText;
+    
     // Media spans for clickable media
     std::vector<MediaSpan> m_mediaSpans;
     
@@ -160,6 +172,13 @@ private:
     int m_newMessageCount;  // Count of unread messages when scrolled up
     bool m_isLoading;  // Loading state
     int m_batchUpdateDepth;  // Nested batch update counter
+    
+    // Message grouping state (HexChat-style)
+    wxString m_lastDisplayedSender;
+    int64_t m_lastDisplayedTimestamp;
+    
+    // Current username for highlight detection
+    wxString m_currentUsername;
     
     // Context menu state
     long m_contextMenuPos;  // Text position where context menu was opened

@@ -1,11 +1,14 @@
 #include "MessageFormatter.h"
 #include "../telegram/Types.h"
 #include <wx/regex.h>
+#include <wx/datetime.h>
 
 MessageFormatter::MessageFormatter(wxRichTextCtrl* display)
     : m_display(display),
       m_lastMediaSpanStart(0),
-      m_lastMediaSpanEnd(0)
+      m_lastMediaSpanEnd(0),
+      m_lastTimestamp(0),
+      m_lastDateDay(0)
 {
     // HexChat-style colors
     m_timestampColor = wxColour(0x87, 0x87, 0x87);  // Gray timestamps
@@ -44,6 +47,106 @@ void MessageFormatter::SetUserColors(const wxColour colors[16])
     for (int i = 0; i < 16; i++) {
         m_userColors[i] = colors[i];
     }
+}
+
+void MessageFormatter::ResetGroupingState()
+{
+    m_lastSender.Clear();
+    m_lastTimestamp = 0;
+    m_lastDateDay = 0;
+}
+
+void MessageFormatter::SetLastMessage(const wxString& sender, int64_t timestamp)
+{
+    m_lastSender = sender;
+    m_lastTimestamp = timestamp;
+    if (timestamp > 0) {
+        time_t t = static_cast<time_t>(timestamp);
+        wxDateTime dt(t);
+        m_lastDateDay = dt.GetJulianDayNumber();
+    }
+}
+
+bool MessageFormatter::ShouldGroupWithPrevious(const wxString& sender, int64_t timestamp) const
+{
+    if (m_lastSender.IsEmpty() || sender.IsEmpty()) {
+        return false;
+    }
+    if (m_lastSender != sender) {
+        return false;
+    }
+    if (m_lastTimestamp == 0 || timestamp == 0) {
+        return false;
+    }
+    // Group if within time window
+    int64_t diff = timestamp - m_lastTimestamp;
+    return diff >= 0 && diff <= GROUP_TIME_WINDOW_SECONDS;
+}
+
+bool MessageFormatter::IsSameDay(int64_t time1, int64_t time2)
+{
+    if (time1 <= 0 || time2 <= 0) return false;
+    wxDateTime dt1(static_cast<time_t>(time1));
+    wxDateTime dt2(static_cast<time_t>(time2));
+    return dt1.GetJulianDayNumber() == dt2.GetJulianDayNumber();
+}
+
+wxString MessageFormatter::GetDateString(int64_t unixTime)
+{
+    if (unixTime <= 0) return wxString();
+    
+    time_t t = static_cast<time_t>(unixTime);
+    wxDateTime dt(t);
+    wxDateTime now = wxDateTime::Now();
+    wxDateTime today = now.GetDateOnly();
+    wxDateTime yesterday = today - wxDateSpan::Day();
+    wxDateTime msgDate = dt.GetDateOnly();
+    
+    if (msgDate == today) {
+        return "Today";
+    } else if (msgDate == yesterday) {
+        return "Yesterday";
+    } else if (msgDate > today - wxDateSpan::Week()) {
+        return dt.Format("%A");  // Day name (Monday, Tuesday, etc.)
+    } else if (dt.GetYear() == now.GetYear()) {
+        return dt.Format("%A, %B %d");  // "Monday, January 15"
+    } else {
+        return dt.Format("%A, %B %d, %Y");  // "Monday, January 15, 2024"
+    }
+}
+
+void MessageFormatter::AppendDateSeparator(const wxString& dateText)
+{
+    // HexChat-style date separator - simple and unobtrusive
+    m_display->BeginTextColour(wxColour(0x66, 0x66, 0x66));
+    m_display->WriteText("\t--- " + dateText + " ---\n");
+    m_display->EndTextColour();
+}
+
+void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime)
+{
+    wxString dateStr = GetDateString(unixTime);
+    if (!dateStr.IsEmpty()) {
+        AppendDateSeparator(dateStr);
+    }
+    
+    // Update last date day
+    if (unixTime > 0) {
+        time_t t = static_cast<time_t>(unixTime);
+        wxDateTime dt(t);
+        m_lastDateDay = dt.GetJulianDayNumber();
+    }
+}
+
+void MessageFormatter::AppendContinuationMessage(const wxString& message)
+{
+    // Continuation: just indented message, no timestamp or nick
+    // Use tab to align with message column (HexChat-style)
+    m_display->BeginTextColour(m_textColor);
+    m_display->WriteText("\t");  // Tab to message column
+    WriteTextWithLinks(message);
+    m_display->WriteText("\n");
+    m_display->EndTextColour();
 }
 
 wxColour MessageFormatter::GetUserColor(const wxString& username)
@@ -120,13 +223,21 @@ void MessageFormatter::WriteTextWithLinks(const wxString& text)
 void MessageFormatter::AppendMessage(const wxString& timestamp, const wxString& sender,
                                       const wxString& message)
 {
+    // Column 1: [HH:MM] <nick>
     m_display->BeginTextColour(m_timestampColor);
     m_display->WriteText("[" + timestamp + "] ");
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
+    
+    // Tab to column 2 for message text
+    m_display->WriteText("\t");
     
     m_display->BeginTextColour(m_textColor);
     WriteTextWithLinks(message);
@@ -141,7 +252,7 @@ void MessageFormatter::AppendServiceMessage(const wxString& timestamp, const wxS
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("* " + message + "\n");
+    m_display->WriteText("*\t" + message + "\n");
     m_display->EndTextColour();
 }
 
@@ -154,7 +265,16 @@ void MessageFormatter::AppendActionMessage(const wxString& timestamp, const wxSt
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_actionColor);
-    m_display->WriteText("* " + sender + " " + action + "\n");
+    m_display->WriteText("*");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_actionColor);
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(" " + action + "\n");
     m_display->EndTextColour();
 }
 
@@ -167,7 +287,13 @@ void MessageFormatter::AppendNoticeMessage(const wxString& timestamp, const wxSt
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_noticeColor);
-    m_display->WriteText("-" + source + "- " + message + "\n");
+    m_display->WriteText("-" + source + "-");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_noticeColor);
+    m_display->WriteText(message + "\n");
     m_display->EndTextColour();
 }
 
@@ -180,11 +306,19 @@ void MessageFormatter::AppendHighlightMessage(const wxString& timestamp, const w
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
     
+    m_display->WriteText("\t");
+    
     m_display->BeginTextColour(m_highlightColor);
+    m_display->BeginBold();
     WriteTextWithLinks(message);
+    m_display->EndBold();
     m_display->WriteText("\n");
     m_display->EndTextColour();
 }
@@ -196,7 +330,13 @@ void MessageFormatter::AppendJoinMessage(const wxString& timestamp, const wxStri
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("--> " + user + " has joined\n");
+    m_display->WriteText("-->");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_serviceColor);
+    m_display->WriteText(user + " has joined\n");
     m_display->EndTextColour();
 }
 
@@ -207,7 +347,13 @@ void MessageFormatter::AppendLeaveMessage(const wxString& timestamp, const wxStr
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("<-- " + user + " has left\n");
+    m_display->WriteText("<--");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_serviceColor);
+    m_display->WriteText(user + " has left\n");
     m_display->EndTextColour();
 }
 
@@ -219,7 +365,13 @@ void MessageFormatter::AppendKickMessage(const wxString& timestamp, const wxStri
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_serviceColor);
-    wxString msg = "<-- " + user + " was kicked by " + by;
+    m_display->WriteText("<--");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_serviceColor);
+    wxString msg = user + " was kicked by " + by;
     if (!reason.IsEmpty()) {
         msg += " (" + reason + ")";
     }
@@ -235,7 +387,13 @@ void MessageFormatter::AppendModeMessage(const wxString& timestamp, const wxStri
     m_display->EndTextColour();
     
     m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("* " + user + " sets mode: " + mode + "\n");
+    m_display->WriteText("*");
+    m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
+    
+    m_display->BeginTextColour(m_serviceColor);
+    m_display->WriteText(user + " sets mode: " + mode + "\n");
     m_display->EndTextColour();
 }
 
@@ -247,8 +405,14 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
     
     m_lastMediaSpanStart = m_display->GetLastPosition();
     
@@ -312,13 +476,31 @@ void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxStr
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
     
+    m_display->WriteText("\t");
+    
+    // Reply quote in italics with a vertical bar prefix
     m_display->BeginTextColour(m_replyColor);
-    m_display->WriteText("[> " + replyTo + "] ");
+    m_display->BeginItalic();
+    // Truncate long reply text
+    wxString truncatedReply = replyTo;
+    if (truncatedReply.length() > 50) {
+        truncatedReply = truncatedReply.Left(47) + "...";
+    }
+    m_display->WriteText("│ " + truncatedReply);
+    m_display->EndItalic();
     m_display->EndTextColour();
     
+    m_display->WriteText("\n");
+    
+    // The actual reply message on next line with tab indent
+    m_display->WriteText("\t");
     m_display->BeginTextColour(m_textColor);
     WriteTextWithLinks(message);
     m_display->WriteText("\n");
@@ -333,13 +515,29 @@ void MessageFormatter::AppendForwardMessage(const wxString& timestamp, const wxS
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
     
+    m_display->WriteText("\t");
+    
+    // Forward indicator with arrow
     m_display->BeginTextColour(m_forwardColor);
-    m_display->WriteText("[Fwd: " + forwardFrom + "] ");
+    m_display->BeginItalic();
+    m_display->WriteText("↪ Forwarded from ");
+    m_display->BeginBold();
+    m_display->WriteText(forwardFrom);
+    m_display->EndBold();
+    m_display->EndItalic();
     m_display->EndTextColour();
     
+    m_display->WriteText("\n");
+    
+    // The forwarded content on next line with tab indent
+    m_display->WriteText("\t");
     m_display->BeginTextColour(m_textColor);
     WriteTextWithLinks(message);
     m_display->WriteText("\n");
@@ -376,30 +574,31 @@ void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxSt
     m_display->EndTextColour();
     
     m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<" + sender + "> ");
+    m_display->WriteText("<");
+    m_display->BeginBold();
+    m_display->WriteText(sender);
+    m_display->EndBold();
+    m_display->WriteText(">");
     m_display->EndTextColour();
+    
+    m_display->WriteText("\t");
     
     m_display->BeginTextColour(m_textColor);
     WriteTextWithLinks(message);
-    m_display->WriteText(" ");
     m_display->EndTextColour();
     
-    // Track position of [edited] text for hover popup
-    long spanStart = m_display->GetLastPosition();
-    
+    // Simple (edited) marker - no span tracking needed since we don't have original text
     m_display->BeginTextColour(m_editedColor);
-    m_display->BeginUnderline();
-    m_display->WriteText("[edited]");
-    m_display->EndUnderline();
+    m_display->BeginItalic();
+    m_display->WriteText(" (edited)");
+    m_display->EndItalic();
     m_display->EndTextColour();
-    
-    long spanEnd = m_display->GetLastPosition();
     
     m_display->WriteText("\n");
     
-    // Return span positions if requested
-    if (editSpanStart) *editSpanStart = spanStart;
-    if (editSpanEnd) *editSpanEnd = spanEnd;
+    // No span tracking - TDLib doesn't provide original message text
+    if (editSpanStart) *editSpanStart = 0;
+    if (editSpanEnd) *editSpanEnd = 0;
 }
 
 void MessageFormatter::DisplayMessage(const MessageInfo& msg, const wxString& timestamp)

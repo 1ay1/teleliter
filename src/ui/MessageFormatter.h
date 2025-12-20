@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/richtext/richtextctrl.h>
 #include <functional>
+#include <ctime>
 #include "MediaTypes.h"
 
 // Forward declarations
@@ -65,6 +66,26 @@ public:
     // HexChat-style unread marker line
     void AppendUnreadMarker();
     
+    // Date separator (HexChat style: "─── Today ───", "─── Monday, Jan 15 ───")
+    void AppendDateSeparator(const wxString& dateText);
+    void AppendDateSeparatorForTime(int64_t unixTime);
+    
+    // Continuation message (same sender, no nick/timestamp shown, just indented)
+    void AppendContinuationMessage(const wxString& message);
+    
+    // Check if we should group with previous message (same sender within time window)
+    bool ShouldGroupWithPrevious(const wxString& sender, int64_t timestamp) const;
+    
+    // Update last sender/timestamp for grouping decisions
+    void SetLastMessage(const wxString& sender, int64_t timestamp);
+    
+    // Reset grouping state (e.g., when clearing messages or changing date)
+    void ResetGroupingState();
+    
+    // Get date string for a timestamp (for date separator logic)
+    static wxString GetDateString(int64_t unixTime);
+    static bool IsSameDay(int64_t time1, int64_t time2);
+    
     // Display a MessageInfo from TDLib
     void DisplayMessage(const MessageInfo& msg, const wxString& timestamp);
     
@@ -101,6 +122,12 @@ private:
     
     // Callback for link spans
     LinkSpanCallback m_linkSpanCallback;
+    
+    // Message grouping state (HexChat-style)
+    wxString m_lastSender;
+    int64_t m_lastTimestamp;
+    int64_t m_lastDateDay;  // Day number for date separator logic
+    static const int GROUP_TIME_WINDOW_SECONDS = 300;  // 5 minutes
 };
 
 #endif // MESSAGEFORMATTER_H

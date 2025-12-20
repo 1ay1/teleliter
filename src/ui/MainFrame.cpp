@@ -909,6 +909,10 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
         if (m_chatListWidget->IsTeleliterSelected()) {
             m_currentChatId = 0;
             m_chatInfoBar->SetValue("Teleliter");
+            // Clear topic bar when going to welcome screen
+            if (m_chatViewWidget) {
+                m_chatViewWidget->ClearTopicText();
+            }
             // Use sizer Show/Hide to properly manage layout
             wxSizer* sizer = m_chatPanel->GetSizer();
             if (sizer) {
@@ -992,11 +996,36 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                 DBGLOG("Test chat selected, loading dummy data");
                 // Load dummy data for testing
                 m_chatViewWidget->ClearMessages();
+                m_chatViewWidget->SetTopicText("Test Chat", "Demo mode • Testing features");
                 PopulateDummyData();
             } else if (m_telegramClient) {
                 DBGLOG("Loading messages from TDLib for chatId=" << chatId);
                 // Clear the view and load messages (OpenChatAndLoadMessages handles opening first)
                 m_chatViewWidget->ClearMessages();
+                
+                // Set topic bar with chat info (HexChat-style)
+                bool chatFound = false;
+                ChatInfo chatInfo = m_telegramClient->GetChat(chatId, &chatFound);
+                if (chatFound) {
+                    wxString topicInfo;
+                    if (chatInfo.isChannel) {
+                        topicInfo = "Channel";
+                        if (chatInfo.memberCount > 0) {
+                            topicInfo += wxString::Format(" • %d subscribers", chatInfo.memberCount);
+                        }
+                    } else if (chatInfo.isSupergroup || chatInfo.isGroup) {
+                        topicInfo = chatInfo.isSupergroup ? "Supergroup" : "Group";
+                        if (chatInfo.memberCount > 0) {
+                            topicInfo += wxString::Format(" • %d members", chatInfo.memberCount);
+                        }
+                    } else if (chatInfo.isBot) {
+                        topicInfo = "Bot";
+                    } else if (chatInfo.isPrivate) {
+                        topicInfo = "Private chat";
+                    }
+                    m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+                }
+                
                 m_telegramClient->OpenChatAndLoadMessages(chatId);
                 m_telegramClient->MarkChatAsRead(chatId);
             } else {
@@ -1116,6 +1145,11 @@ void MainFrame::OnLoginSuccess(const wxString& userName)
     // Update InputBoxWidget with current user
     if (m_inputBoxWidget) {
         m_inputBoxWidget->SetCurrentUser(userName);
+    }
+    
+    // Update ChatViewWidget with current user for mention/highlight detection
+    if (m_chatViewWidget) {
+        m_chatViewWidget->SetCurrentUsername(userName);
     }
     
     // Update status bar
