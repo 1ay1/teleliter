@@ -671,54 +671,36 @@ void MainFrame::PopulateDummyData()
 
 void MainFrame::OnFilesDropped(const wxArrayString& files)
 {
-    wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M");
+    // Must be logged in and have a chat selected to upload files
+    if (!m_isLoggedIn || !m_telegramClient) {
+        if (m_statusBar) {
+            ShowStatusError("Please log in first to send files");
+        }
+        return;
+    }
     
-    MessageFormatter* formatter = m_chatViewWidget ? m_chatViewWidget->GetMessageFormatter() : nullptr;
+    if (m_currentChatId == 0) {
+        ShowStatusError("Please select a chat first to send files");
+        return;
+    }
     
     for (const auto& file : files) {
         wxFileName fn(file);
         wxString filename = fn.GetFullName();
         
-        FileMediaType type = GetMediaTypeFromExtension(file);
-        
-        MediaInfo media;
-        media.localPath = file;
-        media.fileName = filename;
-        
-        switch (type) {
-            case FileMediaType::Image:
-                media.type = MediaType::Photo;
-                break;
-            case FileMediaType::Video:
-                media.type = MediaType::Video;
-                break;
-            case FileMediaType::Audio:
-                media.type = MediaType::Voice;
-                break;
-            default:
-                media.type = MediaType::File;
-                break;
-        }
-        
-        // Start upload with transfer manager
+        // Start upload with transfer manager for progress tracking
         wxFile wxf(file);
         int64_t fileSize = wxf.IsOpened() ? wxf.Length() : 0;
         wxf.Close();
         int transferId = m_transferManager.StartUpload(file, fileSize);
         
-        // TODO: Actually upload via TDLib
-        // For now, simulate progress and complete
-        if (formatter) {
-            formatter->AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
-                              media, "");
-            if (m_chatViewWidget) {
-                m_chatViewWidget->AddMediaSpan(formatter->GetLastMediaSpanStart(), 
-                    formatter->GetLastMediaSpanEnd(), media);
-            }
-        }
+        // Actually send the file via TDLib
+        // TelegramClient::SendFile automatically detects media type based on extension
+        // and sends as photo, video, audio, or document accordingly
+        m_telegramClient->SendFile(m_currentChatId, file, "");
         
-        // Simulate completion (will be replaced by TDLib callbacks)
+        // Mark transfer as complete (actual progress tracking would require
+        // hooking into TDLib's updateFile events for uploads)
         m_transferManager.CompleteTransfer(transferId, file);
     }
     
@@ -1596,11 +1578,29 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
         return;
     }
     
-    // For now, just add a service message noting the edit
-    // A more sophisticated implementation would find and update the original message
-    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+    // Don't show edit notifications for media messages (photos, videos, etc.)
+    // These show as "[Photo]", "[Video]", etc. and edits are typically just caption changes
+    // which aren't important enough to announce
+    if (newText.StartsWith("[Photo]") || newText.StartsWith("[Video]") ||
+        newText.StartsWith("[File]") || newText.StartsWith("[Voice") ||
+        newText.StartsWith("[Sticker]") || newText.StartsWith("[GIF]") ||
+        newText.StartsWith("[Audio]") || newText.StartsWith("[Contact]") ||
+        newText.StartsWith("[Location]") || newText.StartsWith("[Poll]") ||
+        newText.StartsWith("[Game]") || newText.StartsWith("[Invoice]")) {
+        // Silently ignore media message edits (usually just caption changes)
+        return;
+    }
+    
+    // Only show edit notifications for actual text message changes
+    // Don't show the raw message ID - just indicate an edit happened
+    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter() && !newText.IsEmpty()) {
+        // Truncate long messages for the notification
+        wxString displayText = newText;
+        if (displayText.Length() > 100) {
+            displayText = displayText.Left(100) + "...";
+        }
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"),
-                            wxString::Format("Message %lld was edited: %s", messageId, newText));
+                            wxString::Format("A message was edited: %s", displayText));
         m_chatViewWidget->ScrollToBottomIfAtBottom();
     }
 }
