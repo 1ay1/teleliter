@@ -701,6 +701,12 @@ void MediaPopup::SetImage(const wxImage& image)
         return;
     }
     
+    // Validate dimensions to prevent pixman errors
+    if (image.GetWidth() <= 0 || image.GetHeight() <= 0) {
+        m_hasImage = false;
+        return;
+    }
+    
     // Stop all playback when setting a static image
     StopAllPlayback();
     
@@ -721,7 +727,17 @@ void MediaPopup::SetImage(const wxImage& image)
         imgHeight = (int)(imgHeight * scale);
     }
     
+    // Ensure valid dimensions after scaling
+    if (imgWidth <= 0 || imgHeight <= 0) {
+        m_hasImage = false;
+        return;
+    }
+    
     wxImage scaled = image.Scale(imgWidth, imgHeight, wxIMAGE_QUALITY_HIGH);
+    if (!scaled.IsOk()) {
+        m_hasImage = false;
+        return;
+    }
     m_bitmap = wxBitmap(scaled);
     m_hasImage = true;
     

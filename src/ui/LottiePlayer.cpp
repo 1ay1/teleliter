@@ -288,6 +288,12 @@ wxBitmap LottiePlayer::RenderFrame(size_t frameNum, int width, int height)
         return wxNullBitmap;
     }
     
+    // Validate dimensions to prevent pixman errors
+    if (width <= 0 || height <= 0) {
+        std::cerr << "[LottiePlayer] Invalid render dimensions: " << width << "x" << height << std::endl;
+        return wxNullBitmap;
+    }
+    
     if (frameNum >= m_totalFrames) {
         frameNum = m_totalFrames - 1;
     }
@@ -304,6 +310,10 @@ wxBitmap LottiePlayer::RenderFrame(size_t frameNum, int width, int height)
     
     // Convert ARGB to wxBitmap with alpha
     wxImage image(width, height);
+    if (!image.IsOk()) {
+        std::cerr << "[LottiePlayer] Failed to create wxImage " << width << "x" << height << std::endl;
+        return wxNullBitmap;
+    }
     image.InitAlpha();
     
     unsigned char* rgbData = image.GetData();

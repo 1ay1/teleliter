@@ -344,11 +344,21 @@ wxBitmap WebmPlayer::ConvertFrameToBitmap(vpx_image* img)
     int w = img->d_w;
     int h = img->d_h;
     
+    // Validate dimensions to prevent pixman errors
+    if (w <= 0 || h <= 0) {
+        std::cerr << "[WebmPlayer] Invalid image dimensions: " << w << "x" << h << std::endl;
+        return wxNullBitmap;
+    }
+    
     // Determine output size
     int outW = (m_renderWidth > 0) ? m_renderWidth : w;
     int outH = (m_renderHeight > 0) ? m_renderHeight : h;
     
     wxImage wxImg(w, h);
+    if (!wxImg.IsOk()) {
+        std::cerr << "[WebmPlayer] Failed to create wxImage " << w << "x" << h << std::endl;
+        return wxNullBitmap;
+    }
     unsigned char* rgbData = wxImg.GetData();
     
     // Convert YUV (I420) to RGB
@@ -387,7 +397,13 @@ wxBitmap WebmPlayer::ConvertFrameToBitmap(vpx_image* img)
     
     // Scale if needed
     if (outW != w || outH != h) {
-        wxImg = wxImg.Scale(outW, outH, wxIMAGE_QUALITY_BILINEAR);
+        if (outW > 0 && outH > 0) {
+            wxImg = wxImg.Scale(outW, outH, wxIMAGE_QUALITY_BILINEAR);
+        }
+    }
+    
+    if (!wxImg.IsOk()) {
+        return wxNullBitmap;
     }
     
     return wxBitmap(wxImg);

@@ -206,8 +206,7 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
     }
     
     // Build final label: "◐ ⬇ file.jpg [██████░░░░] 45% 1.2MB/s ~5s"
-    wxString label = wxString::Format("%s %s %s [%s] %d%%",
-        spinner, dirSymbol, fileName, progressBar, percent);
+    wxString label = spinner + " " + dirSymbol + " " + fileName + " [" + progressBar + "] " + wxString::Format("%d%%", percent);
     
     if (!speedStr.IsEmpty()) {
         label += " " + speedStr;
@@ -235,10 +234,10 @@ void StatusBarManager::OnTransferComplete(const TransferInfo& info)
     m_lastTransferredBytes = 0;
     
     // Direction symbol
-    wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
+    wxString dirSymbol = info.direction == TransferDirection::Upload ? "+" : "v";
     
     // Show completion with checkmark
-    wxString label = wxString::Format("✓ %s %s [██████████] Done!", dirSymbol, info.fileName);
+    wxString label = "[OK] " + dirSymbol + " " + info.fileName + " [==========] Done!";
     m_parent->SetStatusText(label, 0);
 }
 
@@ -251,10 +250,10 @@ void StatusBarManager::OnTransferError(const TransferInfo& info)
     m_currentSpeed = 0.0;
     
     // Direction symbol
-    wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
+    wxString dirSymbol = info.direction == TransferDirection::Upload ? "+" : "v";
     
     // Show error with X mark
-    wxString label = wxString::Format("✗ %s %s Failed: %s", dirSymbol, info.fileName, info.error);
+    wxString label = "[FAIL] " + dirSymbol + " " + info.fileName + " Failed: " + info.error;
     m_parent->SetStatusText(label, 0);
 }
 
