@@ -78,9 +78,7 @@ private:
     void ProcessMeCommand(const wxString& args);
     void ProcessClearCommand();
     void ProcessQueryCommand(const wxString& args);
-    void ProcessNickCommand();
-    void ProcessJoinCommand(const wxString& args);
-    void ProcessPartCommand();
+    void ProcessLeaveCommand();
     void ProcessTopicCommand(const wxString& args);
     void ProcessWhoisCommand(const wxString& args);
     void ProcessAwayCommand(const wxString& args);

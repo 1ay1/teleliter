@@ -7,11 +7,38 @@
 #include <ctime>
 #include <set>
 #include <algorithm>
+#include <wx/filename.h>
 
-// Debug logging - disabled for release
-#define TDLOG(msg) do {} while(0)
-// Enable debug logging for troubleshooting:
-// #define TDLOG(msg) std::cerr << "[TDLib] " << msg << std::endl
+// Helper to check if a file is actually available locally
+// TDLib may report is_downloading_completed_ = true but the file might have been deleted
+static bool IsFileAvailableLocally(const td_api::file* file) {
+    if (!file || !file->local_) return false;
+    if (!file->local_->is_downloading_completed_) return false;
+    
+    const std::string& path = file->local_->path_;
+    if (path.empty()) return false;
+    
+    // Actually check if the file exists on disk
+    return wxFileName::FileExists(wxString::FromUTF8(path));
+}
+
+// Helper to check if we should trigger a download
+static bool ShouldDownloadFile(const td_api::file* file) {
+    if (!file || !file->local_) return true;  // No file info, need download
+    if (file->local_->is_downloading_active_) return false;  // Already downloading
+    if (!file->local_->is_downloading_completed_) return true;  // Not complete
+    
+    // File marked as complete - verify it actually exists
+    const std::string& path = file->local_->path_;
+    if (path.empty()) return true;
+    
+    return !wxFileName::FileExists(wxString::FromUTF8(path));
+}
+
+// Debug logging - disabled by default for release
+#define TDLOG(...) do {} while(0)
+// Enable debug logging for download diagnostics (uncomment below):
+// #define TDLOG(...) do { fprintf(stderr, "[TDLib] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 
 wxDEFINE_EVENT(wxEVT_TDLIB_UPDATE, wxThreadEvent);
 
@@ -25,17 +52,28 @@ TelegramClient::TelegramClient()
       m_authState(AuthState::WaitTdlibParameters),
       m_currentQueryId(0),
       m_mainFrame(nullptr),
-      m_welcomeChat(nullptr)
+      m_welcomeChat(nullptr),
+      m_downloadTimeoutTimer(this)
 {
     s_instance = this;
     // Bind to wxTheApp for proper main thread event handling
     if (wxTheApp) {
         wxTheApp->Bind(wxEVT_TDLIB_UPDATE, &TelegramClient::OnTdlibUpdate, this);
     }
+    
+    // Bind download timeout timer
+    Bind(wxEVT_TIMER, &TelegramClient::OnDownloadTimeoutTimer, this, m_downloadTimeoutTimer.GetId());
+    
+    // Start download timeout checker (every 10 seconds)
+    m_downloadTimeoutTimer.Start(10000);
 }
 
 TelegramClient::~TelegramClient()
 {
+    // Stop download timeout timer
+    m_downloadTimeoutTimer.Stop();
+    Unbind(wxEVT_TIMER, &TelegramClient::OnDownloadTimeoutTimer, this, m_downloadTimeoutTimer.GetId());
+    
     Stop();
     if (wxTheApp) {
         wxTheApp->Unbind(wxEVT_TDLIB_UPDATE, &TelegramClient::OnTdlibUpdate, this);
@@ -59,15 +97,16 @@ void TelegramClient::Start()
     m_clientManager = std::make_unique<td::ClientManager>();
     m_clientId = m_clientManager->create_client_id();
     
+    // Set running flag BEFORE first Send() call
+    m_running = true;
+    
     // Send initial request to start the client
     Send(td_api::make_object<td_api::getOption>("version"), [](td_api::object_ptr<td_api::Object> result) {
         if (result->get_id() == td_api::optionValueString::ID) {
             auto ver = td_api::move_object_as<td_api::optionValueString>(result);
-            TDLOG("TDLib version: " << ver->value_);
+            TDLOG("TDLib version: %s", ver->value_.c_str());
         }
     });
-    
-    m_running = true;
     TDLOG("Client started, launching receive thread");
     
     // Start receive thread
@@ -97,9 +136,13 @@ void TelegramClient::ReceiveLoop()
 {
     TDLOG("Receive loop started");
     while (m_running) {
+        if (!m_clientManager) {
+            TDLOG("Client manager is null, exiting receive loop");
+            break;
+        }
         auto response = m_clientManager->receive(1.0);  // 1 second timeout
         if (response.object) {
-            TDLOG("Received response, id=" << response.object->get_id());
+            TDLOG("Received response, id=%d", response.object->get_id());
             ProcessResponse(std::move(response));
         }
     }
@@ -109,6 +152,11 @@ void TelegramClient::ReceiveLoop()
 void TelegramClient::Send(td_api::object_ptr<td_api::Function> f,
                           std::function<void(td_api::object_ptr<td_api::Object>)> handler)
 {
+    if (!m_clientManager || !m_running) {
+        TDLOG("Cannot send: client manager not ready or not running");
+        return;
+    }
+    
     auto queryId = ++m_currentQueryId;
     
     if (handler) {
@@ -177,6 +225,8 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
             OnChatPosition(u.chat_id_, u.position_);
         } else if constexpr (std::is_same_v<T, td_api::updateUser>) {
             OnUserUpdate(u.user_);
+        } else if constexpr (std::is_same_v<T, td_api::updateUserStatus>) {
+            OnUserStatusUpdate(u.user_id_, u.status_);
         } else if constexpr (std::is_same_v<T, td_api::updateFile>) {
             OnFileUpdate(u.file_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatNotificationSettings>) {
@@ -258,7 +308,7 @@ void TelegramClient::HandleAuthWaitTdlibParameters()
     Send(std::move(request), [this](td_api::object_ptr<td_api::Object> result) {
         if (result->get_id() == td_api::error::ID) {
             auto error = td_api::move_object_as<td_api::error>(result);
-            TDLOG("setTdlibParameters error: " << error->message_);
+            TDLOG("setTdlibParameters error: %s", error->message_.c_str());
             PostToMainThread([this, msg = error->message_]() {
                 if (m_welcomeChat) {
                     m_welcomeChat->OnLoginError(wxString::FromUTF8(msg));
@@ -305,6 +355,10 @@ void TelegramClient::HandleAuthWaitPassword()
 
 void TelegramClient::HandleAuthReady()
 {
+    // Configure auto-download settings for reliable media loading
+    // This makes TDLib automatically download photos, videos, and other media
+    ConfigureAutoDownload();
+    
     // Get current user info
     Send(td_api::make_object<td_api::getMe>(), [this](td_api::object_ptr<td_api::Object> result) {
         if (result->get_id() == td_api::user::ID) {
@@ -343,6 +397,66 @@ void TelegramClient::HandleAuthReady()
             LoadChats();
         }
     });
+}
+
+void TelegramClient::ConfigureAutoDownload()
+{
+    // Create auto-download settings that enable downloading for all network types
+    // This mimics how the real Telegram app works - media loads automatically
+    
+    // Settings for WiFi (generous limits)
+    auto wifiSettings = td_api::make_object<td_api::autoDownloadSettings>();
+    wifiSettings->is_auto_download_enabled_ = true;
+    wifiSettings->max_photo_file_size_ = 10 * 1024 * 1024;      // 10 MB photos
+    wifiSettings->max_video_file_size_ = 100 * 1024 * 1024;     // 100 MB videos
+    wifiSettings->max_other_file_size_ = 10 * 1024 * 1024;      // 10 MB other files
+    wifiSettings->video_upload_bitrate_ = 0;                     // No limit
+    wifiSettings->preload_large_videos_ = true;
+    wifiSettings->preload_next_audio_ = true;
+    wifiSettings->preload_stories_ = true;
+    wifiSettings->use_less_data_for_calls_ = false;
+    
+    // Settings for mobile data (same as WiFi for simplicity)
+    auto mobileSettings = td_api::make_object<td_api::autoDownloadSettings>();
+    mobileSettings->is_auto_download_enabled_ = true;
+    mobileSettings->max_photo_file_size_ = 10 * 1024 * 1024;
+    mobileSettings->max_video_file_size_ = 50 * 1024 * 1024;    // 50 MB on mobile
+    mobileSettings->max_other_file_size_ = 5 * 1024 * 1024;
+    mobileSettings->video_upload_bitrate_ = 0;
+    mobileSettings->preload_large_videos_ = true;
+    mobileSettings->preload_next_audio_ = true;
+    mobileSettings->preload_stories_ = true;
+    mobileSettings->use_less_data_for_calls_ = false;
+    
+    // Settings for roaming (more conservative)
+    auto roamingSettings = td_api::make_object<td_api::autoDownloadSettings>();
+    roamingSettings->is_auto_download_enabled_ = true;
+    roamingSettings->max_photo_file_size_ = 5 * 1024 * 1024;
+    roamingSettings->max_video_file_size_ = 10 * 1024 * 1024;
+    roamingSettings->max_other_file_size_ = 1 * 1024 * 1024;
+    roamingSettings->video_upload_bitrate_ = 0;
+    roamingSettings->preload_large_videos_ = false;
+    roamingSettings->preload_next_audio_ = true;
+    roamingSettings->preload_stories_ = false;
+    roamingSettings->use_less_data_for_calls_ = true;
+    
+    // Apply auto-download settings
+    auto request = td_api::make_object<td_api::setAutoDownloadSettings>();
+    request->settings_ = std::move(wifiSettings);
+    request->type_ = td_api::make_object<td_api::networkTypeWiFi>();
+    Send(std::move(request), nullptr);
+    
+    auto request2 = td_api::make_object<td_api::setAutoDownloadSettings>();
+    request2->settings_ = std::move(mobileSettings);
+    request2->type_ = td_api::make_object<td_api::networkTypeMobile>();
+    Send(std::move(request2), nullptr);
+    
+    auto request3 = td_api::make_object<td_api::setAutoDownloadSettings>();
+    request3->settings_ = std::move(roamingSettings);
+    request3->type_ = td_api::make_object<td_api::networkTypeMobileRoaming>();
+    Send(std::move(request3), nullptr);
+    
+    TDLOG("Configured auto-download settings for all network types");
 }
 
 void TelegramClient::HandleAuthClosed()
@@ -471,7 +585,7 @@ ChatInfo TelegramClient::GetChat(int64_t chatId, bool* found) const
 
 void TelegramClient::OpenChat(int64_t chatId)
 {
-    TDLOG("OpenChat called for chatId=" << chatId);
+    TDLOG("OpenChat called for chatId=%lld", (long long)chatId);
     auto request = td_api::make_object<td_api::openChat>();
     request->chat_id_ = chatId;
     Send(std::move(request), nullptr);
@@ -479,7 +593,7 @@ void TelegramClient::OpenChat(int64_t chatId)
 
 void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
 {
-    TDLOG("OpenChatAndLoadMessages called for chatId=" << chatId << " limit=" << limit);
+    TDLOG("OpenChatAndLoadMessages called for chatId=%lld limit=%d", (long long)chatId, limit);
     
     // Step 1: Open the chat - this tells TDLib we're viewing this chat
     // and triggers background sync of messages from server
@@ -487,7 +601,7 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
     openRequest->chat_id_ = chatId;
     
     Send(std::move(openRequest), [this, chatId, limit](td_api::object_ptr<td_api::Object> openResult) {
-        TDLOG("openChat completed for chatId=" << chatId);
+        TDLOG("openChat completed for chatId=%lld", (long long)chatId);
         
         // Step 2: Get chat info to find the last message ID
         // This helps us know where to start fetching history
@@ -498,7 +612,7 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
             if (chatResult->get_id() == td_api::chat::ID) {
                 auto chat = td_api::move_object_as<td_api::chat>(chatResult);
                 if (chat->last_message_) {
-                    TDLOG("Chat has last_message_id=" << chat->last_message_->id_);
+                    TDLOG("Chat has last_message_id=%lld", (long long)chat->last_message_->id_);
                 }
             }
             
@@ -513,12 +627,12 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
             historyRequest->only_local_ = false;
             
             Send(std::move(historyRequest), [this, chatId, limit](td_api::object_ptr<td_api::Object> result) {
-                TDLOG("getChatHistory response for chatId=" << chatId);
+                TDLOG("getChatHistory response for chatId=%lld", (long long)chatId);
                 
                 if (result->get_id() == td_api::messages::ID) {
                     auto messages = td_api::move_object_as<td_api::messages>(result);
                     size_t count = messages->messages_.size();
-                    TDLOG("Got " << messages->total_count_ << " total, " << count << " in batch");
+                    TDLOG("Got %d total, %zu in batch", messages->total_count_, count);
                     
                     std::vector<MessageInfo> msgList;
                     for (auto& msg : messages->messages_) {
@@ -548,14 +662,14 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
                             oldestMsgId = messages->messages_.back()->id_;
                         }
                         
-                        TDLOG("Got partial history, will try to load more from message " << oldestMsgId);
+                        TDLOG("Got partial history, will try to load more from message %lld", (long long)oldestMsgId);
                         
                         // Schedule another fetch for older messages
                         LoadMoreMessages(chatId, oldestMsgId, limit);
                     }
                 } else if (result->get_id() == td_api::error::ID) {
                     auto error = td_api::move_object_as<td_api::error>(result);
-                    TDLOG("getChatHistory ERROR: " << error->code_ << " - " << error->message_);
+                    TDLOG("getChatHistory ERROR: %d - %s", error->code_, error->message_.c_str());
                 }
             });
         });
@@ -564,7 +678,7 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
 
 void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit)
 {
-    TDLOG("LoadMoreMessages for chatId=" << chatId << " from=" << fromMessageId);
+    TDLOG("LoadMoreMessages for chatId=%lld from=%lld", (long long)chatId, (long long)fromMessageId);
     
     auto request = td_api::make_object<td_api::getChatHistory>();
     request->chat_id_ = chatId;
@@ -578,11 +692,11 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int
             auto messages = td_api::move_object_as<td_api::messages>(result);
             
             if (messages->messages_.empty()) {
-                TDLOG("No more messages to load for chatId=" << chatId);
+                TDLOG("No more messages to load for chatId=%lld", (long long)chatId);
                 return;
             }
             
-            TDLOG("LoadMoreMessages got " << messages->messages_.size() << " additional messages");
+            TDLOG("LoadMoreMessages got %zu additional messages", messages->messages_.size());
             
             std::vector<MessageInfo> newMessages;
             for (auto& msg : messages->messages_) {
@@ -620,7 +734,7 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int
                 allMessages = existing;  // Copy for thread-safe access
             }
             
-            TDLOG("Total messages after LoadMore: " << allMessages.size());
+            TDLOG("Total messages after LoadMore: %zu", allMessages.size());
             
             // Notify UI to refresh with all messages
             PostToMainThread([this, chatId, allMessages]() {
@@ -640,7 +754,7 @@ void TelegramClient::LoadMessagesWithRetry(int64_t chatId, int limit, int retryC
 
 void TelegramClient::CloseChat(int64_t chatId)
 {
-    TDLOG("CloseChat called for chatId=" << chatId);
+    TDLOG("CloseChat called for chatId=%lld", (long long)chatId);
     auto request = td_api::make_object<td_api::closeChat>();
     request->chat_id_ = chatId;
     Send(std::move(request), nullptr);
@@ -648,7 +762,7 @@ void TelegramClient::CloseChat(int64_t chatId)
 
 void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int limit)
 {
-    TDLOG("LoadMessages called for chatId=" << chatId << " fromMessageId=" << fromMessageId << " limit=" << limit);
+    TDLOG("LoadMessages called for chatId=%lld fromMessageId=%lld limit=%d", (long long)chatId, (long long)fromMessageId, limit);
     
     // Request chat history from TDLib
     // from_message_id=0 means start from the newest message
@@ -661,22 +775,22 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int lim
     request->only_local_ = false;
     
     Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
-        TDLOG("LoadMessages response received for chatId=" << chatId << " result_id=" << result->get_id());
+        TDLOG("LoadMessages response received for chatId=%lld result_id=%d", (long long)chatId, result->get_id());
         
         if (result->get_id() == td_api::messages::ID) {
             auto messages = td_api::move_object_as<td_api::messages>(result);
             
-            TDLOG("Got " << messages->total_count_ << " total messages, " << messages->messages_.size() << " in this batch");
+            TDLOG("Got %d total messages, %zu in this batch", messages->total_count_, messages->messages_.size());
             
             std::vector<MessageInfo> msgList;
             for (auto& msg : messages->messages_) {
                 if (msg) {
                     msgList.push_back(ConvertMessage(msg.get()));
-                    TDLOG("  Message " << msg->id_ << ": " << msgList.back().text.ToStdString().substr(0, 50));
+                    TDLOG("  Message %lld: %.50s", (long long)msg->id_, msgList.back().text.ToStdString().c_str());
                 }
             }
             
-            TDLOG("Converted " << msgList.size() << " messages for chatId=" << chatId);
+            TDLOG("Converted %zu messages for chatId=%lld", msgList.size(), (long long)chatId);
             
             // Store messages (replace to avoid duplicates)
             {
@@ -685,7 +799,7 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int lim
             }
             
             PostToMainThread([this, chatId, msgList]() {
-                TDLOG("PostToMainThread: OnMessagesLoaded for chatId=" << chatId << " with " << msgList.size() << " messages");
+                TDLOG("PostToMainThread: OnMessagesLoaded for chatId=%lld with %zu messages", (long long)chatId, msgList.size());
                 if (m_mainFrame) {
                     m_mainFrame->OnMessagesLoaded(chatId, msgList);
                 } else {
@@ -694,7 +808,7 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int lim
             });
         } else if (result->get_id() == td_api::error::ID) {
             auto error = td_api::move_object_as<td_api::error>(result);
-            TDLOG("LoadMessages ERROR: " << error->code_ << " - " << error->message_);
+            TDLOG("LoadMessages ERROR: %d - %s", error->code_, error->message_.c_str());
         }
     });
 }
@@ -772,18 +886,226 @@ void TelegramClient::SendFile(int64_t chatId, const wxString& filePath, const wx
     });
 }
 
-void TelegramClient::DownloadFile(int32_t fileId, int priority)
+void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& fileName, int64_t fileSize)
 {
+    if (fileId == 0) {
+        TDLOG("DownloadFile: ignoring invalid fileId=0");
+        return;
+    }
+    
+    TDLOG("DownloadFile: requested fileId=%d priority=%d fileName=%s", fileId, priority, fileName.ToStdString().c_str());
+    
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it != m_activeDownloads.end()) {
+            // Already downloading or completed - don't start again
+            if (it->second.state == DownloadState::Downloading) {
+                TDLOG("DownloadFile: fileId=%d already downloading, skipping", fileId);
+                return;
+            }
+            if (it->second.state == DownloadState::Completed) {
+                TDLOG("DownloadFile: fileId=%d already completed, skipping", fileId);
+                return;
+            }
+            // If failed, allow retry
+            TDLOG("DownloadFile: fileId=%d was in state %d, allowing retry", fileId, static_cast<int>(it->second.state));
+        }
+        
+        // Track this download
+        DownloadInfo info(fileId, priority);
+        info.state = DownloadState::Pending;
+        info.totalSize = fileSize;
+        m_activeDownloads[fileId] = info;
+        TDLOG("DownloadFile: tracking fileId=%d, total active downloads=%zu", fileId, m_activeDownloads.size());
+    }
+    
+    // Notify UI that download is starting
+    wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
+    PostToMainThread([this, fileId, displayName, fileSize]() {
+        if (m_mainFrame) {
+            m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
+        }
+    });
+    
+    StartDownloadInternal(fileId, priority);
+}
+
+void TelegramClient::StartDownloadInternal(int32_t fileId, int priority)
+{
+    TDLOG("StartDownloadInternal: sending downloadFile request for fileId=%d priority=%d", fileId, priority);
+    
     auto request = td_api::make_object<td_api::downloadFile>();
     request->file_id_ = fileId;
     request->priority_ = priority;
     request->synchronous_ = false;
     
-    Send(std::move(request), nullptr);
+    // Add response handler to catch errors
+    Send(std::move(request), [this, fileId](td_api::object_ptr<td_api::Object> response) {
+        if (!response) {
+            OnDownloadError(fileId, "No response from TDLib");
+            return;
+        }
+        
+        if (response->get_id() == td_api::error::ID) {
+            auto& error = static_cast<td_api::error&>(*response);
+            wxString errorMsg = wxString::Format("Download error %d: %s", 
+                error.code_, wxString::FromUTF8(error.message_));
+            TDLOG("StartDownloadInternal: TDLib error for fileId=%d: %s", fileId, errorMsg.ToStdString().c_str());
+            OnDownloadError(fileId, errorMsg);
+        } else if (response->get_id() == td_api::file::ID) {
+            TDLOG("StartDownloadInternal: TDLib accepted download for fileId=%d", fileId);
+            // Download started successfully - the file object will be returned
+            auto& file = static_cast<td_api::file&>(*response);
+            {
+                std::lock_guard<std::mutex> lock(m_downloadsMutex);
+                auto it = m_activeDownloads.find(fileId);
+                if (it != m_activeDownloads.end()) {
+                    it->second.state = DownloadState::Downloading;
+                    it->second.lastProgressTime = wxGetUTCTime();
+                    if (file.size_ > 0) {
+                        it->second.totalSize = file.size_;
+                    } else if (file.expected_size_ > 0) {
+                        it->second.totalSize = file.expected_size_;
+                    }
+                }
+            }
+        }
+    });
+}
+
+void TelegramClient::RetryDownload(int32_t fileId)
+{
+    if (fileId == 0) return;
+    
+    int priority = 1;
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it == m_activeDownloads.end()) {
+            return;  // No such download to retry
+        }
+        
+        if (!it->second.CanRetry()) {
+            // Max retries exceeded - notify UI
+            PostToMainThread([this]() {
+                if (m_mainFrame) {
+                    m_mainFrame->SetStatusText(wxString::Format("Download failed after %d retries", 
+                        DownloadInfo::MAX_RETRIES), 0);
+                }
+            });
+            return;
+        }
+        
+        it->second.retryCount++;
+        it->second.state = DownloadState::Pending;
+        it->second.lastProgressTime = wxGetUTCTime();
+        priority = it->second.priority;
+        
+        TDLOG("Retrying download for file %d (attempt %d/%d)", 
+              fileId, it->second.retryCount, DownloadInfo::MAX_RETRIES);
+        
+        // Notify UI about retry
+        int retryCount = it->second.retryCount;
+        PostToMainThread([this, fileId, retryCount]() {
+            if (m_mainFrame) {
+                m_mainFrame->OnDownloadRetrying(fileId, retryCount);
+            }
+        });
+    }
+    
+    StartDownloadInternal(fileId, priority);
+}
+
+bool TelegramClient::IsDownloading(int32_t fileId) const
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+    auto it = m_activeDownloads.find(fileId);
+    if (it == m_activeDownloads.end()) return false;
+    return it->second.state == DownloadState::Pending || 
+           it->second.state == DownloadState::Downloading;
+}
+
+DownloadState TelegramClient::GetDownloadState(int32_t fileId) const
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+    auto it = m_activeDownloads.find(fileId);
+    if (it == m_activeDownloads.end()) return DownloadState::Pending;
+    return it->second.state;
+}
+
+void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
+{
+    TDLOG("Download error for file %d: %s", fileId, error.ToStdString().c_str());
+    
+    bool shouldRetry = false;
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it != m_activeDownloads.end()) {
+            it->second.state = DownloadState::Failed;
+            it->second.errorMessage = error;
+            shouldRetry = it->second.CanRetry();
+        }
+    }
+    
+    // Notify UI about failure
+    PostToMainThread([this, fileId, error]() {
+        if (m_mainFrame) {
+            m_mainFrame->OnDownloadFailed(fileId, error);
+        }
+    });
+    
+    if (shouldRetry) {
+        // Schedule retry after a brief delay
+        PostToMainThread([this, fileId]() {
+            wxMilliSleep(500);  // Brief delay before retry
+            RetryDownload(fileId);
+        });
+    }
+}
+
+void TelegramClient::CheckDownloadTimeouts()
+{
+    std::vector<int32_t> timedOutFiles;
+    
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        int activeCount = 0;
+        for (auto& pair : m_activeDownloads) {
+            if (pair.second.state == DownloadState::Downloading) {
+                activeCount++;
+                if (pair.second.IsTimedOut()) {
+                    timedOutFiles.push_back(pair.first);
+                }
+            }
+        }
+        if (activeCount > 0) {
+            TDLOG("CheckDownloadTimeouts: %d active downloads, %zu timed out", activeCount, timedOutFiles.size());
+        }
+    }
+    
+    for (int32_t fileId : timedOutFiles) {
+        TDLOG("Download timeout for file %d, retrying...", fileId);
+        OnDownloadError(fileId, "Download timed out - no progress");
+    }
+}
+
+void TelegramClient::OnDownloadTimeoutTimer(wxTimerEvent& event)
+{
+    CheckDownloadTimeouts();
 }
 
 void TelegramClient::CancelDownload(int32_t fileId)
 {
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it != m_activeDownloads.end()) {
+            it->second.state = DownloadState::Cancelled;
+        }
+    }
+    
     auto request = td_api::make_object<td_api::cancelDownloadFile>();
     request->file_id_ = fileId;
     request->only_if_pending_ = false;
@@ -811,6 +1133,152 @@ wxString TelegramClient::GetUserDisplayName(int64_t userId) const
         return user.GetDisplayName();
     }
     return wxString::Format("User %lld", userId);
+}
+
+void TelegramClient::LoadChatMembers(int64_t chatId, int limit)
+{
+    if (chatId == 0) return;
+    
+    bool found = false;
+    ChatInfo chat = GetChat(chatId, &found);
+    if (!found) {
+        TDLOG("LoadChatMembers: chat not found");
+        return;
+    }
+    
+    // For private chats, just return the two participants
+    if (chat.isPrivate || chat.isBot) {
+        std::vector<UserInfo> members;
+        
+        // Add current user
+        members.push_back(m_currentUser);
+        
+        // Add the other user
+        if (chat.userId != 0) {
+            bool userFound = false;
+            UserInfo otherUser = GetUser(chat.userId, &userFound);
+            if (userFound) {
+                members.push_back(otherUser);
+            }
+        }
+        
+        PostToMainThread([this, chatId, members]() {
+            if (m_mainFrame) {
+                m_mainFrame->OnMembersLoaded(chatId, members);
+            }
+        });
+        return;
+    }
+    
+    // For supergroups and channels
+    if (chat.isSupergroup || chat.isChannel) {
+        auto request = td_api::make_object<td_api::getSupergroupMembers>();
+        request->supergroup_id_ = chat.supergroupId;
+        request->filter_ = td_api::make_object<td_api::supergroupMembersFilterRecent>();
+        request->offset_ = 0;
+        request->limit_ = limit;
+        
+        Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+            if (!result) {
+                TDLOG("LoadChatMembers: null result for supergroup");
+                return;
+            }
+            
+            if (result->get_id() == td_api::error::ID) {
+                auto error = td_api::move_object_as<td_api::error>(result);
+                TDLOG("LoadChatMembers error: %s", error->message_.c_str());
+                return;
+            }
+            
+            if (result->get_id() != td_api::chatMembers::ID) {
+                TDLOG("LoadChatMembers: unexpected result type");
+                return;
+            }
+            
+            auto chatMembers = td_api::move_object_as<td_api::chatMembers>(result);
+            std::vector<UserInfo> members;
+            
+            for (auto& member : chatMembers->members_) {
+                if (!member) continue;
+                
+                // Get user ID from member
+                int64_t memberId = 0;
+                if (member->member_id_->get_id() == td_api::messageSenderUser::ID) {
+                    auto sender = static_cast<td_api::messageSenderUser*>(member->member_id_.get());
+                    memberId = sender->user_id_;
+                }
+                
+                if (memberId != 0) {
+                    bool userFound = false;
+                    UserInfo user = GetUser(memberId, &userFound);
+                    if (userFound) {
+                        members.push_back(user);
+                    }
+                }
+            }
+            
+            PostToMainThread([this, chatId, members]() {
+                if (m_mainFrame) {
+                    m_mainFrame->OnMembersLoaded(chatId, members);
+                }
+            });
+        });
+        return;
+    }
+    
+    // For basic groups
+    if (chat.isGroup && chat.basicGroupId != 0) {
+        auto request = td_api::make_object<td_api::getBasicGroupFullInfo>();
+        request->basic_group_id_ = chat.basicGroupId;
+        
+        Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+            if (!result) {
+                TDLOG("LoadChatMembers: null result for basic group");
+                return;
+            }
+            
+            if (result->get_id() == td_api::error::ID) {
+                auto error = td_api::move_object_as<td_api::error>(result);
+                TDLOG("LoadChatMembers error: %s", error->message_.c_str());
+                return;
+            }
+            
+            if (result->get_id() != td_api::basicGroupFullInfo::ID) {
+                TDLOG("LoadChatMembers: unexpected result type for basic group");
+                return;
+            }
+            
+            auto groupInfo = td_api::move_object_as<td_api::basicGroupFullInfo>(result);
+            std::vector<UserInfo> members;
+            
+            for (auto& member : groupInfo->members_) {
+                if (!member) continue;
+                
+                int64_t memberId = 0;
+                if (member->member_id_->get_id() == td_api::messageSenderUser::ID) {
+                    auto sender = static_cast<td_api::messageSenderUser*>(member->member_id_.get());
+                    memberId = sender->user_id_;
+                }
+                
+                if (memberId != 0) {
+                    bool userFound = false;
+                    UserInfo user = GetUser(memberId, &userFound);
+                    if (userFound) {
+                        members.push_back(user);
+                    }
+                }
+            }
+            
+            PostToMainThread([this, chatId, members]() {
+                if (m_mainFrame) {
+                    m_mainFrame->OnMembersLoaded(chatId, members);
+                }
+            });
+        });
+        return;
+    }
+    
+    TDLOG("LoadChatMembers: unknown chat type");
 }
 
 void TelegramClient::MarkChatAsRead(int64_t chatId)
@@ -996,16 +1464,106 @@ void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user>& user)
     }
 }
 
+void TelegramClient::OnUserStatusUpdate(int64_t userId, td_api::object_ptr<td_api::UserStatus>& status)
+{
+    // Guard against invalid inputs
+    if (!status || userId == 0) return;
+    
+    bool isOnline = false;
+    int64_t lastSeenTime = 0;
+    
+    try {
+        td_api::downcast_call(*status, [&isOnline, &lastSeenTime](auto& s) {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, td_api::userStatusOnline>) {
+                isOnline = true;
+            } else if constexpr (std::is_same_v<T, td_api::userStatusOffline>) {
+                isOnline = false;
+                lastSeenTime = s.was_online_;
+            } else if constexpr (std::is_same_v<T, td_api::userStatusRecently>) {
+                isOnline = false;
+                lastSeenTime = 0;  // Will show "last seen recently"
+            } else if constexpr (std::is_same_v<T, td_api::userStatusLastWeek>) {
+                isOnline = false;
+                // Approximate to 7 days ago
+                lastSeenTime = static_cast<int64_t>(std::time(nullptr)) - (7 * 24 * 60 * 60);
+            } else if constexpr (std::is_same_v<T, td_api::userStatusLastMonth>) {
+                isOnline = false;
+                // Approximate to 30 days ago
+                lastSeenTime = static_cast<int64_t>(std::time(nullptr)) - (30 * 24 * 60 * 60);
+            } else {
+                isOnline = false;
+            }
+        });
+    } catch (...) {
+        // If downcast fails, assume offline with unknown last seen
+        isOnline = false;
+        lastSeenTime = 0;
+    }
+    
+    // Update cached user info
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto it = m_users.find(userId);
+        if (it != m_users.end()) {
+            it->second.isOnline = isOnline;
+            if (lastSeenTime > 0) {
+                it->second.lastSeenTime = lastSeenTime;
+            }
+        }
+    }
+    
+    // Notify MainFrame to update topic bar if this is the current chat's user
+    PostToMainThread([this, userId, isOnline, lastSeenTime]() {
+        if (m_mainFrame) {
+            m_mainFrame->OnUserStatusChanged(userId, isOnline, lastSeenTime);
+        }
+    });
+}
+
 void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
 {
     if (!file) return;
     
+    // Guard against null local info
+    if (!file->local_) return;
+    
     int32_t fileId = file->id_;
+    if (fileId == 0) return;  // Invalid file ID
+    
     bool isDownloading = file->local_->is_downloading_active_;
     bool isComplete = file->local_->is_downloading_completed_;
     wxString localPath = wxString::FromUTF8(file->local_->path_);
     int64_t downloadedSize = file->local_->downloaded_size_;
-    int64_t totalSize = file->size_;
+    int64_t totalSize = file->size_ > 0 ? file->size_ : file->expected_size_;
+    
+    // Update our download tracking
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it = m_activeDownloads.find(fileId);
+        if (it != m_activeDownloads.end()) {
+            if (isComplete) {
+                it->second.state = DownloadState::Completed;
+                it->second.localPath = localPath;
+                it->second.downloadedSize = downloadedSize;
+                TDLOG("OnFileUpdate: Download COMPLETED for fileId=%d path=%s", fileId, localPath.ToStdString().c_str());
+            } else if (isDownloading) {
+                it->second.state = DownloadState::Downloading;
+                it->second.downloadedSize = downloadedSize;
+                it->second.totalSize = totalSize;
+                // Update progress time to prevent false timeout
+                it->second.lastProgressTime = wxGetUTCTime();
+                TDLOG("OnFileUpdate: Download PROGRESS for fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
+            }
+        } else {
+            // File update for a file we're not tracking - could be auto-download
+            if (isComplete) {
+                TDLOG("OnFileUpdate: Untracked file COMPLETED fileId=%d path=%s", fileId, localPath.ToStdString().c_str());
+            } else if (isDownloading) {
+                TDLOG("OnFileUpdate: Untracked file PROGRESS fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
+            }
+        }
+    }
     
     PostToMainThread([this, fileId, isDownloading, isComplete, localPath, downloadedSize, totalSize]() {
         if (m_mainFrame) {
@@ -1160,19 +1718,22 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileId = fullSize->photo_->id_;
                         info.mediaFileSize = fullSize->photo_->size_;
                         
-                        if (fullSize->photo_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(fullSize->photo_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
+                        } else if (ShouldDownloadFile(fullSize->photo_.get())) {
+                            // Auto-download full photo
+                            this->DownloadFile(fullSize->photo_->id_, 5, "Photo", fullSize->photo_->size_);
                         }
                     }
                     
                     // Track thumbnail separately
                     if (thumbSize->photo_) {
                         info.mediaThumbnailFileId = thumbSize->photo_->id_;
-                        if (thumbSize->photo_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(thumbSize->photo_.get())) {
                             info.mediaThumbnailPath = wxString::FromUTF8(thumbSize->photo_->local_->path_);
-                        } else if (!thumbSize->photo_->local_->is_downloading_active_) {
+                        } else if (ShouldDownloadFile(thumbSize->photo_.get())) {
                             // Auto-download thumbnail
-                            this->DownloadFile(thumbSize->photo_->id_, 5);
+                            this->DownloadFile(thumbSize->photo_->id_, 8, "Thumbnail", 0);
                         }
                     }
                 }
@@ -1188,7 +1749,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileSize = c.video_->video_->size_;
                         
                         // Check if actual video file is downloaded
-                        if (c.video_->video_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.video_->video_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_->video_->local_->path_);
                         }
                     }
@@ -1196,11 +1757,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     // Always track thumbnail separately (don't put thumbnail path in mediaLocalPath)
                     if (c.video_->thumbnail_ && c.video_->thumbnail_->file_) {
                         info.mediaThumbnailFileId = c.video_->thumbnail_->file_->id_;
-                        if (c.video_->thumbnail_->file_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.video_->thumbnail_->file_.get())) {
                             info.mediaThumbnailPath = wxString::FromUTF8(c.video_->thumbnail_->file_->local_->path_);
-                        } else if (!c.video_->thumbnail_->file_->local_->is_downloading_active_) {
+                        } else if (ShouldDownloadFile(c.video_->thumbnail_->file_.get())) {
                             // Auto-download video thumbnail
-                            this->DownloadFile(c.video_->thumbnail_->file_->id_, 5);
+                            this->DownloadFile(c.video_->thumbnail_->file_->id_, 8, "Video Thumbnail", 0);
                         }
                     }
                 }
@@ -1230,7 +1791,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileId = c.video_note_->video_->id_;
                         info.mediaFileSize = c.video_note_->video_->size_;
                         
-                        if (c.video_note_->video_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.video_note_->video_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_note_->video_->local_->path_);
                         }
                     }
@@ -1238,11 +1799,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     // Always track thumbnail separately
                     if (c.video_note_->thumbnail_ && c.video_note_->thumbnail_->file_) {
                         info.mediaThumbnailFileId = c.video_note_->thumbnail_->file_->id_;
-                        if (c.video_note_->thumbnail_->file_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.video_note_->thumbnail_->file_.get())) {
                             info.mediaThumbnailPath = wxString::FromUTF8(c.video_note_->thumbnail_->file_->local_->path_);
-                        } else if (!c.video_note_->thumbnail_->file_->local_->is_downloading_active_) {
+                        } else if (ShouldDownloadFile(c.video_note_->thumbnail_->file_.get())) {
                             // Auto-download video note thumbnail
-                            this->DownloadFile(c.video_note_->thumbnail_->file_->id_, 5);
+                            this->DownloadFile(c.video_note_->thumbnail_->file_->id_, 8, "Video Note", 0);
                         }
                     }
                 }
@@ -1253,11 +1814,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     if (c.sticker_->sticker_) {
                         info.mediaFileId = c.sticker_->sticker_->id_;
                         
-                        if (c.sticker_->sticker_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.sticker_->sticker_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.sticker_->sticker_->local_->path_);
-                        } else if (!c.sticker_->sticker_->local_->is_downloading_active_) {
-                            // Auto-download sticker
-                            this->DownloadFile(c.sticker_->sticker_->id_, 5);
+                        } else if (ShouldDownloadFile(c.sticker_->sticker_.get())) {
+                            // Auto-download sticker with high priority
+                            this->DownloadFile(c.sticker_->sticker_->id_, 10, "Sticker", 0);
                         }
                     }
                     
@@ -1266,11 +1827,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     if (c.sticker_->thumbnail_ && c.sticker_->thumbnail_->file_) {
                         info.mediaThumbnailFileId = c.sticker_->thumbnail_->file_->id_;
                         
-                        if (c.sticker_->thumbnail_->file_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.sticker_->thumbnail_->file_.get())) {
                             info.mediaThumbnailPath = wxString::FromUTF8(c.sticker_->thumbnail_->file_->local_->path_);
-                        } else if (!c.sticker_->thumbnail_->file_->local_->is_downloading_active_) {
+                        } else if (ShouldDownloadFile(c.sticker_->thumbnail_->file_.get())) {
                             // Auto-download sticker thumbnail (higher priority for preview)
-                            this->DownloadFile(c.sticker_->thumbnail_->file_->id_, 10);
+                            this->DownloadFile(c.sticker_->thumbnail_->file_->id_, 10, "Sticker Thumbnail", 0);
                         }
                     }
                 }
@@ -1285,7 +1846,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileName = wxString::FromUTF8(c.animation_->file_name_);
                         info.mediaFileSize = c.animation_->animation_->size_;
                         
-                        if (c.animation_->animation_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.animation_->animation_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.animation_->animation_->local_->path_);
                         }
                     }
@@ -1293,11 +1854,11 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     // Always track thumbnail separately
                     if (c.animation_->thumbnail_ && c.animation_->thumbnail_->file_) {
                         info.mediaThumbnailFileId = c.animation_->thumbnail_->file_->id_;
-                        if (c.animation_->thumbnail_->file_->local_->is_downloading_completed_) {
+                        if (IsFileAvailableLocally(c.animation_->thumbnail_->file_.get())) {
                             info.mediaThumbnailPath = wxString::FromUTF8(c.animation_->thumbnail_->file_->local_->path_);
-                        } else if (!c.animation_->thumbnail_->file_->local_->is_downloading_active_) {
+                        } else if (ShouldDownloadFile(c.animation_->thumbnail_->file_.get())) {
                             // Auto-download GIF thumbnail
-                            this->DownloadFile(c.animation_->thumbnail_->file_->id_, 5);
+                            this->DownloadFile(c.animation_->thumbnail_->file_->id_, 8, "GIF Thumbnail", 0);
                         }
                     }
                 }

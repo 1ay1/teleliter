@@ -30,6 +30,7 @@ class MediaPopup;
 class MessageFormatter;
 struct MessageInfo;
 struct ChatInfo;
+struct UserInfo;
 
 class MainFrame : public wxFrame
 {
@@ -49,6 +50,11 @@ public:
     void OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText);
     void OnFileDownloaded(int32_t fileId, const wxString& localPath);
     void OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize);
+    void OnDownloadStarted(int32_t fileId, const wxString& fileName, int64_t totalSize);
+    void OnDownloadFailed(int32_t fileId, const wxString& error);
+    void OnDownloadRetrying(int32_t fileId, int retryCount);
+    void OnUserStatusChanged(int64_t userId, bool isOnline, int64_t lastSeenTime);
+    void OnMembersLoaded(int64_t chatId, const std::vector<UserInfo>& members);
     void ShowStatusError(const wxString& error);
     void UpdateMemberList(int64_t chatId);
     
@@ -143,7 +149,6 @@ private:
     // Center panel - Chat area
     wxPanel* m_chatPanel;
     WelcomeChat* m_welcomeChat;
-    wxTextCtrl* m_chatInfoBar;
     ChatViewWidget* m_chatViewWidget;
     InputBoxWidget* m_inputBoxWidget;
     

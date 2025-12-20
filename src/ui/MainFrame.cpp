@@ -12,6 +12,43 @@
 #include <wx/settings.h>
 #include <wx/filename.h>
 #include <ctime>
+
+// Helper function to format last seen time
+static wxString FormatLastSeen(int64_t lastSeenTime)
+{
+    if (lastSeenTime <= 0) {
+        return "last seen recently";
+    }
+    
+    wxDateTime lastSeen(static_cast<time_t>(lastSeenTime));
+    if (!lastSeen.IsValid()) {
+        return "last seen recently";
+    }
+    
+    wxDateTime now = wxDateTime::Now();
+    wxTimeSpan diff = now - lastSeen;
+    
+    // Guard against negative time differences (clock skew)
+    if (diff.IsNegative()) {
+        return "last seen just now";
+    }
+    
+    if (diff.GetMinutes() < 1) {
+        return "last seen just now";
+    } else if (diff.GetMinutes() < 60) {
+        int mins = static_cast<int>(diff.GetMinutes());
+        return wxString::Format("last seen %d min ago", mins);
+    } else if (diff.GetHours() < 24) {
+        int hours = static_cast<int>(diff.GetHours());
+        return wxString::Format("last seen %d hour%s ago", hours, hours == 1 ? "" : "s");
+    } else if (diff.GetDays() == 1) {
+        return "last seen yesterday at " + lastSeen.Format("%H:%M");
+    } else if (diff.GetDays() < 7) {
+        return "last seen " + lastSeen.Format("%A at %H:%M");
+    } else {
+        return "last seen " + lastSeen.Format("%b %d");
+    }
+}
 // Debug logging - enabled for troubleshooting
 #include <iostream>
 #define DBGLOG(msg) std::cerr << "[MainFrame] " << msg << std::endl
@@ -55,7 +92,6 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
       m_chatListWidget(nullptr),
       m_chatPanel(nullptr),
       m_welcomeChat(nullptr),
-      m_chatInfoBar(nullptr),
       m_chatViewWidget(nullptr),
       m_inputBoxWidget(nullptr),
       m_rightPanel(nullptr),
@@ -384,31 +420,13 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
-    // Chat info bar (shows chat name and description)
-    m_chatInfoBar = new wxTextCtrl(parent, ID_CHAT_INFO_BAR, "Teleliter",
-        wxDefaultPosition, wxSize(-1, 22),
-        wxTE_READONLY | wxBORDER_NONE);
-    m_chatInfoBar->SetBackgroundColour(m_chatInfoBgColor);
-    m_chatInfoBar->SetForegroundColour(m_chatInfoFgColor);
-    m_chatInfoBar->SetFont(m_chatFont);
-    sizer->Add(m_chatInfoBar, 0, wxEXPAND);
-    
-    // Separator line
-    wxPanel* separator = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
-    separator->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
-    sizer->Add(separator, 0, wxEXPAND);
-    
     // Welcome chat panel (shown when "Teleliter" is selected in tree)
     m_welcomeChat = new WelcomeChat(parent, this);
     sizer->Add(m_welcomeChat, 1, wxEXPAND);
     
     // Chat view widget (hidden initially, shown when a chat is selected)
+    // Uses ChatArea internally which handles colors and font consistently with WelcomeChat
     m_chatViewWidget = new ChatViewWidget(parent, this);
-    m_chatViewWidget->SetColors(m_bgColor, m_fgColor, m_timestampColor, m_textColor,
-        m_serviceColor, m_actionColor, m_mediaColor, m_editedColor,
-        m_forwardColor, m_replyColor, m_highlightColor, m_noticeColor);
-    m_chatViewWidget->SetUserColors(m_userColors);
-    m_chatViewWidget->SetChatFont(m_chatFont);
     sizer->Add(m_chatViewWidget, 1, wxEXPAND);
     
     // Hide chat view widget from sizer (not just visually) - welcome chat is shown initially
@@ -496,7 +514,7 @@ void MainFrame::PopulateDummyData()
     // Set chat info
     m_currentChatTitle = "Test Chat - Media Demo";
     m_currentChatType = TelegramChatType::Supergroup;
-    m_chatInfoBar->SetValue("Test Chat - Media Demo | Testing all message types");
+    // Topic bar is set via ChatViewWidget::SetTopicText in OnChatTreeSelectionChanged
     
     // Add sample messages via ChatViewWidget
     if (m_chatViewWidget) {
@@ -616,9 +634,9 @@ void MainFrame::PopulateDummyData()
             // Notice message
             formatter->AppendNoticeMessage("12:13", "Teleliter", "This is a system notice");
             
-            // Join/Leave messages
-            formatter->AppendJoinMessage("12:14", "NewMember");
-            formatter->AppendLeaveMessage("12:14", "OldMember");
+            // User joined/left messages
+            formatter->AppendUserJoinedMessage("12:14", "NewMember");
+            formatter->AppendUserLeftMessage("12:14", "OldMember");
             
             // More regular messages
             formatter->AppendMessage("12:15", "Admin", "Welcome NewMember! Feel free to test the upload button");
@@ -745,10 +763,10 @@ void MainFrame::OnAbout(wxCommandEvent& event)
                  "  /clear           - Clear chat window\n"
                  "  /query <user>    - Open private chat\n"
                  "  /whois <user>    - View user info\n"
-                 "  /away [message]  - Set away status\n"
+                 "  /leave           - Leave current chat\n"
                  "  /help            - Show all commands\n\n"
                  "Keyboard:\n"
-                 "  Tab              - Nick completion\n"
+                 "  Tab              - User name completion\n"
                  "  Up/Down          - Input history\n"
                  "  Page Up/Down     - Scroll chat\n"
                  "  Ctrl+V           - Paste image\n\n"
@@ -834,7 +852,9 @@ void MainFrame::OnSavedMessages(wxCommandEvent& event)
 {
     m_currentChatTitle = "Saved Messages";
     m_currentChatType = TelegramChatType::SavedMessages;
-    m_chatInfoBar->SetValue("Saved Messages");
+    if (m_chatViewWidget) {
+        m_chatViewWidget->SetTopicText("Saved Messages", "Your cloud storage");
+    }
     SetStatusText("Saved Messages", 0);
 }
 
@@ -873,7 +893,8 @@ void MainFrame::OnToggleMembers(wxCommandEvent& event)
 void MainFrame::OnToggleChatInfo(wxCommandEvent& event)
 {
     m_showChatInfo = !m_showChatInfo;
-    m_chatInfoBar->Show(m_showChatInfo);
+    // Topic bar is managed by ChatViewWidget - toggle not currently supported
+    // Could add a method to ChatViewWidget to show/hide topic bar if needed
     m_chatPanel->Layout();
 }
 
@@ -893,7 +914,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
     DBGLOG("OnChatTreeSelectionChanged called");
     
     // Guard against events during initialization when UI elements aren't created yet
-    if (!m_chatInfoBar || !m_welcomeChat || !m_chatViewWidget || !m_chatPanel || !m_chatListWidget) {
+    if (!m_welcomeChat || !m_chatViewWidget || !m_chatPanel || !m_chatListWidget) {
         DBGLOG("Guard check failed - UI elements not ready");
         return;
     }
@@ -908,7 +929,6 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
         // Check if Teleliter (welcome) is selected
         if (m_chatListWidget->IsTeleliterSelected()) {
             m_currentChatId = 0;
-            m_chatInfoBar->SetValue("Teleliter");
             // Clear topic bar when going to welcome screen
             if (m_chatViewWidget) {
                 m_chatViewWidget->ClearTopicText();
@@ -921,10 +941,19 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             }
             m_chatPanel->Layout();
             
+            // Clear member panel when on welcome screen
+            if (m_memberList) {
+                m_memberList->DeleteAllItems();
+            }
+            if (m_memberCountLabel) {
+                m_memberCountLabel->SetLabel("");
+            }
+            
             // Update status bar - no chat selected
             if (m_statusBar) {
                 m_statusBar->SetCurrentChatId(0);
                 m_statusBar->SetCurrentChatTitle("");
+                m_statusBar->SetCurrentChatMemberCount(0);
             }
             
             // Disable upload buttons when no chat selected
@@ -956,8 +985,6 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             if (parenPos != wxNOT_FOUND) {
                 m_currentChatTitle = chatName.Left(parenPos).Trim();
             }
-            
-            m_chatInfoBar->SetValue(m_currentChatTitle);
             
             // Update status bar with current chat info
             if (m_statusBar) {
@@ -1020,6 +1047,19 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                         }
                     } else if (chatInfo.isBot) {
                         topicInfo = "Bot";
+                    } else if (chatInfo.isPrivate && chatInfo.userId != 0) {
+                        // For private chats, show online status or last seen
+                        bool userFound = false;
+                        UserInfo userInfo = m_telegramClient->GetUser(chatInfo.userId, &userFound);
+                        if (userFound) {
+                            if (userInfo.isOnline) {
+                                topicInfo = "online";
+                            } else {
+                                topicInfo = FormatLastSeen(userInfo.lastSeenTime);
+                            }
+                        } else {
+                            topicInfo = "Private chat";
+                        }
                     } else if (chatInfo.isPrivate) {
                         topicInfo = "Private chat";
                     }
@@ -1040,7 +1080,9 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
         } else {
             // Fallback for items without chat ID (shouldn't happen with TDLib)
             m_currentChatTitle = chatName;
-            m_chatInfoBar->SetValue(chatName);
+            if (m_chatViewWidget) {
+                m_chatViewWidget->SetTopicText(chatName, "");
+            }
             wxSizer* sizer = m_chatPanel->GetSizer();
             if (sizer) {
                 sizer->Show(m_welcomeChat, false);
@@ -1485,9 +1527,6 @@ void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
         }
     }
     
-    // Don't reload all messages just for a download - it's disruptive
-    // The media popup will update automatically
-    
     // Update transfer manager
     // Find transfer by checking pending transfers (simplified - in real impl would track by file ID)
     SetStatusText("Download complete: " + localPath.AfterLast('/'), 1);
@@ -1495,12 +1534,107 @@ void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
 
 void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize)
 {
-    // Progress is now handled by StatusBarManager via TransferManager callbacks
-    // This function is called directly from TelegramClient for file downloads
-    // We could forward this to the TransferManager if needed
-    (void)fileId;
-    (void)downloadedSize;
-    (void)totalSize;
+    // Show progress in status bar
+    if (totalSize > 0) {
+        int percent = static_cast<int>((downloadedSize * 100) / totalSize);
+        SetStatusText(wxString::Format("⬇ %d%%", percent), 1);
+    }
+}
+
+void MainFrame::OnDownloadStarted(int32_t fileId, const wxString& fileName, int64_t totalSize)
+{
+    // Show in status bar
+    SetStatusText("⬇ " + fileName, 1);
+}
+
+void MainFrame::OnDownloadFailed(int32_t fileId, const wxString& error)
+{
+    // Show error briefly in status bar
+    SetStatusText("✗ Download failed", 1);
+}
+
+void MainFrame::OnDownloadRetrying(int32_t fileId, int retryCount)
+{
+    // Show retry status
+    SetStatusText(wxString::Format("↻ Retrying... (%d)", retryCount), 1);
+}
+
+void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline, int64_t lastSeenTime)
+{
+    // Guard against invalid state
+    if (userId == 0) {
+        return;
+    }
+    
+    // Check if this user is the one in the current private chat
+    if (m_currentChatId == 0 || !m_telegramClient || !m_chatViewWidget) {
+        return;
+    }
+    
+    bool chatFound = false;
+    ChatInfo chatInfo = m_telegramClient->GetChat(m_currentChatId, &chatFound);
+    
+    if (!chatFound || !chatInfo.isPrivate || chatInfo.userId != userId) {
+        return;  // Not the current chat's user
+    }
+    
+    // Update the topic bar with new status
+    wxString topicInfo;
+    if (isOnline) {
+        topicInfo = "online";
+    } else {
+        topicInfo = FormatLastSeen(lastSeenTime);
+    }
+    
+    m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+}
+
+void MainFrame::OnMembersLoaded(int64_t chatId, const std::vector<UserInfo>& members)
+{
+    // Only update if this is still the current chat
+    if (chatId != m_currentChatId) {
+        return;
+    }
+    
+    if (!m_memberList || !m_memberCountLabel) {
+        return;
+    }
+    
+    // Clear existing members
+    m_memberList->DeleteAllItems();
+    
+    long idx = 0;
+    for (const auto& member : members) {
+        wxString displayName = member.GetDisplayName();
+        if (displayName.IsEmpty()) {
+            displayName = wxString::Format("User %lld", member.id);
+        }
+        
+        // Mark current user
+        if (member.isSelf || member.id == (m_telegramClient ? m_telegramClient->GetCurrentUser().id : 0)) {
+            displayName += " (you)";
+        }
+        
+        // Mark bots
+        if (member.isBot) {
+            displayName += " [bot]";
+        }
+        
+        m_memberList->InsertItem(idx++, displayName);
+    }
+    
+    // Update member count label
+    if (idx > 0) {
+        m_memberCountLabel->SetLabel(wxString::Format("%ld member%s", idx, idx == 1 ? "" : "s"));
+    } else {
+        m_memberCountLabel->SetLabel("No members");
+    }
+    
+    if (m_statusBar) {
+        m_statusBar->SetCurrentChatMemberCount(static_cast<int>(idx));
+    }
+    
+    DBGLOG("OnMembersLoaded: loaded " << idx << " members for chat " << chatId);
 }
 
 void MainFrame::ShowStatusError(const wxString& error)
@@ -1598,34 +1732,30 @@ void MainFrame::UpdateMemberList(int64_t chatId)
         return;
     }
     
-    // For groups and channels, we would need to fetch member list from TDLib
-    // For now, show placeholder with current user
-    // TODO: Implement TDLib getChatMembers / getSupergroupMembers
-    DBGLOG("UpdateMemberList: group/channel chat - showing placeholder");
-    long idx = 0;
+    // For groups and channels, load members from TDLib
+    DBGLOG("UpdateMemberList: group/channel chat - loading members from TDLib");
     
+    // Show placeholder while loading
     if (!m_currentUser.IsEmpty()) {
-        m_memberList->InsertItem(idx++, m_currentUser + " (you)");
+        m_memberList->InsertItem(0, m_currentUser + " (you)");
     }
     
-    // For groups/supergroups, show member count from chat info if available
+    // Show member count from chat info while we load details
     if (chat.memberCount > 0) {
-        m_memberCountLabel->SetLabel(wxString::Format("%d members", chat.memberCount));
+        m_memberCountLabel->SetLabel(wxString::Format("%d members (loading...)", chat.memberCount));
         if (m_statusBar) {
             m_statusBar->SetCurrentChatMemberCount(chat.memberCount);
         }
     } else {
-        // Show placeholder message
         m_memberCountLabel->SetLabel("Loading members...");
         if (m_statusBar) {
             m_statusBar->SetCurrentChatMemberCount(0);
         }
     }
-    DBGLOG("UpdateMemberList: added " << idx << " members, count label set");
     
-    // TODO: Add actual member loading via TDLib
-    // For groups: use getBasicGroupFullInfo
-    // For supergroups/channels: use getSupergroupMembers
+    // Request member list from TDLib - OnMembersLoaded will be called when ready
+    m_telegramClient->LoadChatMembers(chatId);
+    DBGLOG("UpdateMemberList: requested member list from TDLib");
 }
 
 void MainFrame::OnRefreshTimer(wxTimerEvent& event)

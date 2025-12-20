@@ -248,6 +248,7 @@ set(SOURCES
     src/ui/MediaPopup.cpp
     src/ui/FileDropTarget.cpp
     src/ui/FileUtils.cpp
+    src/ui/ChatArea.cpp
     src/ui/MessageFormatter.cpp
     src/ui/WelcomeChat.cpp
     src/ui/ChatListWidget.cpp

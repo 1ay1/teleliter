@@ -118,6 +118,47 @@ struct UserInfo {
           isOnline(false), lastSeenTime(0) {}
 };
 
+// Download state for tracking file downloads
+enum class DownloadState {
+    Pending,      // Download requested but not started
+    Downloading,  // Download in progress
+    Completed,    // Download finished successfully
+    Failed,       // Download failed (will retry)
+    Cancelled     // Download cancelled by user
+};
+
+// Download info for tracking active downloads
+struct DownloadInfo {
+    int32_t fileId;
+    int priority;
+    DownloadState state;
+    int retryCount;
+    int64_t startTime;        // When download was initiated (for timeout)
+    int64_t lastProgressTime; // Last time we received progress update
+    int64_t downloadedSize;
+    int64_t totalSize;
+    wxString localPath;
+    wxString errorMessage;
+    
+    static constexpr int MAX_RETRIES = 3;
+    static constexpr int TIMEOUT_SECONDS = 60;  // Timeout if no progress for 60s
+    
+    DownloadInfo()
+        : fileId(0), priority(1), state(DownloadState::Pending),
+          retryCount(0), startTime(0), lastProgressTime(0),
+          downloadedSize(0), totalSize(0) {}
+    
+    DownloadInfo(int32_t id, int prio)
+        : fileId(id), priority(prio), state(DownloadState::Pending),
+          retryCount(0), startTime(wxGetUTCTime()), lastProgressTime(wxGetUTCTime()),
+          downloadedSize(0), totalSize(0) {}
+    
+    bool CanRetry() const { return retryCount < MAX_RETRIES; }
+    bool IsTimedOut() const { 
+        return (wxGetUTCTime() - lastProgressTime) > TIMEOUT_SECONDS; 
+    }
+};
+
 // Callback types for async operations
 using AuthCallback = std::function<void(AuthState state, const wxString& error)>;
 using ChatsCallback = std::function<void(const std::vector<ChatInfo>& chats)>;

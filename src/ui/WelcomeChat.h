@@ -2,7 +2,7 @@
 #define WELCOMECHAT_H
 
 #include <wx/wx.h>
-#include <wx/richtext/richtextctrl.h>
+#include "ChatArea.h"
 
 // Login state machine
 enum class LoginState {
@@ -20,6 +20,7 @@ class MainFrame;
 class TelegramClient;
 
 // Welcome chat window - handles login flow like HexChat's network tab
+// Uses ChatArea for consistent formatting across the application
 class WelcomeChat : public wxPanel
 {
 public:
@@ -53,20 +54,17 @@ public:
     LoginState GetState() const { return m_state; }
     bool IsLoggedIn() const { return m_state == LoginState::LoggedIn; }
     
-    // Get the chat display for external access
-    wxRichTextCtrl* GetChatDisplay() { return m_chatDisplay; }
+    // Get the chat area for external access
+    ChatArea* GetChatArea() { return m_chatArea; }
+    
+    // Get the underlying display (for compatibility)
+    wxRichTextCtrl* GetChatDisplay() { return m_chatArea ? m_chatArea->GetDisplay() : nullptr; }
     
 private:
     void CreateUI();
-    void SetupColors();
     
-    // Message display helpers (HexChat style)
+    // Message display helpers (delegate to ChatArea)
     void AppendWelcome();
-    void AppendInfo(const wxString& message);
-    void AppendError(const wxString& message);
-    void AppendSuccess(const wxString& message);
-    void AppendPrompt(const wxString& prompt);
-    void AppendUserInput(const wxString& input);
     void AppendAsciiArt();
     
     // Input handling for each state
@@ -83,22 +81,8 @@ private:
     MainFrame* m_mainFrame;
     TelegramClient* m_telegramClient;
     
-    // UI elements
-    wxRichTextCtrl* m_chatDisplay;
-    
-    // Colors (HexChat style)
-    wxColour m_bgColor;
-    wxColour m_fgColor;
-    wxColour m_timestampColor;
-    wxColour m_infoColor;
-    wxColour m_errorColor;
-    wxColour m_successColor;
-    wxColour m_promptColor;
-    wxColour m_userInputColor;
-    wxColour m_asciiArtColor;
-    
-    // Font
-    wxFont m_chatFont;
+    // UI elements - uses ChatArea for display
+    ChatArea* m_chatArea;
     
     // State
     LoginState m_state;

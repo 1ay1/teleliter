@@ -2,12 +2,12 @@
 #define CHATVIEWWIDGET_H
 
 #include <wx/wx.h>
-#include <wx/richtext/richtextctrl.h>
 #include <wx/popupwin.h>
 #include <wx/timer.h>
 #include <vector>
 #include <map>
 
+#include "ChatArea.h"
 #include "MediaTypes.h"
 
 // Forward declarations
@@ -58,22 +58,21 @@ public:
     LinkSpan* GetLinkSpanAtPosition(long pos);
     void ClearLinkSpans();
     
-    // Access to display control
-    wxRichTextCtrl* GetDisplayCtrl() { return m_chatDisplay; }
+    // Access to ChatArea and underlying display control
+    ChatArea* GetChatArea() { return m_chatArea; }
+    wxRichTextCtrl* GetDisplayCtrl() { return m_chatArea ? m_chatArea->GetDisplay() : nullptr; }
     MessageFormatter* GetMessageFormatter() { return m_messageFormatter; }
     
-    // Styling
-    void SetColors(const wxColour& bg, const wxColour& fg,
-                   const wxColour& timestamp, const wxColour& text,
-                   const wxColour& service, const wxColour& action,
-                   const wxColour& media, const wxColour& edited,
-                   const wxColour& forward, const wxColour& reply,
-                   const wxColour& highlight, const wxColour& notice);
-    void SetUserColors(const wxColour* colors); // Array of 16 colors
-    void SetChatFont(const wxFont& font);
+    // User colors (delegates to ChatArea)
+    void SetUserColors(const wxColour* colors);
     
     // Current user for mention/highlight detection (HexChat-style)
-    void SetCurrentUsername(const wxString& username) { m_currentUsername = username; }
+    void SetCurrentUsername(const wxString& username) { 
+        m_currentUsername = username; 
+        if (m_chatArea) {
+            m_chatArea->SetCurrentUsername(username);
+        }
+    }
     wxString GetCurrentUsername() const { return m_currentUsername; }
     
     // Pending downloads
@@ -133,12 +132,16 @@ private:
     wxString GetSelectedText() const;
     wxString GetLinkAtPosition(long pos) const;
     
+    // Helper to check if two MediaInfo refer to the same media
+    bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
+    
+    // Core components
     MainFrame* m_mainFrame;
-    wxRichTextCtrl* m_chatDisplay;
+    ChatArea* m_chatArea;
     MessageFormatter* m_messageFormatter;
     MediaPopup* m_mediaPopup;
     wxPopupWindow* m_editHistoryPopup;
-    wxButton* m_newMessageButton;  // "↓ New Messages" button
+    wxButton* m_newMessageButton;
     
     // Topic bar (HexChat-style)
     wxPanel* m_topicBar;
@@ -158,20 +161,20 @@ private:
     
     // Hover debouncing and popup management
     wxTimer m_hoverTimer;
-    wxTimer m_hideTimer;  // Delayed hide for smoother UX
+    wxTimer m_hideTimer;
     MediaInfo m_pendingHoverMedia;
     wxPoint m_pendingHoverPos;
-    MediaInfo m_currentlyShowingMedia;  // Track what's currently displayed
+    MediaInfo m_currentlyShowingMedia;
     long m_lastHoveredTextPos;
-    bool m_isOverMediaSpan;  // Track if mouse is currently over any media span
-    static const int HOVER_DELAY_MS = 200;  // Delay before showing popup
-    static const int HIDE_DELAY_MS = 300;   // Delay before hiding popup
+    bool m_isOverMediaSpan;
+    static const int HOVER_DELAY_MS = 200;
+    static const int HIDE_DELAY_MS = 300;
     
     // Smart scrolling state
-    bool m_wasAtBottom;  // Track if we were at bottom before new messages
-    int m_newMessageCount;  // Count of unread messages when scrolled up
-    bool m_isLoading;  // Loading state
-    int m_batchUpdateDepth;  // Nested batch update counter
+    bool m_wasAtBottom;
+    int m_newMessageCount;
+    bool m_isLoading;
+    int m_batchUpdateDepth;
     
     // Message grouping state (HexChat-style)
     wxString m_lastDisplayedSender;
@@ -181,29 +184,9 @@ private:
     wxString m_currentUsername;
     
     // Context menu state
-    long m_contextMenuPos;  // Text position where context menu was opened
-    wxString m_contextMenuLink;  // Link URL if right-clicked on a link
-    MediaInfo m_contextMenuMedia;  // Media info if right-clicked on media
-    
-    // Helper to check if two MediaInfo refer to the same media
-    bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
-    
-    // Colors
-    wxColour m_bgColor;
-    wxColour m_fgColor;
-    wxColour m_timestampColor;
-    wxColour m_textColor;
-    wxColour m_serviceColor;
-    wxColour m_actionColor;
-    wxColour m_mediaColor;
-    wxColour m_editedColor;
-    wxColour m_forwardColor;
-    wxColour m_replyColor;
-    wxColour m_highlightColor;
-    wxColour m_noticeColor;
-    wxColour m_userColors[16];
-    
-    wxFont m_font;
+    long m_contextMenuPos;
+    wxString m_contextMenuLink;
+    MediaInfo m_contextMenuMedia;
     
     // Menu IDs
     enum {

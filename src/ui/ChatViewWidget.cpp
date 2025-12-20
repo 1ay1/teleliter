@@ -14,7 +14,7 @@
 ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
     : wxPanel(parent, wxID_ANY),
       m_mainFrame(mainFrame),
-      m_chatDisplay(nullptr),
+      m_chatArea(nullptr),
       m_messageFormatter(nullptr),
       m_mediaPopup(nullptr),
       m_editHistoryPopup(nullptr),
@@ -30,46 +30,14 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_isLoading(false),
       m_batchUpdateDepth(0),
       m_lastDisplayedTimestamp(0),
-      m_contextMenuPos(-1),
-      m_bgColor(0x2B, 0x2B, 0x2B),
-      m_fgColor(0xD3, 0xD7, 0xCF),
-      m_timestampColor(0x88, 0x88, 0x88),
-      m_textColor(0xD3, 0xD7, 0xCF),
-      m_serviceColor(0x88, 0x88, 0x88),
-      m_actionColor(0xCE, 0x5C, 0x00),
-      m_mediaColor(0x72, 0x9F, 0xCF),
-      m_editedColor(0x88, 0x88, 0x88),
-      m_forwardColor(0xAD, 0x7F, 0xA8),
-      m_replyColor(0x72, 0x9F, 0xCF),
-      m_highlightColor(0xFC, 0xAF, 0x3E),
-      m_noticeColor(0xAD, 0x7F, 0xA8)
+      m_contextMenuPos(-1)
 {
-    // Set monospace font like WelcomeChat (HexChat-style)
-    m_font = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    
     // Bind timer events
     Bind(wxEVT_TIMER, &ChatViewWidget::OnHoverTimer, this, m_hoverTimer.GetId());
     Bind(wxEVT_TIMER, &ChatViewWidget::OnHideTimer, this, m_hideTimer.GetId());
 
     // Bind size event for repositioning the new message button
     Bind(wxEVT_SIZE, &ChatViewWidget::OnSize, this);
-    // Initialize default user colors
-    m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
-    m_userColors[1]  = wxColour(0x35, 0x36, 0xB2);
-    m_userColors[2]  = wxColour(0x2A, 0x8C, 0x2A);
-    m_userColors[3]  = wxColour(0xC3, 0x38, 0x38);
-    m_userColors[4]  = wxColour(0xC7, 0x38, 0x38);
-    m_userColors[5]  = wxColour(0x80, 0x00, 0x80);
-    m_userColors[6]  = wxColour(0xFF, 0x80, 0x00);
-    m_userColors[7]  = wxColour(0x80, 0x80, 0x00);
-    m_userColors[8]  = wxColour(0x33, 0xCC, 0x33);
-    m_userColors[9]  = wxColour(0x00, 0x80, 0x80);
-    m_userColors[10] = wxColour(0x33, 0xCC, 0xCC);
-    m_userColors[11] = wxColour(0x66, 0x66, 0xFF);
-    m_userColors[12] = wxColour(0xFF, 0x00, 0xFF);
-    m_userColors[13] = wxColour(0x80, 0x80, 0x80);
-    m_userColors[14] = wxColour(0xCC, 0xCC, 0xCC);
-    m_userColors[15] = wxColour(0x72, 0x9F, 0xCF);
 
     CreateLayout();
     SetupDisplayControl();
@@ -108,12 +76,10 @@ void ChatViewWidget::CreateLayout()
 
     sizer->Add(m_topicBar, 0, wxEXPAND);
 
-    // Rich text control for chat display
-    m_chatDisplay = new wxRichTextCtrl(this, wxID_ANY,
-        wxEmptyString, wxDefaultPosition, wxDefaultSize,
-        wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
-
-    sizer->Add(m_chatDisplay, 1, wxEXPAND);
+    // ChatArea for display - uses same formatting as WelcomeChat
+    m_chatArea = new ChatArea(this);
+    sizer->Add(m_chatArea, 1, wxEXPAND);
+    
     SetSizer(sizer);
 
     // Create the "New Messages" button (hidden initially)
@@ -165,40 +131,20 @@ void ChatViewWidget::CreateNewMessageButton()
 
 void ChatViewWidget::SetupDisplayControl()
 {
-    m_chatDisplay->SetBackgroundColour(m_bgColor);
-    
-    // Set monospace font (HexChat-style)
-    if (!m_font.IsOk()) {
-        m_font = wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    }
-    m_chatDisplay->SetFont(m_font);
-
-    wxRichTextAttr defaultStyle;
-    defaultStyle.SetTextColour(m_textColor);
-    defaultStyle.SetBackgroundColour(m_bgColor);
-    defaultStyle.SetFont(m_font);
-    
-    // Set up tab stops for HexChat-style two-column layout
-    // Column 1: [HH:MM] <nickname> (about 200 pixels)
-    // Column 2: message text
-    wxArrayInt tabStops;
-    tabStops.Add(200);  // First tab stop at 200 pixels for message column
-    defaultStyle.SetTabs(tabStops);
-    
-    m_chatDisplay->SetDefaultStyle(defaultStyle);
-    m_chatDisplay->SetBasicStyle(defaultStyle);
+    wxRichTextCtrl* display = m_chatArea->GetDisplay();
+    if (!display) return;
 
     // Bind mouse events for hover detection and context menu
-    m_chatDisplay->Bind(wxEVT_MOTION, &ChatViewWidget::OnMouseMove, this);
-    m_chatDisplay->Bind(wxEVT_LEAVE_WINDOW, &ChatViewWidget::OnMouseLeave, this);
-    m_chatDisplay->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnLeftDown, this);
-    m_chatDisplay->Bind(wxEVT_RIGHT_DOWN, &ChatViewWidget::OnRightDown, this);
-    m_chatDisplay->Bind(wxEVT_KEY_DOWN, &ChatViewWidget::OnKeyDown, this);
-    m_chatDisplay->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, &ChatViewWidget::OnScroll, this);
-    m_chatDisplay->Bind(wxEVT_SCROLLWIN_LINEDOWN, &ChatViewWidget::OnScroll, this);
-    m_chatDisplay->Bind(wxEVT_SCROLLWIN_LINEUP, &ChatViewWidget::OnScroll, this);
-    m_chatDisplay->Bind(wxEVT_SCROLLWIN_PAGEDOWN, &ChatViewWidget::OnScroll, this);
-    m_chatDisplay->Bind(wxEVT_SCROLLWIN_PAGEUP, &ChatViewWidget::OnScroll, this);
+    display->Bind(wxEVT_MOTION, &ChatViewWidget::OnMouseMove, this);
+    display->Bind(wxEVT_LEAVE_WINDOW, &ChatViewWidget::OnMouseLeave, this);
+    display->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnLeftDown, this);
+    display->Bind(wxEVT_RIGHT_DOWN, &ChatViewWidget::OnRightDown, this);
+    display->Bind(wxEVT_KEY_DOWN, &ChatViewWidget::OnKeyDown, this);
+    display->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, &ChatViewWidget::OnScroll, this);
+    display->Bind(wxEVT_SCROLLWIN_LINEDOWN, &ChatViewWidget::OnScroll, this);
+    display->Bind(wxEVT_SCROLLWIN_LINEUP, &ChatViewWidget::OnScroll, this);
+    display->Bind(wxEVT_SCROLLWIN_PAGEDOWN, &ChatViewWidget::OnScroll, this);
+    display->Bind(wxEVT_SCROLLWIN_PAGEUP, &ChatViewWidget::OnScroll, this);
 
     // Set up drag and drop for file uploads
     if (m_mainFrame) {
@@ -208,23 +154,11 @@ void ChatViewWidget::SetupDisplayControl()
                     m_mainFrame->OnFilesDropped(files);
                 }
             });
-        m_chatDisplay->SetDropTarget(dropTarget);
+        display->SetDropTarget(dropTarget);
     }
 
-    // Create message formatter for the chat display (HexChat-style)
-    m_messageFormatter = new MessageFormatter(m_chatDisplay);
-    m_messageFormatter->SetTimestampColor(m_timestampColor);
-    m_messageFormatter->SetTextColor(m_textColor);
-    m_messageFormatter->SetServiceColor(m_serviceColor);
-    m_messageFormatter->SetActionColor(m_actionColor);
-    m_messageFormatter->SetMediaColor(m_mediaColor);
-    m_messageFormatter->SetEditedColor(m_editedColor);
-    m_messageFormatter->SetForwardColor(m_forwardColor);
-    m_messageFormatter->SetReplyColor(m_replyColor);
-    m_messageFormatter->SetHighlightColor(m_highlightColor);
-    m_messageFormatter->SetNoticeColor(m_noticeColor);
-    m_messageFormatter->SetLinkColor(wxColour(0x72, 0x9F, 0xCF));  // Blue for links
-    m_messageFormatter->SetUserColors(m_userColors);
+    // Create message formatter using ChatArea
+    m_messageFormatter = new MessageFormatter(m_chatArea);
 
     // Set up link span callback
     m_messageFormatter->SetLinkSpanCallback(
@@ -242,15 +176,6 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
 
     // Date separator feature disabled for now - causing display issues
     // TODO: Fix date separator logic to only show when day actually changes
-
-    // Check if this message should be grouped with previous (same sender, short time gap)
-    bool shouldGroup = m_messageFormatter->ShouldGroupWithPrevious(sender, msg.date);
-
-    // Don't group special message types
-    bool isSpecialMessage = msg.isForwarded || msg.replyToMessageId != 0 ||
-                            msg.hasPhoto || msg.hasVideo || msg.hasDocument ||
-                            msg.hasVoice || msg.hasVideoNote || msg.hasSticker ||
-                            msg.hasAnimation || msg.isEdited;
 
     // Handle forwarded messages
     if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
@@ -288,9 +213,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -306,9 +231,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -323,9 +248,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.fileSize = wxString::Format("%lld bytes", msg.mediaFileSize);
         info.caption = msg.mediaCaption;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -337,9 +262,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -353,9 +278,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -370,9 +295,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -387,9 +312,9 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
-        long startPos = m_chatDisplay->GetLastPosition();
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
-        long endPos = m_chatDisplay->GetLastPosition();
+        long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info);
         updateStateAfterMedia();
         return;
@@ -427,11 +352,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         }
     }
 
-    // Regular text message - use grouping for consecutive messages from same sender
-    if (shouldGroup && !isSpecialMessage && !msg.text.IsEmpty() && !isMentioned) {
-        // Continuation message - just show text without nick/timestamp
-        m_messageFormatter->AppendContinuationMessage(msg.text);
-    } else if (isMentioned) {
+    // Regular text message - always show full timestamp and sender (HexChat/WelcomeChat style)
+    if (isMentioned) {
         // Highlighted message - someone mentioned you
         m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text);
     } else {
@@ -457,8 +379,8 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo>& messages)
 
 void ChatViewWidget::BeginBatchUpdate()
 {
-    if (m_batchUpdateDepth == 0 && m_chatDisplay) {
-        m_chatDisplay->Freeze();
+    if (m_batchUpdateDepth == 0 && m_chatArea) {
+        m_chatArea->BeginBatchUpdate();
     }
     m_batchUpdateDepth++;
 }
@@ -467,16 +389,16 @@ void ChatViewWidget::EndBatchUpdate()
 {
     if (m_batchUpdateDepth > 0) {
         m_batchUpdateDepth--;
-        if (m_batchUpdateDepth == 0 && m_chatDisplay) {
-            m_chatDisplay->Thaw();
+        if (m_batchUpdateDepth == 0 && m_chatArea) {
+            m_chatArea->EndBatchUpdate();
         }
     }
 }
 
 void ChatViewWidget::ClearMessages()
 {
-    if (m_chatDisplay) {
-        m_chatDisplay->Clear();
+    if (m_chatArea) {
+        m_chatArea->Clear();
     }
     ClearMediaSpans();
     ClearEditSpans();
@@ -492,10 +414,8 @@ void ChatViewWidget::ClearMessages()
 
 void ChatViewWidget::ScrollToBottom()
 {
-    if (m_chatDisplay) {
-        m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
-        m_chatDisplay->Refresh();
-        m_chatDisplay->Update();
+    if (m_chatArea) {
+        m_chatArea->ScrollToBottom();
         m_wasAtBottom = true;
         HideNewMessageIndicator();
     }
@@ -514,20 +434,8 @@ void ChatViewWidget::ScrollToBottomIfAtBottom()
 
 bool ChatViewWidget::IsAtBottom() const
 {
-    if (!m_chatDisplay) return true;
-
-    // Check if scroll position is near the bottom
-    int scrollPos = 0;
-    int scrollRange = 0;
-    int thumbSize = 0;
-
-    // Get vertical scroll info
-    scrollPos = m_chatDisplay->GetScrollPos(wxVERTICAL);
-    scrollRange = m_chatDisplay->GetScrollRange(wxVERTICAL);
-    thumbSize = m_chatDisplay->GetScrollThumb(wxVERTICAL);
-
-    // Consider "at bottom" if within 50 pixels of the end
-    return (scrollPos + thumbSize >= scrollRange - 50) || (scrollRange <= thumbSize);
+    if (!m_chatArea) return true;
+    return m_chatArea->IsAtBottom();
 }
 
 void ChatViewWidget::ShowNewMessageIndicator()
@@ -540,8 +448,8 @@ void ChatViewWidget::ShowNewMessageIndicator()
     m_newMessageButton->SetLabel(label);
 
     // Position button at bottom center of chat display
-    if (m_chatDisplay) {
-        wxSize displaySize = m_chatDisplay->GetSize();
+    if (m_chatArea) {
+        wxSize displaySize = m_chatArea->GetSize();
         wxSize btnSize = m_newMessageButton->GetBestSize();
         int x = (displaySize.GetWidth() - btnSize.GetWidth()) / 2;
         int y = displaySize.GetHeight() - btnSize.GetHeight() - 10;
@@ -717,76 +625,10 @@ void ChatViewWidget::HideEditHistoryPopup()
     }
 }
 
-void ChatViewWidget::SetColors(const wxColour& bg, const wxColour& fg,
-                               const wxColour& timestamp, const wxColour& text,
-                               const wxColour& service, const wxColour& action,
-                               const wxColour& media, const wxColour& edited,
-                               const wxColour& forward, const wxColour& reply,
-                               const wxColour& highlight, const wxColour& notice)
-{
-    m_bgColor = bg;
-    m_fgColor = fg;
-    m_timestampColor = timestamp;
-    m_textColor = text;
-    m_serviceColor = service;
-    m_actionColor = action;
-    m_mediaColor = media;
-    m_editedColor = edited;
-    m_forwardColor = forward;
-    m_replyColor = reply;
-    m_highlightColor = highlight;
-    m_noticeColor = notice;
-
-    if (m_chatDisplay) {
-        m_chatDisplay->SetBackgroundColour(m_bgColor);
-
-        wxRichTextAttr defaultStyle;
-        defaultStyle.SetTextColour(m_textColor);
-        defaultStyle.SetBackgroundColour(m_bgColor);
-        m_chatDisplay->SetDefaultStyle(defaultStyle);
-        m_chatDisplay->SetBasicStyle(defaultStyle);
-        m_chatDisplay->Refresh();
-    }
-
-    if (m_messageFormatter) {
-        m_messageFormatter->SetTimestampColor(m_timestampColor);
-        m_messageFormatter->SetTextColor(m_textColor);
-        m_messageFormatter->SetServiceColor(m_serviceColor);
-        m_messageFormatter->SetActionColor(m_actionColor);
-        m_messageFormatter->SetMediaColor(m_mediaColor);
-        m_messageFormatter->SetEditedColor(m_editedColor);
-        m_messageFormatter->SetForwardColor(m_forwardColor);
-        m_messageFormatter->SetReplyColor(m_replyColor);
-        m_messageFormatter->SetHighlightColor(m_highlightColor);
-        m_messageFormatter->SetNoticeColor(m_noticeColor);
-    }
-}
-
 void ChatViewWidget::SetUserColors(const wxColour* colors)
 {
-    for (int i = 0; i < 16; i++) {
-        m_userColors[i] = colors[i];
-    }
-
-    if (m_messageFormatter) {
-        m_messageFormatter->SetUserColors(m_userColors);
-    }
-}
-
-void ChatViewWidget::SetChatFont(const wxFont& font)
-{
-    m_font = font;
-
-    if (m_chatDisplay) {
-        m_chatDisplay->SetFont(m_font);
-
-        wxRichTextAttr defaultStyle;
-        defaultStyle.SetFont(m_font);
-        defaultStyle.SetTextColour(m_textColor);
-        defaultStyle.SetBackgroundColour(m_bgColor);
-        m_chatDisplay->SetDefaultStyle(defaultStyle);
-        m_chatDisplay->SetBasicStyle(defaultStyle);
-        m_chatDisplay->Refresh();
+    if (m_chatArea) {
+        m_chatArea->SetUserColors(colors);
     }
 }
 
@@ -850,7 +692,8 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
             if (m_mainFrame) {
                 TelegramClient* client = m_mainFrame->GetTelegramClient();
                 if (client) {
-                    client->DownloadFile(info.thumbnailFileId, 10);
+                    wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
+                    client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
                     AddPendingDownload(info.thumbnailFileId, info);
                 }
             }
@@ -885,7 +728,19 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
             TelegramClient* client = m_mainFrame->GetTelegramClient();
             if (client) {
                 // Start download with high priority for preview
-                client->DownloadFile(info.fileId, 10);
+                wxString displayName = info.fileName;
+                if (displayName.IsEmpty()) {
+                    switch (info.type) {
+                        case MediaType::Photo: displayName = "Photo"; break;
+                        case MediaType::Video: displayName = "Video"; break;
+                        case MediaType::GIF: displayName = "GIF"; break;
+                        case MediaType::VideoNote: displayName = "Video Note"; break;
+                        case MediaType::Sticker: displayName = "Sticker"; break;
+                        case MediaType::Voice: displayName = "Voice Message"; break;
+                        default: displayName = "Media"; break;
+                    }
+                }
+                client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
                 // Track this as a pending download so we can update popup when complete
                 AddPendingDownload(info.fileId, info);
             }
@@ -975,15 +830,19 @@ void ChatViewWidget::OpenMedia(const MediaInfo& info)
             MediaInfo infoWithOpenFlag = info;
             infoWithOpenFlag.isDownloading = true;  // Use this to track pending open
             AddPendingDownload(info.fileId, infoWithOpenFlag);
-            client->DownloadFile(info.fileId, 10);  // High priority for user-initiated download
-
-            // Show a status message
-            if (m_messageFormatter) {
-                m_messageFormatter->AppendServiceMessage(
-                    wxDateTime::Now().Format("%H:%M"),
-                    "Downloading media...");
-                ScrollToBottomIfAtBottom();
+            
+            // Get display name for download indicator
+            wxString displayName = info.fileName;
+            if (displayName.IsEmpty()) {
+                switch (info.type) {
+                    case MediaType::Photo: displayName = "Photo"; break;
+                    case MediaType::Video: displayName = "Video"; break;
+                    case MediaType::GIF: displayName = "GIF"; break;
+                    case MediaType::File: displayName = "File"; break;
+                    default: displayName = "Media"; break;
+                }
             }
+            client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));  // High priority for user-initiated download
         }
     }
 }
@@ -1056,8 +915,8 @@ void ChatViewWidget::OnSize(wxSizeEvent& event)
     event.Skip();
 
     // Reposition the new message button
-    if (m_newMessageButton && m_newMessageButton->IsShown() && m_chatDisplay) {
-        wxSize displaySize = m_chatDisplay->GetSize();
+    if (m_newMessageButton && m_newMessageButton->IsShown() && m_chatArea) {
+        wxSize displaySize = m_chatArea->GetSize();
         wxSize btnSize = m_newMessageButton->GetBestSize();
         int x = (displaySize.GetWidth() - btnSize.GetWidth()) / 2;
         int y = displaySize.GetHeight() - btnSize.GetHeight() - 10;
@@ -1076,8 +935,8 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent& event)
 
     switch (keyCode) {
         case WXK_HOME:
-            if (m_chatDisplay) {
-                m_chatDisplay->ShowPosition(0);
+            if (m_chatArea && m_chatArea->GetDisplay()) {
+                m_chatArea->GetDisplay()->ShowPosition(0);
                 m_wasAtBottom = false;
             }
             break;
@@ -1102,8 +961,9 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent& event)
         case 'c':
             if (event.ControlDown() || event.CmdDown()) {
                 // Copy selected text
-                if (m_chatDisplay && m_chatDisplay->CanCopy()) {
-                    m_chatDisplay->Copy();
+                wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
+                if (display && display->CanCopy()) {
+                    display->Copy();
                 }
             } else {
                 event.Skip();
@@ -1121,12 +981,13 @@ void ChatViewWidget::OnRightDown(wxMouseEvent& event)
     wxPoint pos = event.GetPosition();
     long textPos;
 
-    if (!m_chatDisplay) {
+    wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
+    if (!display) {
         event.Skip();
         return;
     }
 
-    wxTextCtrlHitTestResult hit = m_chatDisplay->HitTest(pos, &textPos);
+    wxTextCtrlHitTestResult hit = display->HitTest(pos, &textPos);
 
     if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
         m_contextMenuPos = textPos;
@@ -1141,7 +1002,7 @@ void ChatViewWidget::OnRightDown(wxMouseEvent& event)
             m_contextMenuMedia = MediaInfo();
         }
 
-        ShowContextMenu(m_chatDisplay->ClientToScreen(pos));
+        ShowContextMenu(display->ClientToScreen(pos));
     } else {
         event.Skip();
     }
@@ -1149,8 +1010,8 @@ void ChatViewWidget::OnRightDown(wxMouseEvent& event)
 
 wxString ChatViewWidget::GetSelectedText() const
 {
-    if (m_chatDisplay) {
-        return m_chatDisplay->GetStringSelection();
+    if (m_chatArea && m_chatArea->GetDisplay()) {
+        return m_chatArea->GetDisplay()->GetStringSelection();
     }
     return wxString();
 }
@@ -1210,8 +1071,9 @@ void ChatViewWidget::ShowContextMenu(const wxPoint& pos)
 
 void ChatViewWidget::OnCopyText(wxCommandEvent& event)
 {
-    if (m_chatDisplay && m_chatDisplay->CanCopy()) {
-        m_chatDisplay->Copy();
+    wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
+    if (display && display->CanCopy()) {
+        display->Copy();
     }
 }
 
@@ -1262,7 +1124,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
     wxPoint pos = event.GetPosition();
     long textPos;
 
-    wxRichTextCtrl* ctrl = m_chatDisplay;
+    wxRichTextCtrl* ctrl = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
     if (!ctrl) {
         event.Skip();
         return;
@@ -1373,8 +1235,9 @@ void ChatViewWidget::OnMouseLeave(wxMouseEvent& event)
     // Use delayed hide for smoother UX when mouse briefly leaves
     ScheduleHideMediaPopup();
     HideEditHistoryPopup();
-    if (m_chatDisplay) {
-        m_chatDisplay->SetCursor(wxCursor(wxCURSOR_IBEAM));
+    wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
+    if (display) {
+        display->SetCursor(wxCursor(wxCURSOR_IBEAM));
     }
     event.Skip();
 }
@@ -1384,7 +1247,7 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent& event)
     wxPoint pos = event.GetPosition();
     long textPos;
 
-    wxRichTextCtrl* ctrl = m_chatDisplay;
+    wxRichTextCtrl* ctrl = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
     if (!ctrl) {
         event.Skip();
         return;

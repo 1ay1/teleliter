@@ -61,13 +61,19 @@ public:
     void SendMessage(int64_t chatId, const wxString& text);
     void SendFile(int64_t chatId, const wxString& filePath, const wxString& caption = "");
     
-    void DownloadFile(int32_t fileId, int priority = 1);
+    void DownloadFile(int32_t fileId, int priority = 1, const wxString& fileName = "", int64_t fileSize = 0);
     void CancelDownload(int32_t fileId);
+    void RetryDownload(int32_t fileId);
+    bool IsDownloading(int32_t fileId) const;
+    DownloadState GetDownloadState(int32_t fileId) const;
     
     UserInfo GetUser(int64_t userId, bool* found = nullptr) const;
     wxString GetUserDisplayName(int64_t userId) const;
     
     void MarkChatAsRead(int64_t chatId);
+    
+    // Load members for a chat (groups/supergroups/channels)
+    void LoadChatMembers(int64_t chatId, int limit = 200);
     
 private:
     std::unique_ptr<td::ClientManager> m_clientManager;
@@ -104,13 +110,17 @@ private:
     void HandleAuthWaitPassword();
     void HandleAuthReady();
     void HandleAuthClosed();
+    void ConfigureAutoDownload();
     
     void OnNewMessage(td_api::object_ptr<td_api::message>& message);
     void OnMessageEdited(int64_t chatId, int64_t messageId, 
                          td_api::object_ptr<td_api::MessageContent>& content);
     void OnChatUpdate(td_api::object_ptr<td_api::chat>& chat);
     void OnUserUpdate(td_api::object_ptr<td_api::user>& user);
+    void OnUserStatusUpdate(int64_t userId, td_api::object_ptr<td_api::UserStatus>& status);
     void OnFileUpdate(td_api::object_ptr<td_api::file>& file);
+    void OnDownloadError(int32_t fileId, const wxString& error);
+    void CheckDownloadTimeouts();
     void OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message);
     void OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessageId, int32_t unreadCount);
     void OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position);
@@ -125,6 +135,14 @@ private:
     
     std::queue<std::function<void()>> m_mainThreadQueue;
     std::mutex m_queueMutex;
+    
+    // Download tracking
+    std::map<int32_t, DownloadInfo> m_activeDownloads;
+    mutable std::mutex m_downloadsMutex;
+    wxTimer m_downloadTimeoutTimer;
+    
+    void OnDownloadTimeoutTimer(wxTimerEvent& event);
+    void StartDownloadInternal(int32_t fileId, int priority);
 };
 
 #endif // TELEGRAMCLIENT_H

@@ -402,7 +402,7 @@ void InputBoxWidget::OnKeyDown(wxKeyEvent& event)
         return; // Don't skip - consume the event
     }
     
-    // Tab - nick completion (HexChat style)
+    // Tab - user name completion
     if (keyCode == WXK_TAB) {
         DoTabCompletion();
         return; // Don't skip - consume the event
@@ -447,16 +447,8 @@ bool InputBoxWidget::ProcessCommand(const wxString& command)
         ProcessQueryCommand(args);
         return true;
     }
-    else if (cmd == "nick") {
-        ProcessNickCommand();
-        return true;
-    }
-    else if (cmd == "join") {
-        ProcessJoinCommand(args);
-        return true;
-    }
-    else if (cmd == "part" || cmd == "leave") {
-        ProcessPartCommand();
+    else if (cmd == "leave" || cmd == "close") {
+        ProcessLeaveCommand();
         return true;
     }
     else if (cmd == "topic") {
@@ -541,37 +533,13 @@ void InputBoxWidget::ProcessQueryCommand(const wxString& args)
     }
 }
 
-void InputBoxWidget::ProcessNickCommand()
-{
-    if (m_messageFormatter) {
-        m_messageFormatter->AppendServiceMessage(GetCurrentTimestamp(), 
-            "Cannot change nick on Telegram");
-    }
-}
-
-void InputBoxWidget::ProcessJoinCommand(const wxString& args)
-{
-    if (!args.IsEmpty()) {
-        if (m_messageFormatter) {
-            m_messageFormatter->AppendServiceMessage(GetCurrentTimestamp(), 
-                "Joining " + args + "...");
-        }
-        // TODO: Join chat/channel via TDLib
-    } else {
-        if (m_messageFormatter) {
-            m_messageFormatter->AppendServiceMessage(GetCurrentTimestamp(), 
-                "Usage: /join <channel>");
-        }
-    }
-}
-
-void InputBoxWidget::ProcessPartCommand()
+void InputBoxWidget::ProcessLeaveCommand()
 {
     if (m_messageFormatter) {
         m_messageFormatter->AppendServiceMessage(GetCurrentTimestamp(), 
             "Leaving chat...");
     }
-    // TODO: Leave chat via TDLib
+    // TODO: Leave/close chat via TDLib
 }
 
 void InputBoxWidget::ProcessTopicCommand(const wxString& args)
@@ -644,11 +612,8 @@ void InputBoxWidget::ProcessHelpCommand()
     m_messageFormatter->AppendServiceMessage(ts, "  /query <user>    - Open private chat");
     m_messageFormatter->AppendServiceMessage(ts, "  /msg <user> <text> - Send private message");
     m_messageFormatter->AppendServiceMessage(ts, "  /whois <user>    - View user info");
-    m_messageFormatter->AppendServiceMessage(ts, "  /away [message]  - Set away status");
-    m_messageFormatter->AppendServiceMessage(ts, "  /back            - Return from away");
-    m_messageFormatter->AppendServiceMessage(ts, "  /join <channel>  - Join a channel");
-    m_messageFormatter->AppendServiceMessage(ts, "  /part            - Leave current chat");
-    m_messageFormatter->AppendServiceMessage(ts, "  /topic [text]    - View or set topic");
+    m_messageFormatter->AppendServiceMessage(ts, "  /leave           - Leave current chat");
+    m_messageFormatter->AppendServiceMessage(ts, "  /help            - Show this help");
     
     if (m_chatView) {
         m_chatView->ScrollToBottom();
@@ -735,7 +700,7 @@ wxArrayString InputBoxWidget::GetMatchingMembers(const wxString& prefix)
     int memberCount = m_memberList->GetItemCount();
     for (int i = 0; i < memberCount; i++) {
         wxString memberName = m_memberList->GetItemText(i);
-        // Remove role suffix if present (e.g., "Nick (Admin)")
+        // Remove role suffix if present (e.g., "User (Admin)")
         int parenPos = memberName.Find(" (");
         if (parenPos != wxNOT_FOUND) {
             memberName = memberName.Left(parenPos);

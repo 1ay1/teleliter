@@ -3,50 +3,19 @@
 #include <wx/regex.h>
 #include <wx/datetime.h>
 
-MessageFormatter::MessageFormatter(wxRichTextCtrl* display)
-    : m_display(display),
+MessageFormatter::MessageFormatter(ChatArea* chatArea)
+    : m_chatArea(chatArea ? chatArea : nullptr),
       m_lastMediaSpanStart(0),
       m_lastMediaSpanEnd(0),
       m_lastTimestamp(0),
       m_lastDateDay(0)
 {
-    // HexChat-style colors
-    m_timestampColor = wxColour(0x87, 0x87, 0x87);  // Gray timestamps
-    m_textColor = wxColour(0xD3, 0xD7, 0xCF);       // Light gray text
-    m_serviceColor = wxColour(0x88, 0x88, 0x88);    // Gray for server/service messages
-    m_actionColor = wxColour(0xCE, 0x5C, 0x00);     // Orange for /me actions
+    // Additional colors not provided by ChatArea
     m_mediaColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for media links
     m_editedColor = wxColour(0x88, 0x88, 0x88);     // Gray for (edited) marker
     m_forwardColor = wxColour(0xAD, 0x7F, 0xA8);    // Purple for forwards
     m_replyColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for replies
     m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);  // Yellow/orange for highlights
-    m_noticeColor = wxColour(0xAD, 0x7F, 0xA8);     // Purple for notices
-    m_linkColor = wxColour(0x72, 0x9F, 0xCF);       // Blue for links
-    
-    // HexChat default nick colors
-    m_userColors[0]  = wxColour(0x00, 0x00, 0x00);  // Not used (black)
-    m_userColors[1]  = wxColour(0x00, 0x00, 0xCC);  // Blue
-    m_userColors[2]  = wxColour(0x00, 0xCC, 0x00);  // Green
-    m_userColors[3]  = wxColour(0xCC, 0x00, 0x00);  // Red
-    m_userColors[4]  = wxColour(0xCC, 0x00, 0x00);  // Light red
-    m_userColors[5]  = wxColour(0xCC, 0x00, 0xCC);  // Purple
-    m_userColors[6]  = wxColour(0xCC, 0x66, 0x00);  // Orange
-    m_userColors[7]  = wxColour(0xCC, 0xCC, 0x00);  // Yellow
-    m_userColors[8]  = wxColour(0x00, 0xCC, 0x00);  // Light green
-    m_userColors[9]  = wxColour(0x00, 0xCC, 0xCC);  // Cyan
-    m_userColors[10] = wxColour(0x00, 0xCC, 0xCC);  // Light cyan
-    m_userColors[11] = wxColour(0x00, 0x00, 0xFC);  // Light blue
-    m_userColors[12] = wxColour(0xCC, 0x00, 0xCC);  // Light purple
-    m_userColors[13] = wxColour(0x7F, 0x7F, 0x7F);  // Dark gray
-    m_userColors[14] = wxColour(0xCC, 0xCC, 0xCC);  // Light gray
-    m_userColors[15] = wxColour(0xD3, 0xD7, 0xCF);  // White
-}
-
-void MessageFormatter::SetUserColors(const wxColour colors[16])
-{
-    for (int i = 0; i < 16; i++) {
-        m_userColors[i] = colors[i];
-    }
 }
 
 void MessageFormatter::ResetGroupingState()
@@ -118,9 +87,9 @@ wxString MessageFormatter::GetDateString(int64_t unixTime)
 void MessageFormatter::AppendDateSeparator(const wxString& dateText)
 {
     // HexChat-style date separator - simple and unobtrusive
-    m_display->BeginTextColour(wxColour(0x66, 0x66, 0x66));
-    m_display->WriteText("\t--- " + dateText + " ---\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(wxColour(0x66, 0x66, 0x66));
+    m_chatArea->WriteText("--- " + dateText + " ---\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime)
@@ -140,26 +109,23 @@ void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime)
 
 void MessageFormatter::AppendContinuationMessage(const wxString& message)
 {
-    // Continuation: just indented message, no timestamp or nick
-    // Use tab to align with message column (HexChat-style)
-    m_display->BeginTextColour(m_textColor);
-    m_display->WriteText("\t");  // Tab to message column
+    if (!m_chatArea) return;
+    
+    // Continuation: just indented message, no timestamp or user
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
+    m_chatArea->WriteText("        ");  // Indent to align with message
     WriteTextWithLinks(message);
-    m_display->WriteText("\n");
-    m_display->EndTextColour();
-}
-
-wxColour MessageFormatter::GetUserColor(const wxString& username)
-{
-    unsigned long hash = 0;
-    for (size_t i = 0; i < username.length(); i++) {
-        hash = static_cast<unsigned long>(username[i].GetValue()) + (hash << 6) + (hash << 16) - hash;
-    }
-    return m_userColors[hash % 16];
+    m_chatArea->WriteText("\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::WriteTextWithLinks(const wxString& text)
 {
+    if (!m_chatArea) return;
+    
+    // Handle empty text
+    if (text.IsEmpty()) return;
+    
     // URL regex pattern - matches http://, https://, and www. URLs
     static wxRegEx urlRegex(
         "(https?://[^\\s<>\"'\\)\\]]+|www\\.[^\\s<>\"'\\)\\]]+)",
@@ -167,7 +133,7 @@ void MessageFormatter::WriteTextWithLinks(const wxString& text)
     
     if (!urlRegex.IsValid()) {
         // Fallback - just write plain text
-        m_display->WriteText(text);
+        m_chatArea->WriteText(text);
         return;
     }
     
@@ -181,24 +147,24 @@ void MessageFormatter::WriteTextWithLinks(const wxString& text)
         
         // Write text before the link
         if (matchStart > 0) {
-            m_display->WriteText(remaining.Left(matchStart));
+            m_chatArea->WriteText(remaining.Left(matchStart));
         }
         
         // Extract the URL
         wxString url = remaining.Mid(matchStart, matchLen);
         
         // Track link span start
-        long linkStart = m_display->GetLastPosition();
+        long linkStart = m_chatArea->GetLastPosition();
         
         // Write the link with special formatting
-        m_display->BeginTextColour(m_linkColor);
-        m_display->BeginUnderline();
-        m_display->WriteText(url);
-        m_display->EndUnderline();
-        m_display->EndTextColour();
+        m_chatArea->BeginTextColour(m_chatArea->GetLinkColor());
+        m_chatArea->BeginUnderline();
+        m_chatArea->WriteText(url);
+        m_chatArea->EndUnderline();
+        m_chatArea->EndTextColour();
         
         // Track link span end
-        long linkEnd = m_display->GetLastPosition();
+        long linkEnd = m_chatArea->GetLastPosition();
         
         // Notify callback about the link span
         if (m_linkSpanCallback) {
@@ -216,208 +182,141 @@ void MessageFormatter::WriteTextWithLinks(const wxString& text)
     
     // Write any remaining text
     if (!remaining.IsEmpty()) {
-        m_display->WriteText(remaining);
+        m_chatArea->WriteText(remaining);
     }
 }
 
 void MessageFormatter::AppendMessage(const wxString& timestamp, const wxString& sender,
                                       const wxString& message)
 {
-    // Column 1: [HH:MM] <nick>
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    // [HH:MM] <user> message
+    m_chatArea->WriteTimestamp(timestamp);
     
-    // Tab to column 2 for message text
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
-    m_display->BeginTextColour(m_textColor);
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
-    m_display->WriteText("\n");
-    m_display->EndTextColour();
+    m_chatArea->WriteText("\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendServiceMessage(const wxString& timestamp, const wxString& message)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("*\t" + message + "\n");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
+    
+    m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+    m_chatArea->WriteText("* " + message + "\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendActionMessage(const wxString& timestamp, const wxString& sender,
                                            const wxString& action)
 {
-    // HexChat-style action: [HH:MM] * nick does something
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(m_actionColor);
-    m_display->WriteText("*");
-    m_display->EndTextColour();
+    // Action message: [HH:MM] * user does something
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_actionColor);
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(" " + action + "\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(m_chatArea->GetActionColor());
+    m_chatArea->WriteText("* ");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText(" " + action + "\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendNoticeMessage(const wxString& timestamp, const wxString& source,
                                            const wxString& message)
 {
+    if (!m_chatArea) return;
+    
     // HexChat-style notice: [HH:MM] -source- message
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->BeginTextColour(m_noticeColor);
-    m_display->WriteText("-" + source + "-");
-    m_display->EndTextColour();
-    
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_noticeColor);
-    m_display->WriteText(message + "\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+    m_chatArea->WriteText("-" + source + "- " + message + "\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendHighlightMessage(const wxString& timestamp, const wxString& sender,
                                               const wxString& message)
 {
-    // Highlighted message (when your nick is mentioned)
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    // Highlighted message (when you are mentioned)
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
-    m_display->BeginTextColour(m_highlightColor);
-    m_display->BeginBold();
+    m_chatArea->BeginTextColour(m_highlightColor);
+    m_chatArea->BeginBold();
     WriteTextWithLinks(message);
-    m_display->EndBold();
-    m_display->WriteText("\n");
-    m_display->EndTextColour();
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("\n");
+    m_chatArea->EndTextColour();
 }
 
-void MessageFormatter::AppendJoinMessage(const wxString& timestamp, const wxString& user)
+void MessageFormatter::AppendUserJoinedMessage(const wxString& timestamp, const wxString& user)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("-->");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText(user + " has joined\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+    m_chatArea->WriteText("--> " + user + " joined the chat\n");
+    m_chatArea->EndTextColour();
 }
 
-void MessageFormatter::AppendLeaveMessage(const wxString& timestamp, const wxString& user)
+void MessageFormatter::AppendUserLeftMessage(const wxString& timestamp, const wxString& user)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("<--");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText(user + " has left\n");
-    m_display->EndTextColour();
-}
-
-void MessageFormatter::AppendKickMessage(const wxString& timestamp, const wxString& user,
-                                         const wxString& by, const wxString& reason)
-{
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
-    
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("<--");
-    m_display->EndTextColour();
-    
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_serviceColor);
-    wxString msg = user + " was kicked by " + by;
-    if (!reason.IsEmpty()) {
-        msg += " (" + reason + ")";
-    }
-    m_display->WriteText(msg + "\n");
-    m_display->EndTextColour();
-}
-
-void MessageFormatter::AppendModeMessage(const wxString& timestamp, const wxString& user,
-                                         const wxString& mode)
-{
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
-    
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText("*");
-    m_display->EndTextColour();
-    
-    m_display->WriteText("\t");
-    
-    m_display->BeginTextColour(m_serviceColor);
-    m_display->WriteText(user + " sets mode: " + mode + "\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+    m_chatArea->WriteText("<-- " + user + " left the chat\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxString& sender,
                                           const MediaInfo& media, const wxString& caption)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
-    m_lastMediaSpanStart = m_display->GetLastPosition();
+    m_lastMediaSpanStart = m_chatArea->GetLastPosition();
     
-    m_display->BeginTextColour(m_mediaColor);
-    m_display->BeginUnderline();
+    m_chatArea->BeginTextColour(m_mediaColor);
+    m_chatArea->BeginUnderline();
     
     wxString mediaLabel;
     switch (media.type) {
@@ -447,154 +346,153 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
             break;
     }
     
-    m_display->WriteText(mediaLabel);
-    m_display->EndUnderline();
-    m_display->EndTextColour();
+    m_chatArea->WriteText(mediaLabel);
+    m_chatArea->EndUnderline();
+    m_chatArea->EndTextColour();
     
     // For stickers, show emoji after the underlined text (emoji doesn't underline well)
     if (media.type == MediaType::Sticker && !media.emoji.IsEmpty()) {
-        m_display->WriteText(" " + media.emoji);
+        m_chatArea->WriteText(" " + media.emoji);
     }
     
-    m_lastMediaSpanEnd = m_display->GetLastPosition();
+    m_lastMediaSpanEnd = m_chatArea->GetLastPosition();
     
     if (!caption.IsEmpty() && media.type != MediaType::Sticker) {
         // Don't repeat caption for stickers since emoji is already shown
-        m_display->BeginTextColour(m_textColor);
-        m_display->WriteText(" " + caption);
-        m_display->EndTextColour();
+        m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
+        m_chatArea->WriteText(" " + caption);
+        m_chatArea->EndTextColour();
     }
     
-    m_display->WriteText("\n");
+    m_chatArea->WriteText("\n");
 }
 
 void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxString& sender,
-                                          const wxString& replyTo, const wxString& message)
+                                          const wxString& replyToText, const wxString& message)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
     // Reply quote in italics with a vertical bar prefix
-    m_display->BeginTextColour(m_replyColor);
-    m_display->BeginItalic();
+    m_chatArea->BeginTextColour(m_replyColor);
+    m_chatArea->BeginItalic();
     // Truncate long reply text
-    wxString truncatedReply = replyTo;
+    wxString truncatedReply = replyToText;
     if (truncatedReply.length() > 50) {
         truncatedReply = truncatedReply.Left(47) + "...";
     }
-    m_display->WriteText("│ " + truncatedReply);
-    m_display->EndItalic();
-    m_display->EndTextColour();
+    m_chatArea->WriteText("│ " + truncatedReply);
+    m_chatArea->EndItalic();
+    m_chatArea->EndTextColour();
     
-    m_display->WriteText("\n");
+    m_chatArea->WriteText("\n");
     
-    // The actual reply message on next line with tab indent
-    m_display->WriteText("\t");
-    m_display->BeginTextColour(m_textColor);
+    // The actual reply message on next line with indent
+    m_chatArea->WriteText("        ");
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
-    m_display->WriteText("\n");
-    m_display->EndTextColour();
+    m_chatArea->WriteText("\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendForwardMessage(const wxString& timestamp, const wxString& sender,
                                             const wxString& forwardFrom, const wxString& message)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
     // Forward indicator with arrow
-    m_display->BeginTextColour(m_forwardColor);
-    m_display->BeginItalic();
-    m_display->WriteText("↪ Forwarded from ");
-    m_display->BeginBold();
-    m_display->WriteText(forwardFrom);
-    m_display->EndBold();
-    m_display->EndItalic();
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(m_forwardColor);
+    m_chatArea->BeginItalic();
+    m_chatArea->WriteText("↪ Forwarded from ");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(forwardFrom);
+    m_chatArea->EndBold();
+    m_chatArea->EndItalic();
+    m_chatArea->EndTextColour();
     
-    m_display->WriteText("\n");
+    m_chatArea->WriteText("\n");
     
-    // The forwarded content on next line with tab indent
-    m_display->WriteText("\t");
-    m_display->BeginTextColour(m_textColor);
+    // The forwarded content on next line with indent
+    m_chatArea->WriteText("        ");
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
-    m_display->WriteText("\n");
-    m_display->EndTextColour();
+    m_chatArea->WriteText("\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendUnreadMarker()
 {
+    if (!m_chatArea) return;
+    
     // Ensure we start on a new line
-    m_display->WriteText("\n");
+    m_chatArea->WriteText("\n");
     
     // HexChat-style red line to mark unread messages
-    m_display->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
-    m_display->WriteText("─────────────────────── ");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
+    m_chatArea->WriteText("─────────────────────── ");
+    m_chatArea->EndTextColour();
     
-    m_display->BeginTextColour(wxColour(0xFF, 0x40, 0x40)); // Lighter red for text
-    m_display->BeginBold();
-    m_display->WriteText("New Messages");
-    m_display->EndBold();
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(wxColour(0xFF, 0x40, 0x40)); // Lighter red for text
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText("New Messages");
+    m_chatArea->EndBold();
+    m_chatArea->EndTextColour();
     
-    m_display->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
-    m_display->WriteText(" ───────────────────────\n");
-    m_display->EndTextColour();
+    m_chatArea->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
+    m_chatArea->WriteText(" ───────────────────────\n");
+    m_chatArea->EndTextColour();
 }
 
 void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxString& sender,
                                            const wxString& message,
                                            long* editSpanStart, long* editSpanEnd)
 {
-    m_display->BeginTextColour(m_timestampColor);
-    m_display->WriteText("[" + timestamp + "] ");
-    m_display->EndTextColour();
+    if (!m_chatArea) return;
     
-    m_display->BeginTextColour(GetUserColor(sender));
-    m_display->WriteText("<");
-    m_display->BeginBold();
-    m_display->WriteText(sender);
-    m_display->EndBold();
-    m_display->WriteText(">");
-    m_display->EndTextColour();
+    m_chatArea->WriteTimestamp(timestamp);
     
-    m_display->WriteText("\t");
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(sender);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
     
-    m_display->BeginTextColour(m_textColor);
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
-    m_display->EndTextColour();
+    m_chatArea->EndTextColour();
     
-    // Simple (edited) marker - no span tracking needed since we don't have original text
-    m_display->BeginTextColour(m_editedColor);
-    m_display->BeginItalic();
-    m_display->WriteText(" (edited)");
-    m_display->EndItalic();
-    m_display->EndTextColour();
+    // Simple (edited) marker
+    m_chatArea->BeginTextColour(m_editedColor);
+    m_chatArea->BeginItalic();
+    m_chatArea->WriteText(" (edited)");
+    m_chatArea->EndItalic();
+    m_chatArea->EndTextColour();
     
-    m_display->WriteText("\n");
+    m_chatArea->WriteText("\n");
     
     // No span tracking - TDLib doesn't provide original message text
     if (editSpanStart) *editSpanStart = 0;
@@ -603,6 +501,8 @@ void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxSt
 
 void MessageFormatter::DisplayMessage(const MessageInfo& msg, const wxString& timestamp)
 {
+    if (!m_chatArea) return;
+    
     if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
         AppendForwardMessage(timestamp, msg.senderName, msg.forwardedFrom, msg.text);
     } else if (msg.replyToMessageId != 0 && !msg.replyToText.IsEmpty()) {
