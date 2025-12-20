@@ -4,7 +4,8 @@
 #include "MediaPopup.h"
 #include <iostream>
 
-#define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
+// #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
+#define CVWLOG(msg) do {} while(0)
 #include "FileDropTarget.h"
 #include "../telegram/Types.h"
 #include "../telegram/TelegramClient.h"

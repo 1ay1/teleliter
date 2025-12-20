@@ -5,7 +5,8 @@
 #include <wx/filename.h>
 #include <iostream>
 
-#define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+// #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+#define MPLOG(msg) do {} while(0)
 
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString& path)
@@ -567,7 +568,6 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     
     if (!m_mediaCtrl) {
         // Fallback to thumbnail if media control creation failed
-        std::cerr << "[MediaPopup] Failed to create media control, trying thumbnail fallback" << std::endl;
         FallbackToThumbnail();
         return;
     }
@@ -630,7 +630,6 @@ void MediaPopup::StopVideo()
 
 void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
 {
-    std::cerr << "[MediaPopup] OnMediaLoaded called" << std::endl;
     m_isLoading = false;
     m_isPlayingVideo = true;
     
@@ -668,11 +667,7 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
                    vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24);
         }
         
-        if (m_mediaCtrl->Play()) {
-            std::cerr << "[MediaPopup] Video playback started" << std::endl;
-        } else {
-            std::cerr << "[MediaPopup] Failed to start video playback" << std::endl;
-        }
+        m_mediaCtrl->Play();
     }
     
     Refresh();
@@ -680,7 +675,6 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
 
 void MediaPopup::OnMediaFinished(wxMediaEvent& event)
 {
-    std::cerr << "[MediaPopup] OnMediaFinished called, loop=" << m_loopVideo << std::endl;
     if (m_loopVideo && m_mediaCtrl) {
         // Seek to beginning and play again
         m_mediaCtrl->Seek(0);
@@ -690,7 +684,6 @@ void MediaPopup::OnMediaFinished(wxMediaEvent& event)
 
 void MediaPopup::OnMediaStop(wxMediaEvent& event)
 {
-    std::cerr << "[MediaPopup] OnMediaStop called" << std::endl;
     // Video stopped - could be user action or error
 }
 

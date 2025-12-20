@@ -51,9 +51,9 @@ static wxString FormatLastSeen(int64_t lastSeenTime)
 }
 // Debug logging - enabled for troubleshooting
 #include <iostream>
-#define DBGLOG(msg) std::cerr << "[MainFrame] " << msg << std::endl
+// #define DBGLOG(msg) std::cerr << "[MainFrame] " << msg << std::endl
 // Disable debug logging for release:
-// #define DBGLOG(msg) do {} while(0)
+#define DBGLOG(msg) do {} while(0)
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(wxID_EXIT, MainFrame::OnExit)
@@ -1363,6 +1363,7 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
     
     wxRichTextCtrl* display = m_chatViewWidget->GetDisplayCtrl();
     if (display) {
+        display->Freeze();
         display->BeginSuppressUndo();
     }
     m_chatViewWidget->ClearMessages();
@@ -1430,6 +1431,7 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
     
     if (display) {
         display->EndSuppressUndo();
+        display->Thaw();
         display->LayoutContent();
         display->Refresh();
         display->Update();

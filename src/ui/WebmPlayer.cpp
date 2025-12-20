@@ -63,7 +63,6 @@ void WebmPlayer::CleanupDecoder()
 bool WebmPlayer::InitDecoder()
 {
     if (!m_videoTrack) {
-        std::cerr << "[WebmPlayer] No video track set" << std::endl;
         return false;
     }
     
@@ -114,7 +113,6 @@ bool WebmPlayer::InitDecoder()
         }
         
         if (res != VPX_CODEC_OK) {
-            std::cerr << "[WebmPlayer] Failed to init decoder: " << vpx_codec_err_to_string(res) << std::endl;
             delete m_codec;
             m_codec = nullptr;
             return false;
@@ -132,7 +130,6 @@ bool WebmPlayer::LoadFile(const wxString& path)
     // Create MkvReader
     m_reader = new mkvparser::MkvReader();
     if (m_reader->Open(path.ToStdString().c_str()) != 0) {
-        std::cerr << "[WebmPlayer] Failed to open file" << std::endl;
         CleanupDecoder();
         return false;
     }
@@ -288,7 +285,6 @@ bool WebmPlayer::DecodeNextFrame()
             // Read frame data
             std::vector<uint8_t> frameData(frame.len);
             if (frame.Read(m_reader, frameData.data()) != 0) {
-                std::cerr << "[WebmPlayer] Failed to read frame data" << std::endl;
                 continue;
             }
             
@@ -346,7 +342,6 @@ wxBitmap WebmPlayer::ConvertFrameToBitmap(vpx_image* img)
     
     // Validate dimensions to prevent pixman errors
     if (w <= 0 || h <= 0) {
-        std::cerr << "[WebmPlayer] Invalid image dimensions: " << w << "x" << h << std::endl;
         return wxNullBitmap;
     }
     
@@ -356,7 +351,6 @@ wxBitmap WebmPlayer::ConvertFrameToBitmap(vpx_image* img)
     
     wxImage wxImg(w, h);
     if (!wxImg.IsOk()) {
-        std::cerr << "[WebmPlayer] Failed to create wxImage " << w << "x" << h << std::endl;
         return wxNullBitmap;
     }
     unsigned char* rgbData = wxImg.GetData();

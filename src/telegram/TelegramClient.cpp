@@ -90,8 +90,8 @@ void TelegramClient::Start()
     
     TDLOG("Starting TelegramClient...");
     
-    // Set TDLib log verbosity (2 = warnings, 1 = errors only)
-    td::ClientManager::execute(td_api::make_object<td_api::setLogVerbosityLevel>(2));
+    // Set TDLib log verbosity (0 = fatal only, 1 = errors, 2 = warnings)
+    td::ClientManager::execute(td_api::make_object<td_api::setLogVerbosityLevel>(0));
     
     // Create client manager and client
     m_clientManager = std::make_unique<td::ClientManager>();

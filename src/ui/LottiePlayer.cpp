@@ -25,14 +25,12 @@ LottiePlayer::LottiePlayer()
 {
     // Bind timer event using Bind for proper handling
     Bind(wxEVT_TIMER, &LottiePlayer::OnTimer, this, LOTTIE_TIMER_ID);
-    std::cerr << "[LottiePlayer] Created, timer bound" << std::endl;
 }
 
 LottiePlayer::~LottiePlayer()
 {
     Unbind(wxEVT_TIMER, &LottiePlayer::OnTimer, this, LOTTIE_TIMER_ID);
     Stop();
-    std::cerr << "[LottiePlayer] Destroyed" << std::endl;
 }
 
 bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
@@ -40,7 +38,6 @@ bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
     // .tgs files are gzip-compressed Lottie JSON
     std::ifstream file(path.ToStdString(), std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "[LottiePlayer] Failed to open file: " << path.ToStdString() << std::endl;
         return false;
     }
     
@@ -50,7 +47,6 @@ bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
     file.close();
     
     if (compressed.empty()) {
-        std::cerr << "[LottiePlayer] Empty file: " << path.ToStdString() << std::endl;
         return false;
     }
     
@@ -60,7 +56,6 @@ bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
     
     // Use inflateInit2 with 16+MAX_WBITS to handle gzip format
     if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) {
-        std::cerr << "[LottiePlayer] Failed to initialize zlib" << std::endl;
         return false;
     }
     
@@ -80,7 +75,6 @@ bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
         if (ret == Z_STREAM_ERROR || ret == Z_NEED_DICT || 
             ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
             inflateEnd(&zs);
-            std::cerr << "[LottiePlayer] Decompression error: " << ret << std::endl;
             return false;
         }
         
@@ -90,8 +84,6 @@ bool LottiePlayer::DecompressTgs(const wxString& path, std::string& jsonOut)
     inflateEnd(&zs);
     
     jsonOut = std::move(decompressed);
-    std::cerr << "[LottiePlayer] Decompressed " << compressed.size() 
-              << " bytes to " << jsonOut.size() << " bytes" << std::endl;
     
     return true;
 }
@@ -106,7 +98,6 @@ bool LottiePlayer::LoadTgsFile(const wxString& path)
     
     return LoadJson(json);
 #else
-    std::cerr << "[LottiePlayer] rlottie not available - cannot load .tgs files" << std::endl;
     return false;
 #endif
 }
@@ -120,7 +111,6 @@ bool LottiePlayer::LoadJson(const std::string& json)
     m_animation = rlottie::Animation::loadFromData(json, "", "", false);
     
     if (!m_animation) {
-        std::cerr << "[LottiePlayer] Failed to parse Lottie JSON" << std::endl;
         return false;
     }
     
@@ -142,9 +132,6 @@ bool LottiePlayer::LoadJson(const std::string& json)
     
     m_currentFrame = 0;
     m_isLoaded = true;
-    
-    std::cerr << "[LottiePlayer] Loaded animation: " << m_totalFrames << " frames, "
-              << m_frameRate << " fps, " << m_size.GetWidth() << "x" << m_size.GetHeight() << std::endl;
     
     return true;
 #else
@@ -259,7 +246,6 @@ void LottiePlayer::OnTimer(wxTimerEvent& event)
 void LottiePlayer::RenderCurrentFrame()
 {
     if (!m_isLoaded) {
-        std::cerr << "[LottiePlayer] RenderCurrentFrame: not loaded" << std::endl;
         return;
     }
     
@@ -268,11 +254,7 @@ void LottiePlayer::RenderCurrentFrame()
     if (frame.IsOk()) {
         if (m_frameCallback) {
             m_frameCallback(frame);
-        } else {
-            std::cerr << "[LottiePlayer] RenderCurrentFrame: no callback set" << std::endl;
         }
-    } else {
-        std::cerr << "[LottiePlayer] RenderCurrentFrame: frame not ok" << std::endl;
     }
 }
 
@@ -290,7 +272,6 @@ wxBitmap LottiePlayer::RenderFrame(size_t frameNum, int width, int height)
     
     // Validate dimensions to prevent pixman errors
     if (width <= 0 || height <= 0) {
-        std::cerr << "[LottiePlayer] Invalid render dimensions: " << width << "x" << height << std::endl;
         return wxNullBitmap;
     }
     
@@ -311,7 +292,6 @@ wxBitmap LottiePlayer::RenderFrame(size_t frameNum, int width, int height)
     // Convert ARGB to wxBitmap with alpha
     wxImage image(width, height);
     if (!image.IsOk()) {
-        std::cerr << "[LottiePlayer] Failed to create wxImage " << width << "x" << height << std::endl;
         return wxNullBitmap;
     }
     image.InitAlpha();
