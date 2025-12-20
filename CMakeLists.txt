@@ -152,6 +152,7 @@ set(SOURCES
     src/ui/ChatListWidget.cpp
     src/ui/ChatViewWidget.cpp
     src/ui/InputBoxWidget.cpp
+    src/ui/StatusBarManager.cpp
     src/telegram/TransferManager.cpp
     src/telegram/TelegramClient.cpp
     src/main.cpp

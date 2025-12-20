@@ -10,12 +10,14 @@
 #include <wx/clipbrd.h>
 #include <wx/gauge.h>
 #include <wx/timer.h>
+#include <wx/stopwatch.h>
 #include <vector>
 #include <map>
 #include <set>
 
 #include "MenuIds.h"
 #include "MediaTypes.h"
+#include "StatusBarManager.h"
 #include "../telegram/TransferManager.h"
 
 // Forward declarations
@@ -72,7 +74,6 @@ private:
     void CreateMainLayout();
     void CreateChatPanel(wxWindow* parent);
     void CreateMemberList(wxWindow* parent);
-    void SetupStatusBar();
     void SetupColors();
     void SetupFonts();
     void PopulateDummyData();
@@ -106,8 +107,9 @@ private:
     void OnFullscreen(wxCommandEvent& event);
     void OnToggleUnreadFirst(wxCommandEvent& event);
     
-    // Timer event handler for periodic refresh
+    // Timer event handlers
     void OnRefreshTimer(wxTimerEvent& event);
+    void OnStatusTimer(wxTimerEvent& event);
     
     // UI event handlers
     void OnChatTreeSelectionChanged(wxTreeEvent& event);
@@ -123,6 +125,8 @@ private:
     TelegramClient* m_telegramClient;
     TransferManager m_transferManager;
     wxTimer* m_refreshTimer;
+    wxTimer* m_statusTimer;
+    wxStopWatch m_sessionTimer;
     
     // Unread message tracking (chatId -> last read message ID)
     std::map<int64_t, int64_t> m_lastReadMessages;
@@ -148,9 +152,8 @@ private:
     wxListCtrl* m_memberList;
     wxStaticText* m_memberCountLabel;
     
-    // Status bar
-    wxGauge* m_progressGauge;
-    wxStaticText* m_progressLabel;
+    // Status bar manager
+    StatusBarManager* m_statusBar;
     
     // Colors
     wxColour m_bgColor;
@@ -194,8 +197,9 @@ private:
     wxString m_currentChatTitle;
     TelegramChatType m_currentChatType;
     
-    // Timer ID
+    // Timer IDs
     static const int ID_REFRESH_TIMER = wxID_HIGHEST + 200;
+    static const int ID_STATUS_TIMER = wxID_HIGHEST + 201;
 
     wxDECLARE_EVENT_TABLE();
 };

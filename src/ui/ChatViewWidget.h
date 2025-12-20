@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/richtext/richtextctrl.h>
 #include <wx/popupwin.h>
+#include <wx/timer.h>
 #include <vector>
 #include <map>
 
@@ -84,6 +85,7 @@ private:
     void OnMouseMove(wxMouseEvent& event);
     void OnMouseLeave(wxMouseEvent& event);
     void OnLeftDown(wxMouseEvent& event);
+    void OnHoverTimer(wxTimerEvent& event);
     
     MainFrame* m_mainFrame;
     wxRichTextCtrl* m_chatDisplay;
@@ -102,6 +104,14 @@ private:
     
     // Pending downloads (file ID -> media info)
     std::map<int32_t, MediaInfo> m_pendingDownloads;
+    
+    // Hover debouncing
+    wxTimer m_hoverTimer;
+    MediaInfo m_pendingHoverMedia;
+    wxPoint m_pendingHoverPos;
+    int32_t m_lastShownMediaId;
+    long m_lastHoveredTextPos;
+    static const int HOVER_DELAY_MS = 150;  // Delay before showing popup
     
     // Colors
     wxColour m_bgColor;

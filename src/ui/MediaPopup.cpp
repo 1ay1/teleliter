@@ -48,6 +48,8 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_hasImage(false),
       m_isLoading(false),
       m_hasError(false),
+      m_loadingTimer(this, LOADING_TIMER_ID),
+      m_loadingFrame(0),
       m_mediaCtrl(nullptr),
       m_isPlayingVideo(false),
       m_loopVideo(false),
@@ -55,10 +57,14 @@ MediaPopup::MediaPopup(wxWindow* parent)
 {
     ApplyHexChatStyle();
     SetSize(MIN_WIDTH, MIN_HEIGHT);
+    
+    // Bind loading timer event
+    Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
 }
 
 MediaPopup::~MediaPopup()
 {
+    m_loadingTimer.Stop();
     DestroyMediaCtrl();
 }
 
@@ -112,18 +118,32 @@ void MediaPopup::DestroyMediaCtrl()
 void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 {
     std::cerr << "[MediaPopup] ShowMedia called: type=" << static_cast<int>(info.type)
-              << " id=" << info.id.ToStdString()
+              << " fileId=" << info.fileId
               << " localPath=" << info.localPath.ToStdString()
               << " emoji=" << info.emoji.ToStdString() << std::endl;
     
     m_mediaInfo = info;
     m_hasError = false;
     m_errorMessage.Clear();
-    m_isLoading = false;
     m_hasImage = false;
     
     // Stop any playing video first
     StopVideo();
+    
+    // Check if file needs to be downloaded
+    bool needsDownload = info.localPath.IsEmpty() || !wxFileExists(info.localPath);
+    if (needsDownload && info.fileId != 0) {
+        // Show loading state - file is being downloaded
+        m_isLoading = true;
+        m_loadingFrame = 0;
+        if (!m_loadingTimer.IsRunning()) {
+            m_loadingTimer.Start(150);  // Animate every 150ms
+        }
+        std::cerr << "[MediaPopup] File needs download, showing loading state" << std::endl;
+    } else {
+        m_isLoading = false;
+        m_loadingTimer.Stop();
+    }
     
     // If we have a local path, try to load it
     if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
@@ -147,7 +167,14 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         }
         // For unsupported formats (.tgs animated stickers, etc.), we'll show emoji placeholder
     } else {
-        std::cerr << "[MediaPopup] No local file or file doesn't exist" << std::endl;
+        std::cerr << "[MediaPopup] No local file or file doesn't exist, isDownloading=" << info.isDownloading << std::endl;
+        // If downloading, keep showing loading state
+        if (info.isDownloading || info.fileId != 0) {
+            m_isLoading = true;
+            if (!m_loadingTimer.IsRunning()) {
+                m_loadingTimer.Start(150);
+            }
+        }
     }
     // Otherwise we'll show a placeholder in OnPaint
     
@@ -300,6 +327,7 @@ void MediaPopup::SetImage(const wxImage& image)
     StopVideo();
     
     m_isLoading = false;
+    m_loadingTimer.Stop();
     m_hasError = false;
     
     // Scale image to fit within max dimensions while preserving aspect ratio
@@ -337,10 +365,24 @@ void MediaPopup::ShowLoading()
 {
     StopVideo();
     m_isLoading = true;
+    m_loadingFrame = 0;
+    if (!m_loadingTimer.IsRunning()) {
+        m_loadingTimer.Start(150);
+    }
     m_hasImage = false;
     m_hasError = false;
     UpdateSize();
     Refresh();
+}
+
+void MediaPopup::OnLoadingTimer(wxTimerEvent& event)
+{
+    m_loadingFrame = (m_loadingFrame + 1) % 8;
+    if (IsShown() && m_isLoading) {
+        Refresh();
+    } else {
+        m_loadingTimer.Stop();
+    }
 }
 
 void MediaPopup::ShowError(const wxString& message)
@@ -477,23 +519,25 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int textY = (size.GetHeight() - textSize.GetHeight()) / 2;
         dc.DrawText(errorText, textX, textY);
     } else if (m_isLoading) {
-        // Loading state - show icon with "Loading..."
-        wxString icon = GetMediaIcon();
+        // Loading state - show animated spinner with "Downloading..."
+        static const wxString spinners[] = {"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"};
+        wxString spinner = spinners[m_loadingFrame % 8];
+        
         dc.SetFont(wxFont(32, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-        dc.SetTextForeground(m_textColor);
+        dc.SetTextForeground(wxColour(0x72, 0x9F, 0xCF));  // Blue for downloading
         
-        wxSize iconSize = dc.GetTextExtent(icon);
-        int iconX = (size.GetWidth() - iconSize.GetWidth()) / 2;
-        int iconY = contentY + 5;
-        dc.DrawText(icon, iconX, iconY);
+        wxSize spinnerSize = dc.GetTextExtent(spinner);
+        int spinnerX = (size.GetWidth() - spinnerSize.GetWidth()) / 2;
+        int spinnerY = contentY + 5;
+        dc.DrawText(spinner, spinnerX, spinnerY);
         
-        // Draw "Loading..." text below
+        // Draw "Downloading..." text below
         dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
         dc.SetTextForeground(m_labelColor);
-        wxString statusText = "Loading...";
+        wxString statusText = "Downloading...";
         wxSize statusSize = dc.GetTextExtent(statusText);
         int statusX = (size.GetWidth() - statusSize.GetWidth()) / 2;
-        int statusY = iconY + iconSize.GetHeight() + 8;
+        int statusY = spinnerY + spinnerSize.GetHeight() + 8;
         dc.DrawText(statusText, statusX, statusY);
     } else {
         // Placeholder state - show media type icon and info

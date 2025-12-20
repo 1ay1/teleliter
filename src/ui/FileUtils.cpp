@@ -1,5 +1,6 @@
 #include "FileUtils.h"
 #include <wx/filename.h>
+#include <iostream>
 
 #ifdef HAVE_WEBP
 #include <webp/decode.h>
@@ -131,14 +132,19 @@ bool IsNativelySupportedImageFormat(const wxString& path)
 #ifdef HAVE_WEBP
 static bool LoadWebPImage(const wxString& path, wxImage& outImage)
 {
+    std::cerr << "[FileUtils] LoadWebPImage: " << path.ToStdString() << std::endl;
+    
     // Read file into memory
     std::ifstream file(path.ToStdString(), std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
+        std::cerr << "[FileUtils] LoadWebPImage: failed to open file" << std::endl;
         return false;
     }
     
     std::streamsize size = file.tellg();
+    std::cerr << "[FileUtils] LoadWebPImage: file size=" << size << std::endl;
     if (size <= 0) {
+        std::cerr << "[FileUtils] LoadWebPImage: invalid file size" << std::endl;
         return false;
     }
     
@@ -152,8 +158,10 @@ static bool LoadWebPImage(const wxString& path, wxImage& outImage)
     // Get WebP image info
     int width = 0, height = 0;
     if (!WebPGetInfo(buffer.data(), buffer.size(), &width, &height)) {
+        std::cerr << "[FileUtils] LoadWebPImage: WebPGetInfo failed" << std::endl;
         return false;
     }
+    std::cerr << "[FileUtils] LoadWebPImage: dimensions " << width << "x" << height << std::endl;
     
     if (width <= 0 || height <= 0) {
         return false;
@@ -162,6 +170,7 @@ static bool LoadWebPImage(const wxString& path, wxImage& outImage)
     // Decode WebP to RGBA
     uint8_t* rgba = WebPDecodeRGBA(buffer.data(), buffer.size(), &width, &height);
     if (!rgba) {
+        std::cerr << "[FileUtils] LoadWebPImage: WebPDecodeRGBA failed" << std::endl;
         return false;
     }
     
@@ -174,6 +183,7 @@ static bool LoadWebPImage(const wxString& path, wxImage& outImage)
     }
     
     outImage.InitAlpha();
+    std::cerr << "[FileUtils] LoadWebPImage: successfully decoded" << std::endl;
     
     unsigned char* imgData = outImage.GetData();
     unsigned char* alphaData = outImage.GetAlpha();
@@ -192,18 +202,24 @@ static bool LoadWebPImage(const wxString& path, wxImage& outImage)
 
 bool LoadImageWithWebPSupport(const wxString& path, wxImage& outImage)
 {
+    std::cerr << "[FileUtils] LoadImageWithWebPSupport: " << path.ToStdString() << std::endl;
+    
     if (!wxFileExists(path)) {
+        std::cerr << "[FileUtils] File does not exist" << std::endl;
         return false;
     }
     
     wxFileName fn(path);
     wxString ext = fn.GetExt().Lower();
+    std::cerr << "[FileUtils] Extension: " << ext.ToStdString() << std::endl;
     
     // Handle WebP files specially
     if (ext == "webp") {
 #ifdef HAVE_WEBP
+        std::cerr << "[FileUtils] Loading as WebP" << std::endl;
         return LoadWebPImage(path, outImage);
 #else
+        std::cerr << "[FileUtils] WebP not supported (HAVE_WEBP not defined)" << std::endl;
         // WebP not supported - return false
         return false;
 #endif
@@ -211,9 +227,28 @@ bool LoadImageWithWebPSupport(const wxString& path, wxImage& outImage)
     
     // For other formats, use wxImage's native loading
     if (IsNativelySupportedImageFormat(path)) {
-        return outImage.LoadFile(path);
+        std::cerr << "[FileUtils] Loading with wxImage::LoadFile" << std::endl;
+        bool result = outImage.LoadFile(path);
+        std::cerr << "[FileUtils] wxImage::LoadFile result: " << result << std::endl;
+        if (!result) {
+            std::cerr << "[FileUtils] wxImage error - trying to get more info" << std::endl;
+            // Try loading with explicit type
+            wxImage testImg;
+            if (ext == "jpg" || ext == "jpeg") {
+                result = testImg.LoadFile(path, wxBITMAP_TYPE_JPEG);
+                std::cerr << "[FileUtils] Explicit JPEG load: " << result << std::endl;
+            } else if (ext == "png") {
+                result = testImg.LoadFile(path, wxBITMAP_TYPE_PNG);
+                std::cerr << "[FileUtils] Explicit PNG load: " << result << std::endl;
+            }
+            if (result) {
+                outImage = testImg;
+            }
+        }
+        return result;
     }
     
+    std::cerr << "[FileUtils] Unsupported format: " << ext.ToStdString() << std::endl;
     // Unsupported format
     return false;
 }

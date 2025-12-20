@@ -18,7 +18,7 @@ enum class MediaType {
 // Media info structure
 struct MediaInfo {
     MediaType type;
-    wxString id;              // TDLib file ID
+    int32_t fileId;           // TDLib file ID (0 if not applicable)
     wxString localPath;       // Local cached path (if downloaded)
     wxString remoteUrl;       // Remote URL (if available)
     wxString fileName;        // For files
@@ -26,10 +26,11 @@ struct MediaInfo {
     wxString caption;         // Media caption
     wxString emoji;           // For stickers/reactions
     wxString reactedBy;       // For reactions - who reacted
+    bool isDownloading;       // True if download is in progress
     int width;
     int height;
     
-    MediaInfo() : type(MediaType::Photo), width(0), height(0) {}
+    MediaInfo() : type(MediaType::Photo), fileId(0), isDownloading(false), width(0), height(0) {}
 };
 
 // Tracks media spans in the chat display

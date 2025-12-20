@@ -16,6 +16,9 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_messageFormatter(nullptr),
       m_mediaPopup(nullptr),
       m_editHistoryPopup(nullptr),
+      m_hoverTimer(this),
+      m_lastShownMediaId(0),
+      m_lastHoveredTextPos(-1),
       m_bgColor(0x2B, 0x2B, 0x2B),
       m_fgColor(0xD3, 0xD7, 0xCF),
       m_timestampColor(0x88, 0x88, 0x88),
@@ -29,6 +32,8 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_highlightColor(0xFC, 0xAF, 0x3E),
       m_noticeColor(0xAD, 0x7F, 0xA8)
 {
+    // Bind hover timer event
+    Bind(wxEVT_TIMER, &ChatViewWidget::OnHoverTimer, this, m_hoverTimer.GetId());
     // Initialize default user colors
     m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
     m_userColors[1]  = wxColour(0x35, 0x36, 0xB2);
@@ -153,7 +158,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasPhoto) {
         MediaInfo info;
         info.type = MediaType::Photo;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         info.caption = msg.mediaCaption;
         
@@ -167,7 +172,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasVideo) {
         MediaInfo info;
         info.type = MediaType::Video;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         info.fileName = msg.mediaFileName;
         info.caption = msg.mediaCaption;
@@ -182,7 +187,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasDocument) {
         MediaInfo info;
         info.type = MediaType::File;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         info.fileName = msg.mediaFileName;
         info.fileSize = wxString::Format("%lld bytes", msg.mediaFileSize);
@@ -198,7 +203,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasVoice) {
         MediaInfo info;
         info.type = MediaType::Voice;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         
         long startPos = m_chatDisplay->GetLastPosition();
@@ -211,7 +216,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasVideoNote) {
         MediaInfo info;
         info.type = MediaType::VideoNote;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         
         long startPos = m_chatDisplay->GetLastPosition();
@@ -230,7 +235,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         
         MediaInfo info;
         info.type = MediaType::Sticker;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         info.emoji = msg.mediaCaption;  // Sticker emoji is stored in mediaCaption
         
@@ -245,7 +250,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
     if (msg.hasAnimation) {
         MediaInfo info;
         info.type = MediaType::GIF;
-        info.id = wxString::Format("%d", msg.mediaFileId);
+        info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         
         long startPos = m_chatDisplay->GetLastPosition();
@@ -558,7 +563,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     // Don't re-show if already showing the same media (prevents flickering and video restart)
     if (m_mediaPopup->IsShown()) {
         const MediaInfo& currentInfo = m_mediaPopup->GetMediaInfo();
-        if (currentInfo.id == info.id && currentInfo.type == info.type) {
+        if (currentInfo.fileId == info.fileId && currentInfo.fileId != 0 && currentInfo.type == info.type) {
             // Same media already showing, just update position if needed
             return;
         }
@@ -588,16 +593,14 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     
     // If the file isn't downloaded yet, trigger a download
     if (info.localPath.IsEmpty() || !wxFileExists(info.localPath) || needsVideoDownload) {
-        if (!info.id.IsEmpty() && m_mainFrame) {
-            long fileId = 0;
-            if (info.id.ToLong(&fileId) && fileId != 0) {
-                TelegramClient* client = m_mainFrame->GetTelegramClient();
-                if (client) {
-                    // Start download with high priority for preview
-                    client->DownloadFile(static_cast<int32_t>(fileId), 10);
-                    // Track this as a pending download so we can update popup when complete
-                    AddPendingDownload(static_cast<int32_t>(fileId), info);
-                }
+        if (info.fileId != 0 && m_mainFrame) {
+            TelegramClient* client = m_mainFrame->GetTelegramClient();
+            if (client) {
+                std::cerr << "[ChatViewWidget] Starting download for fileId=" << info.fileId << std::endl;
+                // Start download with high priority for preview
+                client->DownloadFile(info.fileId, 10);
+                // Track this as a pending download so we can update popup when complete
+                AddPendingDownload(info.fileId, info);
             }
         }
     }
@@ -611,6 +614,9 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
 
 void ChatViewWidget::HideMediaPopup()
 {
+    // Clear tracking state
+    m_lastShownMediaId = 0;
+    
     if (m_mediaPopup) {
         // Stop video playback when hiding
         m_mediaPopup->StopVideo();
@@ -620,13 +626,18 @@ void ChatViewWidget::HideMediaPopup()
 
 void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
 {
-    if (!m_mediaPopup || !m_mediaPopup->IsShown()) return;
+    std::cerr << "[ChatViewWidget] UpdateMediaPopup called: fileId=" << fileId << " path=" << localPath.ToStdString() << std::endl;
+    
+    if (!m_mediaPopup || !m_mediaPopup->IsShown()) {
+        std::cerr << "[ChatViewWidget] UpdateMediaPopup: popup not shown, skipping" << std::endl;
+        return;
+    }
     
     // Check if this file ID matches the current popup's media
     const MediaInfo& currentInfo = m_mediaPopup->GetMediaInfo();
-    long currentFileId = 0;
+    std::cerr << "[ChatViewWidget] UpdateMediaPopup: popup fileId=" << currentInfo.fileId << " comparing with " << fileId << std::endl;
     
-    if (currentInfo.id.ToLong(&currentFileId) && currentFileId == fileId) {
+    if (currentInfo.fileId == fileId) {
         // Check if this is a video/GIF that should be played
         wxFileName fn(localPath);
         wxString ext = fn.GetExt().Lower();
@@ -653,15 +664,12 @@ void ChatViewWidget::OpenMedia(const MediaInfo& info)
     if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
         // Open with default application
         wxLaunchDefaultApplication(info.localPath);
-    } else if (!info.id.IsEmpty() && m_mainFrame) {
-        // Need to download first - parse file ID from string
-        long fileId = 0;
-        if (info.id.ToLong(&fileId) && fileId != 0) {
-            TelegramClient* client = m_mainFrame->GetTelegramClient();
-            if (client) {
-                AddPendingDownload(static_cast<int32_t>(fileId), info);
-                client->DownloadFile(static_cast<int32_t>(fileId));
-            }
+    } else if (info.fileId != 0 && m_mainFrame) {
+        // Need to download first
+        TelegramClient* client = m_mainFrame->GetTelegramClient();
+        if (client) {
+            AddPendingDownload(info.fileId, info);
+            client->DownloadFile(info.fileId);
         }
     }
 }
@@ -703,10 +711,30 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
                 span->info.type == MediaType::GIF ||
                 span->info.type == MediaType::Video ||
                 span->info.type == MediaType::VideoNote) {
-                wxPoint screenPos = ctrl->ClientToScreen(pos);
-                ShowMediaPopup(span->info, screenPos);
+                
+                // Check if we're still hovering the same media
+                if (m_lastShownMediaId == span->info.fileId && m_mediaPopup && m_mediaPopup->IsShown()) {
+                    // Already showing this media, just update position slightly if needed
+                    event.Skip();
+                    return;
+                }
+                
+                // Check if we're hovering a new media span
+                if (m_lastHoveredTextPos != textPos || m_pendingHoverMedia.fileId != span->info.fileId) {
+                    // New media span - start debounce timer
+                    m_hoverTimer.Stop();
+                    m_pendingHoverMedia = span->info;
+                    m_pendingHoverPos = ctrl->ClientToScreen(pos);
+                    m_lastHoveredTextPos = textPos;
+                    m_hoverTimer.StartOnce(HOVER_DELAY_MS);
+                }
             }
         } else {
+            // Not over a media span - cancel pending hover and hide popup
+            m_hoverTimer.Stop();
+            m_lastHoveredTextPos = -1;
+            m_pendingHoverMedia = MediaInfo();
+            
             // Check for link span
             LinkSpan* linkSpan = GetLinkSpanAtPosition(textPos);
             if (linkSpan) {
@@ -728,6 +756,10 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
             }
         }
     } else {
+        // Not over text - cancel everything
+        m_hoverTimer.Stop();
+        m_lastHoveredTextPos = -1;
+        m_pendingHoverMedia = MediaInfo();
         ctrl->SetCursor(wxCursor(wxCURSOR_DEFAULT));
         HideMediaPopup();
     }
@@ -735,8 +767,23 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
     event.Skip();
 }
 
+void ChatViewWidget::OnHoverTimer(wxTimerEvent& event)
+{
+    // Timer fired - show the popup if we still have pending media
+    if (m_pendingHoverMedia.fileId != 0 || !m_pendingHoverMedia.localPath.IsEmpty()) {
+        m_lastShownMediaId = m_pendingHoverMedia.fileId;
+        ShowMediaPopup(m_pendingHoverMedia, m_pendingHoverPos);
+    }
+}
+
 void ChatViewWidget::OnMouseLeave(wxMouseEvent& event)
 {
+    // Cancel any pending hover
+    m_hoverTimer.Stop();
+    m_lastHoveredTextPos = -1;
+    m_lastShownMediaId = 0;
+    m_pendingHoverMedia = MediaInfo();
+    
     HideMediaPopup();
     HideEditHistoryPopup();
     if (m_chatDisplay) {

@@ -5,6 +5,7 @@
 #include <wx/popupwin.h>
 #include <wx/dcbuffer.h>
 #include <wx/mediactrl.h>
+#include <wx/timer.h>
 #include "MediaTypes.h"
 
 // HexChat-style popup for media preview
@@ -32,6 +33,7 @@ protected:
     void OnMediaLoaded(wxMediaEvent& event);
     void OnMediaFinished(wxMediaEvent& event);
     void OnMediaStop(wxMediaEvent& event);
+    void OnLoadingTimer(wxTimerEvent& event);
     
 private:
     void UpdateSize();
@@ -52,6 +54,11 @@ private:
     bool m_isLoading;
     bool m_hasError;
     wxString m_errorMessage;
+    
+    // Loading animation
+    wxTimer m_loadingTimer;
+    int m_loadingFrame;
+    static const int LOADING_TIMER_ID = 10001;
     
     // Video/GIF playback
     wxMediaCtrl* m_mediaCtrl;
