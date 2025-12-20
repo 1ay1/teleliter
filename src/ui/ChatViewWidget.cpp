@@ -417,9 +417,11 @@ void ChatViewWidget::ClearMessages()
     ClearEditSpans();
     ClearLinkSpans();
 
-    // Reset message grouping state
+    // Reset message grouping state and marker tracking
     if (m_messageFormatter) {
         m_messageFormatter->ResetGroupingState();
+        // Reset marker tracking (marker was deleted with the clear, just reset tracking)
+        m_messageFormatter->ResetUnreadMarker();
     }
     m_lastDisplayedSender.Clear();
     m_lastDisplayedTimestamp = 0;

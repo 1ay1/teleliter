@@ -7,6 +7,8 @@ MessageFormatter::MessageFormatter(ChatArea* chatArea)
     : m_chatArea(chatArea ? chatArea : nullptr),
       m_lastMediaSpanStart(0),
       m_lastMediaSpanEnd(0),
+      m_unreadMarkerStart(-1),
+      m_unreadMarkerEnd(-1),
       m_lastTimestamp(0),
       m_lastDateDay(0)
 {
@@ -445,6 +447,9 @@ void MessageFormatter::AppendUnreadMarker()
 {
     if (!m_chatArea) return;
     
+    // Track start position of marker
+    m_unreadMarkerStart = m_chatArea->GetLastPosition();
+    
     // Ensure we start on a new line
     m_chatArea->WriteText("\n");
     
@@ -462,6 +467,24 @@ void MessageFormatter::AppendUnreadMarker()
     m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
     m_chatArea->WriteText(" ───────────────────────\n");
     m_chatArea->EndTextColour();
+    
+    // Track end position of marker
+    m_unreadMarkerEnd = m_chatArea->GetLastPosition();
+}
+
+void MessageFormatter::RemoveUnreadMarker()
+{
+    if (!m_chatArea || m_unreadMarkerStart < 0 || m_unreadMarkerEnd < 0) return;
+    
+    wxRichTextCtrl* display = m_chatArea->GetDisplay();
+    if (!display) return;
+    
+    // Delete the marker text range
+    display->Remove(m_unreadMarkerStart, m_unreadMarkerEnd);
+    
+    // Reset marker tracking
+    m_unreadMarkerStart = -1;
+    m_unreadMarkerEnd = -1;
 }
 
 void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxString& sender,

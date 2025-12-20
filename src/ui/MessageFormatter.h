@@ -50,6 +50,15 @@ public:
     // HexChat-style unread marker line
     void AppendUnreadMarker();
     
+    // Remove the unread marker if present (call when new messages arrive while viewing)
+    void RemoveUnreadMarker();
+    
+    // Reset marker tracking without trying to remove text (call when chat is cleared)
+    void ResetUnreadMarker() { m_unreadMarkerStart = -1; m_unreadMarkerEnd = -1; }
+    
+    // Check if marker is present
+    bool HasUnreadMarker() const { return m_unreadMarkerStart >= 0; }
+    
     // Date separator (HexChat style: "--- Today ---", "--- Monday, Jan 15 ---")
     void AppendDateSeparator(const wxString& dateText);
     void AppendDateSeparatorForTime(int64_t unixTime);
@@ -93,6 +102,10 @@ private:
     // Last media span positions
     long m_lastMediaSpanStart;
     long m_lastMediaSpanEnd;
+    
+    // Unread marker position tracking
+    long m_unreadMarkerStart;
+    long m_unreadMarkerEnd;
     
     // Callback for link spans
     LinkSpanCallback m_linkSpanCallback;

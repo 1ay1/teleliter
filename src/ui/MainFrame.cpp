@@ -1479,6 +1479,14 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
         return;
     }
     
+    // Remove the "read up to here" marker if present, since user is actively viewing
+    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+        MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
+        if (formatter->HasUnreadMarker()) {
+            formatter->RemoveUnreadMarker();
+        }
+    }
+    
     // Display the new message
     DisplayMessage(message);
     if (m_chatViewWidget) {
