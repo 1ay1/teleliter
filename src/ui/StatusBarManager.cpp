@@ -18,14 +18,14 @@ StatusBarManager::StatusBarManager(wxFrame* parent)
       m_currentChatMemberCount(0),
       m_totalChats(0),
       m_unreadChats(0),
-      m_telegramClient(nullptr),
       m_bgColor(0x2B, 0x2B, 0x2B),
       m_fgColor(0xD3, 0xD7, 0xCF),
       m_onlineColor(0x4E, 0xC9, 0x4E),      // Green
       m_connectingColor(0xFC, 0xAF, 0x3E),  // Yellow/Orange
       m_offlineColor(0xCC, 0x00, 0x00),     // Red
       m_successColor(0x4E, 0xC9, 0x4E),     // Green
-      m_errorColor(0xCC, 0x00, 0x00)        // Red
+      m_errorColor(0xCC, 0x00, 0x00),       // Red
+      m_telegramClient(nullptr)
 {
     m_transferTimer.Start();
     m_sessionTimer.Start();
@@ -44,8 +44,13 @@ void StatusBarManager::Setup()
     m_statusBar = m_parent->CreateStatusBar(5);
     m_statusBar->SetBackgroundColour(m_bgColor);
     
-    int widths[] = {-3, 80, 280, 100, 140};
+    // Negative values are proportional: -3 for chat info, -2 for transfer label
+    // Positive values are fixed pixel widths
+    int widths[] = {-3, 80, -2, 100, 140};
     m_statusBar->SetStatusWidths(5, widths);
+    
+    // Bind size event to reposition widgets when status bar resizes
+    m_statusBar->Bind(wxEVT_SIZE, &StatusBarManager::OnStatusBarResize, this);
     
     // Create progress label (in field 2)
     m_progressLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
@@ -82,6 +87,41 @@ void StatusBarManager::Setup()
     // Initial status
     m_parent->SetStatusText("Not logged in", 0);
     m_parent->SetStatusText("00:00:00", 1);
+}
+
+void StatusBarManager::RepositionWidgets()
+{
+    if (!m_statusBar) return;
+    
+    // Reposition progress label
+    if (m_progressLabel) {
+        wxRect labelRect;
+        m_statusBar->GetFieldRect(2, labelRect);
+        m_progressLabel->SetPosition(wxPoint(labelRect.x + 2, labelRect.y + 2));
+        m_progressLabel->SetSize(labelRect.width - 4, labelRect.height - 4);
+    }
+    
+    // Reposition progress gauge
+    if (m_progressGauge) {
+        wxRect gaugeRect;
+        m_statusBar->GetFieldRect(3, gaugeRect);
+        m_progressGauge->SetPosition(wxPoint(gaugeRect.x + 2, gaugeRect.y + 2));
+        m_progressGauge->SetSize(gaugeRect.width - 4, gaugeRect.height - 4);
+    }
+    
+    // Reposition connection label
+    if (m_connectionLabel) {
+        wxRect connRect;
+        m_statusBar->GetFieldRect(4, connRect);
+        m_connectionLabel->SetPosition(wxPoint(connRect.x + 2, connRect.y + 2));
+        m_connectionLabel->SetSize(connRect.width - 4, connRect.height - 4);
+    }
+}
+
+void StatusBarManager::OnStatusBarResize(wxSizeEvent& event)
+{
+    RepositionWidgets();
+    event.Skip();
 }
 
 void StatusBarManager::UpdateStatusBar()
@@ -182,7 +222,6 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
     
     // Format components
     wxString speedStr = FormatSpeed(m_currentSpeed);
-    wxString sizeStr = FormatSizeProgress(info.transferredBytes, info.totalBytes);
     
     // Calculate ETA
     wxString etaStr;
@@ -191,22 +230,23 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
         etaStr = FormatETA(remaining, m_currentSpeed);
     }
     
-    // Build progress bar
+    // Build progress bar (shorter width to save space)
     int percent = info.GetProgressPercent();
-    wxString progressBar = BuildProgressBar(percent);
+    wxString progressBar = BuildProgressBar(percent, 6);
     
     // Direction symbol
     wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
     
     // Truncate filename if too long
     wxString fileName = info.fileName;
-    if (fileName.length() > 15) {
-        fileName = fileName.Left(12) + "...";
+    if (fileName.length() > 18) {
+        fileName = fileName.Left(15) + "...";
     }
     
-    // Build final label: "◐ ⬇ file.jpg ████░░░░ 45% 1.2MB/s ~5s"
-    wxString label = wxString::Format("%s %s %s %s %d%% %s%s",
-        spinner, dirSymbol, fileName, progressBar, percent, speedStr, etaStr);
+    // Build final label: "◐ ⬇ file.jpg ██░░ 1.2/5.0 MB 45% 1.2MB/s ~5s"
+    wxString sizeStr = FormatSizeProgress(info.transferredBytes, info.totalBytes);
+    wxString label = wxString::Format("%s%s %s %s %s %d%% %s%s",
+        spinner, dirSymbol, fileName, progressBar, sizeStr, percent, speedStr, etaStr);
     
     m_progressLabel->SetForegroundColour(m_fgColor);
     m_progressLabel->SetLabel(label);

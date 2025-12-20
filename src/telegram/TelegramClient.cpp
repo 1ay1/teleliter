@@ -1232,15 +1232,16 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         }
                     }
                     
-                    // Also try thumbnail for sticker
+                    // Track thumbnail separately for animated sticker preview
+                    // Thumbnails are usually WebP/JPEG which we can display
                     if (c.sticker_->thumbnail_ && c.sticker_->thumbnail_->file_) {
+                        info.mediaThumbnailFileId = c.sticker_->thumbnail_->file_->id_;
+                        
                         if (c.sticker_->thumbnail_->file_->local_->is_downloading_completed_) {
-                            if (info.mediaLocalPath.IsEmpty()) {
-                                info.mediaLocalPath = wxString::FromUTF8(c.sticker_->thumbnail_->file_->local_->path_);
-                            }
+                            info.mediaThumbnailPath = wxString::FromUTF8(c.sticker_->thumbnail_->file_->local_->path_);
                         } else if (!c.sticker_->thumbnail_->file_->local_->is_downloading_active_) {
-                            // Auto-download sticker thumbnail
-                            this->DownloadFile(c.sticker_->thumbnail_->file_->id_, 5);
+                            // Auto-download sticker thumbnail (higher priority for preview)
+                            this->DownloadFile(c.sticker_->thumbnail_->file_->id_, 10);
                         }
                     }
                 }

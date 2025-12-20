@@ -7,6 +7,16 @@
 #include <wx/mediactrl.h>
 #include <wx/timer.h>
 #include "MediaTypes.h"
+#include <memory>
+
+// Forward declarations
+class LottiePlayer;
+class WebmPlayer;
+
+// Timer IDs
+static const int LOADING_TIMER_ID = 10001;
+static const int LOTTIE_ANIM_TIMER_ID = 10002;
+static const int WEBM_ANIM_TIMER_ID = 10003;
 
 // HexChat-style popup for media preview
 class MediaPopup : public wxPopupWindow
@@ -26,6 +36,16 @@ public:
     void StopVideo();
     bool IsPlayingVideo() const { return m_isPlayingVideo; }
     
+    // Animated sticker (.tgs) playback
+    void PlayAnimatedSticker(const wxString& path);
+    void StopAnimatedSticker();
+    bool IsPlayingAnimatedSticker() const { return m_isPlayingSticker; }
+    
+    // WebM video sticker playback
+    void PlayWebmSticker(const wxString& path);
+    void StopWebmSticker();
+    bool IsPlayingWebmSticker() const { return m_isPlayingWebm; }
+    
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
     
 protected:
@@ -34,6 +54,10 @@ protected:
     void OnMediaFinished(wxMediaEvent& event);
     void OnMediaStop(wxMediaEvent& event);
     void OnLoadingTimer(wxTimerEvent& event);
+    void OnLottieAnimTimer(wxTimerEvent& event);
+    void OnLottieFrame(const wxBitmap& frame);
+    void OnWebmAnimTimer(wxTimerEvent& event);
+    void OnWebmFrame(const wxBitmap& frame);
     
 private:
     void UpdateSize();
@@ -42,6 +66,7 @@ private:
     wxString GetMediaIcon() const;
     void CreateMediaCtrl();
     void DestroyMediaCtrl();
+    void FallbackToThumbnail();
     
     wxColour m_bgColor;
     wxColour m_borderColor;
@@ -58,7 +83,6 @@ private:
     // Loading animation
     wxTimer m_loadingTimer;
     int m_loadingFrame;
-    static const int LOADING_TIMER_ID = 10001;
     
     // Video/GIF playback
     wxMediaCtrl* m_mediaCtrl;
@@ -66,6 +90,16 @@ private:
     bool m_loopVideo;
     bool m_videoMuted;
     wxString m_videoPath;
+    
+    // Animated sticker playback (Lottie .tgs)
+    std::unique_ptr<LottiePlayer> m_lottiePlayer;
+    bool m_isPlayingSticker;
+    wxTimer m_lottieAnimTimer;
+    
+    // WebM video sticker playback
+    std::unique_ptr<WebmPlayer> m_webmPlayer;
+    bool m_isPlayingWebm;
+    wxTimer m_webmAnimTimer;
     
     static constexpr int MAX_WIDTH = 250;
     static constexpr int MAX_HEIGHT = 200;

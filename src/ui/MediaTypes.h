@@ -30,7 +30,11 @@ struct MediaInfo {
     int width;
     int height;
     
-    MediaInfo() : type(MediaType::Photo), fileId(0), isDownloading(false), width(0), height(0) {}
+    // For animated stickers - thumbnail for static preview
+    int32_t thumbnailFileId;
+    wxString thumbnailPath;
+    
+    MediaInfo() : type(MediaType::Photo), fileId(0), isDownloading(false), width(0), height(0), thumbnailFileId(0) {}
 };
 
 // Tracks media spans in the chat display

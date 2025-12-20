@@ -1,5 +1,7 @@
 #include "MediaPopup.h"
 #include "FileUtils.h"
+#include "LottiePlayer.h"
+#include "WebmPlayer.h"
 #include <wx/filename.h>
 #include <iostream>
 
@@ -53,19 +55,226 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_mediaCtrl(nullptr),
       m_isPlayingVideo(false),
       m_loopVideo(false),
-      m_videoMuted(true)
+      m_videoMuted(true),
+      m_isPlayingSticker(false),
+      m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID),
+      m_isPlayingWebm(false),
+      m_webmAnimTimer(this, WEBM_ANIM_TIMER_ID)
 {
     ApplyHexChatStyle();
     SetSize(MIN_WIDTH, MIN_HEIGHT);
     
     // Bind loading timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
+    
+    // Bind lottie animation timer event
+    Bind(wxEVT_TIMER, &MediaPopup::OnLottieAnimTimer, this, LOTTIE_ANIM_TIMER_ID);
+    
+    // Bind webm animation timer event
+    Bind(wxEVT_TIMER, &MediaPopup::OnWebmAnimTimer, this, WEBM_ANIM_TIMER_ID);
 }
 
 MediaPopup::~MediaPopup()
 {
     m_loadingTimer.Stop();
+    m_lottieAnimTimer.Stop();
+    m_webmAnimTimer.Stop();
+    StopAnimatedSticker();
+    StopWebmSticker();
     DestroyMediaCtrl();
+}
+
+// Sticker/animation format detection
+enum class StickerFormat {
+    Unknown,
+    Tgs,        // Lottie animation (gzip-compressed JSON) - needs rlottie
+    Webm,       // VP9 video sticker - play as video
+    Webp,       // Static or animated WebP - can be animated
+    Gif         // GIF animation - play as video
+};
+
+static StickerFormat DetectStickerFormat(const wxString& path)
+{
+    if (path.IsEmpty()) return StickerFormat::Unknown;
+    
+    wxFileName fn(path);
+    wxString ext = fn.GetExt().Lower();
+    
+    if (ext == "tgs") return StickerFormat::Tgs;
+    if (ext == "webm") return StickerFormat::Webm;
+    if (ext == "webp") return StickerFormat::Webp;
+    if (ext == "gif") return StickerFormat::Gif;
+    
+    return StickerFormat::Unknown;
+}
+
+static wxString StickerFormatToString(StickerFormat fmt)
+{
+    switch (fmt) {
+        case StickerFormat::Tgs: return "TGS (Lottie)";
+        case StickerFormat::Webm: return "WEBM (Video)";
+        case StickerFormat::Webp: return "WEBP";
+        case StickerFormat::Gif: return "GIF";
+        default: return "Unknown";
+    }
+}
+
+void MediaPopup::PlayAnimatedSticker(const wxString& path)
+{
+    std::cerr << "[MediaPopup] PlayAnimatedSticker: " << path.ToStdString() << std::endl;
+    
+    StopAnimatedSticker();
+    StopVideo();
+    
+    if (!m_lottiePlayer) {
+        m_lottiePlayer = std::make_unique<LottiePlayer>();
+    }
+    
+    // Set render size to fit popup
+    m_lottiePlayer->SetRenderSize(MAX_WIDTH - PADDING * 2, MAX_HEIGHT - PADDING * 2 - 20);
+    m_lottiePlayer->SetLoop(true);
+    
+    // Set callback to receive frames
+    m_lottiePlayer->SetFrameCallback([this](const wxBitmap& frame) {
+        OnLottieFrame(frame);
+    });
+    
+    if (m_lottiePlayer->LoadTgsFile(path)) {
+        m_isPlayingSticker = true;
+        m_lottiePlayer->Play();
+        
+        // Start our own timer to drive the animation (since LottiePlayer's timer may not fire)
+        int intervalMs = m_lottiePlayer->GetTimerIntervalMs();
+        std::cerr << "[MediaPopup] Starting lottie animation timer with interval " << intervalMs << "ms" << std::endl;
+        m_lottieAnimTimer.Start(intervalMs);
+        
+        std::cerr << "[MediaPopup] Started playing animated sticker" << std::endl;
+    } else {
+        std::cerr << "[MediaPopup] Failed to load animated sticker" << std::endl;
+        m_isPlayingSticker = false;
+    }
+}
+
+void MediaPopup::StopAnimatedSticker()
+{
+    m_lottieAnimTimer.Stop();
+    if (m_lottiePlayer) {
+        m_lottiePlayer->Stop();
+    }
+    m_isPlayingSticker = false;
+}
+
+void MediaPopup::PlayWebmSticker(const wxString& path)
+{
+#ifdef HAVE_WEBM
+    std::cerr << "[MediaPopup] PlayWebmSticker: " << path.ToStdString() << std::endl;
+    
+    StopWebmSticker();
+    StopAnimatedSticker();
+    StopVideo();
+    
+    if (!m_webmPlayer) {
+        m_webmPlayer = std::make_unique<WebmPlayer>();
+    }
+    
+    // Set render size to fit popup
+    m_webmPlayer->SetRenderSize(MAX_WIDTH - PADDING * 2, MAX_HEIGHT - PADDING * 2 - 20);
+    m_webmPlayer->SetLoop(true);
+    
+    // Set callback to receive frames
+    m_webmPlayer->SetFrameCallback([this](const wxBitmap& frame) {
+        OnWebmFrame(frame);
+    });
+    
+    if (m_webmPlayer->LoadFile(path)) {
+        m_isPlayingWebm = true;
+        m_webmPlayer->Play();
+        
+        // Start our own timer to drive the animation
+        int intervalMs = m_webmPlayer->GetTimerIntervalMs();
+        std::cerr << "[MediaPopup] Starting WebM animation timer with interval " << intervalMs << "ms" << std::endl;
+        m_webmAnimTimer.Start(intervalMs);
+        
+        std::cerr << "[MediaPopup] Started playing WebM sticker" << std::endl;
+    } else {
+        std::cerr << "[MediaPopup] Failed to load WebM sticker, falling back to thumbnail" << std::endl;
+        m_isPlayingWebm = false;
+        FallbackToThumbnail();
+    }
+#else
+    std::cerr << "[MediaPopup] WebM support not available, falling back to thumbnail" << std::endl;
+    FallbackToThumbnail();
+#endif
+}
+
+void MediaPopup::StopWebmSticker()
+{
+    m_webmAnimTimer.Stop();
+    if (m_webmPlayer) {
+        m_webmPlayer->Stop();
+    }
+    m_isPlayingWebm = false;
+}
+
+void MediaPopup::OnWebmAnimTimer(wxTimerEvent& event)
+{
+#ifdef HAVE_WEBM
+    if (m_webmPlayer && m_isPlayingWebm) {
+        if (!m_webmPlayer->AdvanceFrame()) {
+            // Animation ended (non-looping)
+            m_webmAnimTimer.Stop();
+            m_isPlayingWebm = false;
+        }
+    }
+#endif
+}
+
+void MediaPopup::OnWebmFrame(const wxBitmap& frame)
+{
+    if (frame.IsOk()) {
+        m_bitmap = frame;
+        m_hasImage = true;
+        // Use CallAfter to ensure refresh happens on main thread properly
+        CallAfter([this]() {
+            if (IsShown()) {
+                Refresh();
+                Update();
+            }
+        });
+    }
+}
+
+void MediaPopup::OnLottieAnimTimer(wxTimerEvent& event)
+{
+    if (m_lottiePlayer && m_isPlayingSticker) {
+        std::cerr << "[MediaPopup] OnLottieAnimTimer: advancing frame " << m_lottiePlayer->GetCurrentFrame() << std::endl;
+        if (!m_lottiePlayer->AdvanceFrame()) {
+            // Animation ended (non-looping)
+            std::cerr << "[MediaPopup] OnLottieAnimTimer: animation ended" << std::endl;
+            m_lottieAnimTimer.Stop();
+            m_isPlayingSticker = false;
+        }
+    } else {
+        std::cerr << "[MediaPopup] OnLottieAnimTimer: skipped (player=" << (m_lottiePlayer ? "yes" : "no") 
+                  << " playing=" << m_isPlayingSticker << ")" << std::endl;
+    }
+}
+
+void MediaPopup::OnLottieFrame(const wxBitmap& frame)
+{
+    std::cerr << "[MediaPopup] OnLottieFrame called, frame.IsOk()=" << frame.IsOk() << std::endl;
+    if (frame.IsOk()) {
+        m_bitmap = frame;
+        m_hasImage = true;
+        std::cerr << "[MediaPopup] OnLottieFrame: bitmap set, size=" << frame.GetWidth() << "x" << frame.GetHeight() << ", calling Refresh" << std::endl;
+        // Use CallAfter to ensure refresh happens on main thread properly
+        CallAfter([this]() {
+            if (IsShown()) {
+                Refresh();
+                Update();
+            }
+        });
+    }
 }
 
 void MediaPopup::ApplyHexChatStyle()
@@ -120,15 +329,164 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     std::cerr << "[MediaPopup] ShowMedia called: type=" << static_cast<int>(info.type)
               << " fileId=" << info.fileId
               << " localPath=" << info.localPath.ToStdString()
-              << " emoji=" << info.emoji.ToStdString() << std::endl;
+              << " emoji=" << info.emoji.ToStdString()
+              << " thumbnailFileId=" << info.thumbnailFileId
+              << " thumbnailPath=" << info.thumbnailPath.ToStdString() << std::endl;
     
     m_mediaInfo = info;
     m_hasError = false;
     m_errorMessage.Clear();
     m_hasImage = false;
     
-    // Stop any playing video first
+    // Stop any playing video/sticker first
     StopVideo();
+    StopAnimatedSticker();
+    
+    // For stickers, detect format and use appropriate renderer
+    if (info.type == MediaType::Sticker) {
+        bool hasLocalFile = !info.localPath.IsEmpty() && wxFileExists(info.localPath);
+        StickerFormat format = hasLocalFile ? DetectStickerFormat(info.localPath) : StickerFormat::Unknown;
+        
+        std::cerr << "[MediaPopup] Sticker check: localPath='" << info.localPath.ToStdString() 
+                  << "' hasLocalFile=" << hasLocalFile
+                  << " format=" << StickerFormatToString(format).ToStdString() << std::endl;
+        
+        if (hasLocalFile) {
+            switch (format) {
+                case StickerFormat::Webm:
+                    // WebM video stickers - use libvpx decoder
+#ifdef HAVE_WEBM
+                    std::cerr << "[MediaPopup] Playing WebM video sticker with libvpx: " << info.localPath.ToStdString() << std::endl;
+                    m_isLoading = false;
+                    m_loadingTimer.Stop();
+                    PlayWebmSticker(info.localPath);
+                    UpdateSize();
+                    SetPosition(pos);
+                    Show();
+                    Refresh();
+                    return;
+#else
+                    std::cerr << "[MediaPopup] WebM support not compiled in, trying wxMediaCtrl" << std::endl;
+                    m_isLoading = false;
+                    m_loadingTimer.Stop();
+                    PlayVideo(info.localPath, true, true);
+                    SetPosition(pos);
+                    Show();
+                    return;
+#endif
+                    
+                case StickerFormat::Gif:
+                    // GIF animations - should work on most platforms
+                    std::cerr << "[MediaPopup] Playing GIF sticker: " << info.localPath.ToStdString() << std::endl;
+                    m_isLoading = false;
+                    m_loadingTimer.Stop();
+                    PlayVideo(info.localPath, true, true);
+                    SetPosition(pos);
+                    Show();
+                    return;
+                    
+                case StickerFormat::Tgs:
+#ifdef HAVE_RLOTTIE
+                    // Lottie animation - use rlottie
+                    std::cerr << "[MediaPopup] Playing Lottie sticker: " << info.localPath.ToStdString() << std::endl;
+                    m_isLoading = false;
+                    m_loadingTimer.Stop();
+                    PlayAnimatedSticker(info.localPath);
+                    UpdateSize();
+                    SetPosition(pos);
+                    Show();
+                    Refresh();
+                    return;
+#else
+                    std::cerr << "[MediaPopup] TGS sticker but rlottie not available, trying thumbnail" << std::endl;
+                    break;  // Fall through to thumbnail
+#endif
+                    
+                case StickerFormat::Webp:
+                    // WebP can be static or animated - try to load as image
+                    // wxWidgets/libwebp handles animated WebP as static, but it's better than nothing
+                    std::cerr << "[MediaPopup] Loading WebP sticker: " << info.localPath.ToStdString() << std::endl;
+                    m_isLoading = false;
+                    m_loadingTimer.Stop();
+                    SetImage(info.localPath);
+                    UpdateSize();
+                    SetPosition(pos);
+                    Show();
+                    Refresh();
+                    return;
+                    
+                case StickerFormat::Unknown:
+                default:
+                    std::cerr << "[MediaPopup] Unknown sticker format, trying as image" << std::endl;
+                    // Try to load as image anyway
+                    if (IsSupportedImageFormat(info.localPath)) {
+                        m_isLoading = false;
+                        m_loadingTimer.Stop();
+                        SetImage(info.localPath);
+                        UpdateSize();
+                        SetPosition(pos);
+                        Show();
+                        Refresh();
+                        return;
+                    }
+                    break;  // Fall through to thumbnail
+            }
+        }
+        
+        // Fall back to thumbnail for preview (thumbnails are usually static WebP/JPEG)
+        if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
+            std::cerr << "[MediaPopup] Using sticker thumbnail: " << info.thumbnailPath.ToStdString() << std::endl;
+            m_isLoading = false;
+            m_loadingTimer.Stop();
+            SetImage(info.thumbnailPath);
+            UpdateSize();
+            SetPosition(pos);
+            Show();
+            Refresh();
+            return;
+        }
+        
+        // If .tgs file not downloaded yet but we have a file ID, show loading
+        if (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath))) {
+            std::cerr << "[MediaPopup] Sticker file needs download, showing loading state" << std::endl;
+            m_isLoading = true;
+            m_loadingFrame = 0;
+            if (!m_loadingTimer.IsRunning()) {
+                m_loadingTimer.Start(150);
+            }
+            UpdateSize();
+            SetPosition(pos);
+            Show();
+            Refresh();
+            return;
+        }
+        
+        // If thumbnail not available, check if we need to download it
+        if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
+            std::cerr << "[MediaPopup] Sticker thumbnail needs download, showing loading state" << std::endl;
+            m_isLoading = true;
+            m_loadingFrame = 0;
+            if (!m_loadingTimer.IsRunning()) {
+                m_loadingTimer.Start(150);
+            }
+            UpdateSize();
+            SetPosition(pos);
+            Show();
+            Refresh();
+            return;
+        }
+        
+        // No thumbnail available, fall through to show emoji placeholder
+        std::cerr << "[MediaPopup] No sticker thumbnail, showing emoji placeholder" << std::endl;
+        m_isLoading = false;
+        m_loadingTimer.Stop();
+        m_hasImage = false;
+        UpdateSize();
+        SetPosition(pos);
+        Show();
+        Refresh();
+        return;
+    }
     
     // Check if file needs to be downloaded
     bool needsDownload = info.localPath.IsEmpty() || !wxFileExists(info.localPath);
@@ -148,6 +506,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     // If we have a local path, try to load it
     if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
         std::cerr << "[MediaPopup] File exists: " << info.localPath.ToStdString() << std::endl;
+        
         // Check if it's a video/GIF that should be played
         if ((info.type == MediaType::Video || info.type == MediaType::GIF || 
              info.type == MediaType::VideoNote) && IsVideoFormat(info.localPath)) {
@@ -164,8 +523,9 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             SetImage(info.localPath);
         } else {
             std::cerr << "[MediaPopup] Unsupported format, showing placeholder" << std::endl;
+            m_isLoading = false;
+            m_loadingTimer.Stop();
         }
-        // For unsupported formats (.tgs animated stickers, etc.), we'll show emoji placeholder
     } else {
         std::cerr << "[MediaPopup] No local file or file doesn't exist, isDownloading=" << info.isDownloading << std::endl;
         // If downloading, keep showing loading state
@@ -177,12 +537,6 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         }
     }
     // Otherwise we'll show a placeholder in OnPaint
-    
-    // For stickers, ensure we have the emoji to display
-    if (info.type == MediaType::Sticker && !info.emoji.IsEmpty()) {
-        // Stickers will show the emoji prominently
-        m_hasImage = false;  // Force placeholder display with emoji
-    }
     
     std::cerr << "[MediaPopup] hasImage=" << m_hasImage << " showing popup" << std::endl;
     UpdateSize();
@@ -196,6 +550,9 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     std::cerr << "[MediaPopup] PlayVideo called: " << path.ToStdString() 
               << " loop=" << loop << " muted=" << muted << std::endl;
     
+    // Stop any animated sticker first
+    StopAnimatedSticker();
+    
     m_videoPath = path;
     m_loopVideo = loop;
     m_videoMuted = muted;
@@ -206,12 +563,9 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     CreateMediaCtrl();
     
     if (!m_mediaCtrl) {
-        // Fallback to placeholder if media control creation failed
-        std::cerr << "[MediaPopup] Failed to create media control" << std::endl;
-        m_hasError = true;
-        m_errorMessage = "Video playback not available";
-        UpdateSize();
-        Refresh();
+        // Fallback to thumbnail if media control creation failed
+        std::cerr << "[MediaPopup] Failed to create media control, trying thumbnail fallback" << std::endl;
+        FallbackToThumbnail();
         return;
     }
     
@@ -231,13 +585,39 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
         std::cerr << "[MediaPopup] Video load initiated, waiting for OnMediaLoaded" << std::endl;
         m_isLoading = true;
     } else {
-        std::cerr << "[MediaPopup] Failed to load video" << std::endl;
-        m_hasError = true;
-        m_errorMessage = "Failed to load video";
+        std::cerr << "[MediaPopup] Failed to load video, trying thumbnail fallback" << std::endl;
+        std::cerr << "[MediaPopup] Tip: For WebM video stickers on macOS, install FFmpeg: brew install ffmpeg" << std::endl;
         m_mediaCtrl->Hide();
+        FallbackToThumbnail();
     }
     
     Refresh();
+}
+
+void MediaPopup::FallbackToThumbnail()
+{
+    // Try to use the thumbnail from the current media info
+    if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
+        std::cerr << "[MediaPopup] Falling back to thumbnail: " << m_mediaInfo.thumbnailPath.ToStdString() << std::endl;
+        m_hasError = false;
+        m_errorMessage.Clear();
+        SetImage(m_mediaInfo.thumbnailPath);
+        UpdateSize();
+        Refresh();
+    } else if (!m_mediaInfo.emoji.IsEmpty()) {
+        // Show emoji placeholder
+        std::cerr << "[MediaPopup] Falling back to emoji placeholder: " << m_mediaInfo.emoji.ToStdString() << std::endl;
+        m_hasError = false;
+        m_errorMessage.Clear();
+        m_hasImage = false;
+        UpdateSize();
+        Refresh();
+    } else {
+        m_hasError = true;
+        m_errorMessage = "Media not available";
+        UpdateSize();
+        Refresh();
+    }
 }
 
 void MediaPopup::StopVideo()
@@ -248,6 +628,7 @@ void MediaPopup::StopVideo()
     }
     m_isPlayingVideo = false;
     m_videoPath.Clear();
+    // Note: Don't stop animated stickers here - they are independent
 }
 
 void MediaPopup::OnMediaLoaded(wxMediaEvent& event)

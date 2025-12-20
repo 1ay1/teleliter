@@ -1058,8 +1058,7 @@ void MainFrame::OnMemberListItemActivated(wxListEvent& event)
 
 void MainFrame::OnMemberListRightClick(wxListEvent& event)
 {
-    long index = event.GetIndex();
-    wxString username = m_memberList->GetItemText(index);
+    (void)event; // Unused for now
     
     wxMenu menu;
     menu.Append(wxID_ANY, "View Profile");

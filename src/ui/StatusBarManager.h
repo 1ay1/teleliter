@@ -100,6 +100,10 @@ private:
     wxString FormatSizeProgress(int64_t transferred, int64_t total) const;
     wxString FormatETA(int64_t remaining, double speed) const;
     wxString BuildProgressBar(int percent, int width = 10) const;
+    
+    // Layout helpers
+    void RepositionWidgets();
+    void OnStatusBarResize(wxSizeEvent& event);
 };
 
 #endif // STATUSBARMANAGER_H

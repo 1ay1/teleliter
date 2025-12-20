@@ -238,6 +238,11 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
         info.emoji = msg.mediaCaption;  // Sticker emoji is stored in mediaCaption
+        info.thumbnailFileId = msg.mediaThumbnailFileId;
+        info.thumbnailPath = msg.mediaThumbnailPath;
+        
+        std::cerr << "[Sticker]   thumbnailFileId=" << msg.mediaThumbnailFileId << std::endl;
+        std::cerr << "[Sticker]   thumbnailPath=" << msg.mediaThumbnailPath.ToStdString() << std::endl;
         
         long startPos = m_chatDisplay->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
@@ -569,6 +574,20 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         }
     }
     
+    // For stickers, download the thumbnail if not already available
+    if (info.type == MediaType::Sticker) {
+        if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
+            if (m_mainFrame) {
+                TelegramClient* client = m_mainFrame->GetTelegramClient();
+                if (client) {
+                    std::cerr << "[ChatViewWidget] Starting download for sticker thumbnail fileId=" << info.thumbnailFileId << std::endl;
+                    client->DownloadFile(info.thumbnailFileId, 10);
+                    AddPendingDownload(info.thumbnailFileId, info);
+                }
+            }
+        }
+    }
+    
     // For videos/GIFs, we need to check if the actual video is downloaded
     // (not just the thumbnail). If only thumbnail exists, trigger video download.
     bool needsVideoDownload = false;
@@ -633,9 +652,22 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
         return;
     }
     
-    // Check if this file ID matches the current popup's media
+    // Check if this file ID matches the current popup's media or thumbnail
     const MediaInfo& currentInfo = m_mediaPopup->GetMediaInfo();
-    std::cerr << "[ChatViewWidget] UpdateMediaPopup: popup fileId=" << currentInfo.fileId << " comparing with " << fileId << std::endl;
+    std::cerr << "[ChatViewWidget] UpdateMediaPopup: popup fileId=" << currentInfo.fileId 
+              << " thumbnailFileId=" << currentInfo.thumbnailFileId
+              << " comparing with " << fileId << std::endl;
+    
+    // Check if this is a sticker thumbnail download
+    if (currentInfo.type == MediaType::Sticker && currentInfo.thumbnailFileId == fileId) {
+        std::cerr << "[ChatViewWidget] UpdateMediaPopup: sticker thumbnail downloaded, showing preview" << std::endl;
+        MediaInfo updatedInfo = currentInfo;
+        updatedInfo.thumbnailPath = localPath;
+        updatedInfo.isDownloading = false;
+        wxPoint pos = m_mediaPopup->GetPosition();
+        m_mediaPopup->ShowMedia(updatedInfo, pos);
+        return;
+    }
     
     if (currentInfo.fileId == fileId) {
         // Check if this is a video/GIF that should be played
@@ -644,8 +676,19 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
         bool isVideo = (ext == "mp4" || ext == "webm" || ext == "avi" || 
                         ext == "mov" || ext == "mkv" || ext == "gif" ||
                         ext == "m4v" || ext == "ogv");
+        bool isTgsSticker = (ext == "tgs");
         
-        if (isVideo && (currentInfo.type == MediaType::Video || 
+        if (isTgsSticker) {
+            // .tgs animated stickers are Lottie/gzip format - can't render directly
+            // The thumbnail should have been downloaded separately; update and re-show
+            std::cerr << "[ChatViewWidget] UpdateMediaPopup: .tgs sticker file downloaded" << std::endl;
+            MediaInfo updatedInfo = currentInfo;
+            updatedInfo.localPath = localPath;
+            updatedInfo.isDownloading = false;
+            // Re-show the popup - it will use thumbnail if available, else emoji
+            wxPoint pos = m_mediaPopup->GetPosition();
+            m_mediaPopup->ShowMedia(updatedInfo, pos);
+        } else if (isVideo && (currentInfo.type == MediaType::Video || 
                         currentInfo.type == MediaType::GIF ||
                         currentInfo.type == MediaType::VideoNote)) {
             // Play video/GIF

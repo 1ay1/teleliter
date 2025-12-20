@@ -72,6 +72,10 @@ struct MessageInfo {
     wxString mediaLocalPath;
     int64_t mediaFileSize;
     
+    // For animated stickers - thumbnail for preview
+    int32_t mediaThumbnailFileId;
+    wxString mediaThumbnailPath;
+    
     int64_t replyToMessageId;
     wxString replyToText;
     
@@ -83,7 +87,8 @@ struct MessageInfo {
           isEdited(false), hasPhoto(false), hasVideo(false),
           hasDocument(false), hasVoice(false), hasVideoNote(false),
           hasSticker(false), hasAnimation(false), mediaFileId(0),
-          mediaFileSize(0), replyToMessageId(0), isForwarded(false) {}
+          mediaFileSize(0), mediaThumbnailFileId(0),
+          replyToMessageId(0), isForwarded(false) {}
 };
 
 // User info structure
