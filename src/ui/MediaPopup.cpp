@@ -52,6 +52,7 @@ MediaPopup::MediaPopup(wxWindow* parent)
     : wxPopupWindow(parent, wxBORDER_NONE),
       m_hasImage(false),
       m_isLoading(false),
+      m_isDownloadingMedia(false),
       m_hasError(false),
       m_loadingTimer(this, LOADING_TIMER_ID),
       m_loadingFrame(0),
@@ -62,7 +63,10 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_isPlayingSticker(false),
       m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID),
       m_isPlayingWebm(false),
-      m_webmAnimTimer(this, WEBM_ANIM_TIMER_ID)
+      m_webmAnimTimer(this, WEBM_ANIM_TIMER_ID),
+      m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID),
+      m_asyncLoadPending(false),
+      m_videoLoadStartTime(0)
 {
     // Set hand cursor to indicate popup is clickable
     SetCursor(wxCursor(wxCURSOR_HAND));
@@ -79,6 +83,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
     // Bind webm animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnWebmAnimTimer, this, WEBM_ANIM_TIMER_ID);
     
+    // Bind async load timer event
+    Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
+    
     // Bind click event to open media
     Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
 }
@@ -87,7 +94,9 @@ MediaPopup::~MediaPopup()
 {
     StopAllPlayback();
     m_loadingTimer.Stop();
+    m_asyncLoadTimer.Stop();
     DestroyMediaCtrl();
+    ClearFailedLoads();
 }
 
 void MediaPopup::StopAllPlayback()
@@ -96,6 +105,7 @@ void MediaPopup::StopAllPlayback()
     m_lottieAnimTimer.Stop();
     m_webmAnimTimer.Stop();
     m_loadingTimer.Stop();
+    m_asyncLoadTimer.Stop();
     
     // Stop video playback
     if (m_mediaCtrl) {
@@ -118,6 +128,9 @@ void MediaPopup::StopAllPlayback()
     
     // Reset loading state
     m_isLoading = false;
+    m_isDownloadingMedia = false;
+    m_asyncLoadPending = false;
+    m_pendingImagePath.Clear();
 }
 
 // Sticker/animation format detection
@@ -148,6 +161,13 @@ static StickerFormat DetectStickerFormat(const wxString& path)
 
 void MediaPopup::PlayAnimatedSticker(const wxString& path)
 {
+    // Check if this sticker has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("PlayAnimatedSticker: skipping recently failed sticker: " << path.ToStdString());
+        FallbackToThumbnail();
+        return;
+    }
+    
     // Stop all other playback first
     StopAllPlayback();
     
@@ -173,6 +193,8 @@ void MediaPopup::PlayAnimatedSticker(const wxString& path)
         int intervalMs = m_lottiePlayer->GetTimerIntervalMs();
         m_lottieAnimTimer.Start(intervalMs);
     } else {
+        MPLOG("PlayAnimatedSticker: failed to load: " << path.ToStdString());
+        MarkLoadFailed(path);
         m_isPlayingSticker = false;
         FallbackToThumbnail();
     }
@@ -190,6 +212,13 @@ void MediaPopup::StopAnimatedSticker()
 void MediaPopup::PlayWebmSticker(const wxString& path)
 {
 #ifdef HAVE_WEBM
+    // Check if this sticker has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("PlayWebmSticker: skipping recently failed sticker: " << path.ToStdString());
+        FallbackToThumbnail();
+        return;
+    }
+    
     // Stop all other playback first
     StopAllPlayback();
     
@@ -215,6 +244,8 @@ void MediaPopup::PlayWebmSticker(const wxString& path)
         int intervalMs = m_webmPlayer->GetTimerIntervalMs();
         m_webmAnimTimer.Start(intervalMs);
     } else {
+        MPLOG("PlayWebmSticker: failed to load: " << path.ToStdString());
+        MarkLoadFailed(path);
         m_isPlayingWebm = false;
         FallbackToThumbnail();
     }
@@ -324,6 +355,7 @@ void MediaPopup::CreateMediaCtrl()
     m_mediaCtrl->Bind(wxEVT_MEDIA_LOADED, &MediaPopup::OnMediaLoaded, this);
     m_mediaCtrl->Bind(wxEVT_MEDIA_FINISHED, &MediaPopup::OnMediaFinished, this);
     m_mediaCtrl->Bind(wxEVT_MEDIA_STOP, &MediaPopup::OnMediaStop, this);
+    m_mediaCtrl->Bind(wxEVT_MEDIA_STATECHANGED, &MediaPopup::OnMediaStateChanged, this);
 }
 
 void MediaPopup::DestroyMediaCtrl()
@@ -333,6 +365,7 @@ void MediaPopup::DestroyMediaCtrl()
         m_mediaCtrl->Unbind(wxEVT_MEDIA_LOADED, &MediaPopup::OnMediaLoaded, this);
         m_mediaCtrl->Unbind(wxEVT_MEDIA_FINISHED, &MediaPopup::OnMediaFinished, this);
         m_mediaCtrl->Unbind(wxEVT_MEDIA_STOP, &MediaPopup::OnMediaStop, this);
+        m_mediaCtrl->Unbind(wxEVT_MEDIA_STATECHANGED, &MediaPopup::OnMediaStateChanged, this);
         m_mediaCtrl->Destroy();
         m_mediaCtrl = nullptr;
     }
@@ -397,6 +430,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     m_hasError = false;
     m_errorMessage.Clear();
     m_hasImage = false;
+    m_isDownloadingMedia = false;
     
     // For stickers, detect format and use appropriate renderer
     if (info.type == MediaType::Sticker) {
@@ -511,7 +545,8 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         if ((info.type == MediaType::Video || info.type == MediaType::GIF || 
              info.type == MediaType::VideoNote) && IsVideoFormat(info.localPath)) {
             bool shouldLoop = (info.type == MediaType::GIF);
-            bool shouldMute = (info.type == MediaType::GIF || info.type == MediaType::VideoNote);
+            // Always mute preview popups - user can click to open with sound
+            bool shouldMute = true;
             // Set position BEFORE PlayVideo so the popup is in the right place
             SetPosition(pos);
             // PlayVideo will call Show() internally after setting up the media control
@@ -531,9 +566,12 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     // Try thumbnail if main file not available
     if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
         SetImage(info.thumbnailPath);
-        // If main file is downloading, show that we're still loading
+        // If main file is downloading, show downloading overlay on thumbnail
         if (info.isDownloading || (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath)))) {
-            // We have thumbnail but still downloading - could show a small indicator
+            m_isDownloadingMedia = true;
+            m_loadingFrame = 0;
+            m_loadingTimer.Start(150);  // Start timer for spinner animation
+            MPLOG("ShowMedia: showing thumbnail with downloading overlay");
         }
         UpdateSize();
         SetPosition(pos);
@@ -542,9 +580,10 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         return;
     }
     
-    // No local file - show loading if downloading
+    // No local file - show downloading state
     if (info.isDownloading || info.fileId != 0) {
-        MPLOG("ShowMedia: no local file, showing loading state for fileId=" << info.fileId);
+        MPLOG("ShowMedia: no local file, showing downloading state for fileId=" << info.fileId);
+        m_isDownloadingMedia = true;
         m_isLoading = true;
         m_loadingFrame = 0;
         m_loadingTimer.Start(150);
@@ -561,6 +600,13 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 {
     MPLOG("PlayVideo called: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
+
+    // Check if this video has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("PlayVideo: skipping recently failed video: " << path.ToStdString());
+        FallbackToThumbnail();
+        return;
+    }
 
     // IMPORTANT: Video playback behavior differs between platforms:
     //
@@ -587,16 +633,18 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     m_videoMuted = muted;
     m_isPlayingVideo = false;
     m_hasImage = false;
+    m_videoLoadStartTime = wxGetUTCTimeMillis().GetValue();  // Track when we started loading
 
     // Set size for video BEFORE creating media control
     int videoWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
     int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
     SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
 
-    // DON'T call Show() here - see explanation at top of this function.
-    // On Linux/GStreamer, calling Show() would create a duplicate black square
-    // because GStreamer creates its own video window separately.
-    // On macOS this wouldn't be needed, but not calling Show() is harmless there.
+    // Show the popup window - required on macOS for video to be visible
+    // On Linux/GStreamer, this may create a duplicate window, but that's better
+    // than not seeing the video at all on macOS
+    Show();
+    Raise();  // Bring popup to front
 
     // Create media control if needed
     CreateMediaCtrl();
@@ -608,13 +656,26 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
         return;
     }
 
-    // Set media control size - position at 0,0 since we're not showing the popup frame
-    m_mediaCtrl->SetSize(0, 0, videoWidth, videoHeight);
+    // Set media control size - position it inside the popup with proper padding
+    m_mediaCtrl->SetSize(PADDING + BORDER_WIDTH, PADDING + BORDER_WIDTH, videoWidth, videoHeight);
     m_mediaCtrl->Show();
 
     // Load and play the video
     MPLOG("PlayVideo: loading video file");
-    if (m_mediaCtrl->Load(path)) {
+    
+    // Wrap the Load call in try-catch to prevent crashes
+    bool loadSuccess = false;
+    try {
+        loadSuccess = m_mediaCtrl->Load(path);
+    } catch (const std::exception& e) {
+        MPLOG("PlayVideo: exception during Load(): " << e.what());
+        loadSuccess = false;
+    } catch (...) {
+        MPLOG("PlayVideo: unknown exception during Load()");
+        loadSuccess = false;
+    }
+    
+    if (loadSuccess) {
         // OnMediaLoaded will be called when ready
         m_isLoading = true;
         m_loadingFrame = 0;
@@ -622,6 +683,7 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
         MPLOG("PlayVideo: video loading started");
     } else {
         MPLOG("PlayVideo: failed to load video, falling back to thumbnail");
+        MarkLoadFailed(path);
         m_mediaCtrl->Hide();
         FallbackToThumbnail();
     }
@@ -643,6 +705,8 @@ void MediaPopup::FallbackToThumbnail()
         m_errorMessage.Clear();
         SetImage(m_mediaInfo.thumbnailPath);
         UpdateSize();
+        if (!IsShown()) Show();
+        Raise();
         Refresh();
     } else if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath) &&
                IsSupportedImageFormat(m_mediaInfo.localPath)) {
@@ -652,6 +716,8 @@ void MediaPopup::FallbackToThumbnail()
         m_errorMessage.Clear();
         SetImage(m_mediaInfo.localPath);
         UpdateSize();
+        if (!IsShown()) Show();
+        Raise();
         Refresh();
     } else if (!m_mediaInfo.emoji.IsEmpty()) {
         // Show emoji placeholder
@@ -660,6 +726,8 @@ void MediaPopup::FallbackToThumbnail()
         m_errorMessage.Clear();
         m_hasImage = false;
         UpdateSize();
+        if (!IsShown()) Show();
+        Raise();
         Refresh();
     } else {
         // Show a placeholder indicating video/media
@@ -668,19 +736,41 @@ void MediaPopup::FallbackToThumbnail()
         m_errorMessage.Clear();
         m_hasImage = false;
         UpdateSize();
+        if (!IsShown()) Show();
+        Raise();
         Refresh();
     }
 }
 
 void MediaPopup::StopVideo()
 {
-    if (m_mediaCtrl) {
-        m_mediaCtrl->Stop();
-        m_mediaCtrl->Hide();
-    }
+    MPLOG("StopVideo called");
+    
+    // Stop the loading timer first
     m_loadingTimer.Stop();
+    
+    if (m_mediaCtrl) {
+        try {
+            // Stop playback
+            m_mediaCtrl->Stop();
+            
+            // Set volume to 0 to ensure no audio leak
+            m_mediaCtrl->SetVolume(0.0);
+            
+            // Hide the control
+            m_mediaCtrl->Hide();
+        } catch (const std::exception& e) {
+            MPLOG("StopVideo: exception stopping media: " << e.what());
+        } catch (...) {
+            MPLOG("StopVideo: unknown exception stopping media");
+        }
+    }
+    
     m_isPlayingVideo = false;
+    m_isLoading = false;
     m_videoPath.Clear();
+    m_videoLoadStartTime = 0;
+    
     // Note: Don't stop animated stickers here - they are independent
 }
 
@@ -691,12 +781,24 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
     m_isLoading = false;
     m_isPlayingVideo = true;
 
+    // Ensure popup is visible now that video is ready
+    if (!IsShown()) {
+        Show();
+    }
+    Raise();  // Make sure popup is in front of other windows
+
     if (m_mediaCtrl) {
-        // Set volume (0 = muted, 1.0 = full)
+        // Set volume BEFORE playing - set it to 0 first, then apply desired volume
+        // This helps ensure muting works on all platforms
+        m_mediaCtrl->SetVolume(0.0);
+        
+        // Now set the actual desired volume
         if (m_videoMuted) {
             m_mediaCtrl->SetVolume(0.0);
+            MPLOG("OnMediaLoaded: video muted");
         } else {
             m_mediaCtrl->SetVolume(0.5);  // 50% volume for previews
+            MPLOG("OnMediaLoaded: video volume set to 0.5");
         }
 
         // Get video size and resize popup accordingly
@@ -726,9 +828,21 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
         }
 
         m_mediaCtrl->Play();
+        
+        // Re-apply volume after Play() as some backends reset it
+        if (m_videoMuted) {
+            m_mediaCtrl->SetVolume(0.0);
+        }
+        
+        // Ensure media control is visible and raised
+        m_mediaCtrl->Show();
+        m_mediaCtrl->Raise();
     }
 
+    // Final refresh and raise to ensure visibility
     Refresh();
+    Update();
+    Raise();
 }
 
 void MediaPopup::OnMediaFinished(wxMediaEvent& event)
@@ -743,6 +857,32 @@ void MediaPopup::OnMediaFinished(wxMediaEvent& event)
 void MediaPopup::OnMediaStop(wxMediaEvent& event)
 {
     // Video stopped - could be user action or error
+    MPLOG("OnMediaStop called");
+}
+
+void MediaPopup::OnMediaStateChanged(wxMediaEvent& event)
+{
+    // Handle state changes for better error detection
+    if (!m_mediaCtrl) return;
+    
+    wxMediaState state = m_mediaCtrl->GetState();
+    MPLOG("OnMediaStateChanged: state=" << static_cast<int>(state));
+    
+    // If we were loading and state changed to stopped, it might be an error
+    if (m_isLoading && state == wxMEDIASTATE_STOPPED) {
+        // Check if we've been loading for too long without success
+        int64_t elapsed = wxGetUTCTimeMillis().GetValue() - m_videoLoadStartTime;
+        if (elapsed > 2000) {  // If stopped after 2 seconds of loading, probably failed
+            MPLOG("OnMediaStateChanged: video loading seems to have failed, falling back");
+            m_loadingTimer.Stop();
+            m_isLoading = false;
+            if (!m_videoPath.IsEmpty()) {
+                MarkLoadFailed(m_videoPath);
+            }
+            m_mediaCtrl->Hide();
+            FallbackToThumbnail();
+        }
+    }
 }
 
 void MediaPopup::SetImage(const wxImage& image)
@@ -835,24 +975,30 @@ void MediaPopup::OnLoadingTimer(wxTimerEvent& event)
 {
     m_loadingFrame++; // Increment frame count (modulo used in OnPaint)
 
-    // Check for video timeout (30 * 150ms = 4.5 seconds)
+    // Check for video timeout using actual elapsed time (more reliable)
     // When loading video, m_mediaCtrl is set but m_isPlayingVideo is false
     if (m_isLoading && m_mediaCtrl && !m_isPlayingVideo) {
-        if (m_loadingFrame > 30) {
-            MPLOG("OnLoadingTimer: video load timed out, falling back to thumbnail");
+        int64_t elapsed = wxGetUTCTimeMillis().GetValue() - m_videoLoadStartTime;
+        if (elapsed > VIDEO_LOAD_TIMEOUT_MS) {
+            MPLOG("OnLoadingTimer: video load timed out after " << elapsed << "ms, falling back to thumbnail");
             m_loadingTimer.Stop();
+            // Mark this video as failed to prevent repeated attempts
+            if (!m_videoPath.IsEmpty()) {
+                MarkLoadFailed(m_videoPath);
+            }
             StopVideo();
             FallbackToThumbnail();
             return;
         }
         // Continue running timer even if IsShown() is false (video loads in background/separate window)
-    } else if (!IsShown()) {
-        // Stop timer if popup is hidden and we're not waiting for video load
+    } else if (!IsShown() && !m_isDownloadingMedia) {
+        // Stop timer if popup is hidden and we're not waiting for video load or download
         m_loadingTimer.Stop();
         return;
     }
 
-    if (IsShown() && m_isLoading) {
+    // Refresh when loading or downloading to animate the spinner
+    if (IsShown() && (m_isLoading || m_isDownloadingMedia)) {
         Refresh();
     }
 }
@@ -1001,7 +1147,34 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int centerY = imgY + m_bitmap.GetHeight() / 2;
         int radius = 24;
         
-        if (isVideoType) {
+        // If downloading, show downloading overlay for ALL media types
+        if (m_isDownloadingMedia || (isShowingThumbnail && needsDownload)) {
+            // Draw semi-transparent dark overlay over the whole image
+            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 150)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(imgX, imgY, m_bitmap.GetWidth(), m_bitmap.GetHeight());
+            
+            // Draw downloading circle background
+            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF, 220)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawCircle(centerX, centerY, radius);
+            
+            // Draw animated spinner
+            static const wxString spinnerChars[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
+            wxString spinner = spinnerChars[m_loadingFrame % 8];
+            dc.SetFont(wxFont(18, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            dc.SetTextForeground(wxColour(255, 255, 255));
+            wxSize spinnerSize = dc.GetTextExtent(spinner);
+            dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
+            
+            // Draw "Downloading..." text below
+            dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+            dc.SetTextForeground(wxColour(0xFF, 0xFF, 0xFF));
+            wxString statusText = "Downloading...";
+            wxSize statusSize = dc.GetTextExtent(statusText);
+            dc.DrawText(statusText, centerX - statusSize.GetWidth() / 2, centerY + radius + 8);
+        } else if (isVideoType) {
+            // Not downloading - show play button for video types
             // Draw semi-transparent dark overlay behind play button
             dc.SetBrush(wxBrush(wxColour(0, 0, 0, 100)));
             dc.SetPen(*wxTRANSPARENT_PEN);
@@ -1012,36 +1185,21 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
             
-            if (isShowingThumbnail && needsDownload) {
-                // Draw download arrow (file needs to be downloaded first)
-                dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
-                dc.DrawLine(centerX, centerY - 8, centerX, centerY + 5);
-                dc.DrawLine(centerX - 6, centerY, centerX, centerY + 8);
-                dc.DrawLine(centerX + 6, centerY, centerX, centerY + 8);
-                
-                // Draw hint text
-                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-                dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
-                wxString hint = "Click to download";
-                wxSize hintSize = dc.GetTextExtent(hint);
-                dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
-            } else {
-                // Draw play triangle (file is available, click to open)
-                wxPoint triangle[3];
-                triangle[0] = wxPoint(centerX - 6, centerY - 10);
-                triangle[1] = wxPoint(centerX - 6, centerY + 10);
-                triangle[2] = wxPoint(centerX + 10, centerY);
-                dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
-                dc.SetPen(*wxTRANSPARENT_PEN);
-                dc.DrawPolygon(3, triangle);
-                
-                // Draw hint text
-                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-                dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
-                wxString hint = "Click to play";
-                wxSize hintSize = dc.GetTextExtent(hint);
-                dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
-            }
+            // Draw play triangle (file is available, click to open)
+            wxPoint triangle[3];
+            triangle[0] = wxPoint(centerX - 6, centerY - 10);
+            triangle[1] = wxPoint(centerX - 6, centerY + 10);
+            triangle[2] = wxPoint(centerX + 10, centerY);
+            dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawPolygon(3, triangle);
+            
+            // Draw hint text
+            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+            dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
+            wxString hint = "Click to play";
+            wxSize hintSize = dc.GetTextExtent(hint);
+            dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
         }
         
         // Draw the label at the bottom
@@ -1058,26 +1216,33 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int textY = (size.GetHeight() - textSize.GetHeight()) / 2;
         dc.DrawText(errorText, textX, textY);
         
-    } else if (m_isLoading) {
-        // Loading state - show animated spinner with "Downloading..."
+    } else if (m_isLoading || m_isDownloadingMedia) {
+        // Loading/Downloading state - show animated spinner with "Downloading..."
         static const wxString spinners[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
         wxString spinner = spinners[m_loadingFrame % 8];
         
-        dc.SetFont(wxFont(32, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-        dc.SetTextForeground(wxColour(0x72, 0x9F, 0xCF));  // Blue for downloading
+        // Draw a circle background for the spinner
+        int centerX = size.GetWidth() / 2;
+        int centerY = contentY + 40;
+        int radius = 28;
+        
+        dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF)));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.DrawCircle(centerX, centerY, radius);
+        
+        dc.SetFont(wxFont(24, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        dc.SetTextForeground(wxColour(255, 255, 255));
         
         wxSize spinnerSize = dc.GetTextExtent(spinner);
-        int spinnerX = (size.GetWidth() - spinnerSize.GetWidth()) / 2;
-        int spinnerY = contentY + 10;
-        dc.DrawText(spinner, spinnerX, spinnerY);
+        dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
         
         // Draw "Downloading..." text below
-        dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-        dc.SetTextForeground(m_labelColor);
+        dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        dc.SetTextForeground(wxColour(0xFF, 0xFF, 0xFF));
         wxString statusText = "Downloading...";
         wxSize statusSize = dc.GetTextExtent(statusText);
         int statusX = (size.GetWidth() - statusSize.GetWidth()) / 2;
-        int statusY = spinnerY + spinnerSize.GetHeight() + 8;
+        int statusY = centerY + radius + 10;
         dc.DrawText(statusText, statusX, statusY);
         
         // Draw the label at the bottom
@@ -1193,4 +1358,71 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
         int captionY = labelY - 14;  // Above the label
         dc.DrawText(caption, captionX, captionY);
     }
+}
+
+// Async image loading helpers
+void MediaPopup::LoadImageAsync(const wxString& path)
+{
+    if (path.IsEmpty() || !wxFileExists(path)) {
+        MPLOG("LoadImageAsync: invalid path");
+        return;
+    }
+
+    // Check if this file has failed recently
+    if (HasFailedRecently(path)) {
+        MPLOG("LoadImageAsync: skipping recently failed path: " << path.ToStdString());
+        FallbackToThumbnail();
+        return;
+    }
+
+    m_pendingImagePath = path;
+    m_asyncLoadPending = true;
+
+    // Use a short timer to defer the load slightly, allowing UI to remain responsive
+    m_asyncLoadTimer.StartOnce(10);
+}
+
+void MediaPopup::OnAsyncLoadTimer(wxTimerEvent& event)
+{
+    if (!m_asyncLoadPending || m_pendingImagePath.IsEmpty()) {
+        return;
+    }
+
+    wxString path = m_pendingImagePath;
+    m_pendingImagePath.Clear();
+    m_asyncLoadPending = false;
+
+    // Perform the actual load
+    wxImage image;
+    if (LoadImageWithWebPSupport(path, image) && image.IsOk()) {
+        SetImage(image);
+    } else {
+        MPLOG("OnAsyncLoadTimer: failed to load image: " << path.ToStdString());
+        MarkLoadFailed(path);
+        FallbackToThumbnail();
+    }
+}
+
+bool MediaPopup::HasFailedRecently(const wxString& path) const
+{
+    return m_failedLoads.find(path) != m_failedLoads.end();
+}
+
+void MediaPopup::MarkLoadFailed(const wxString& path)
+{
+    if (!path.IsEmpty()) {
+        m_failedLoads.insert(path);
+        MPLOG("MarkLoadFailed: " << path.ToStdString() << " (total failures: " << m_failedLoads.size() << ")");
+
+        // Limit the size of the failed loads set to prevent memory growth
+        if (m_failedLoads.size() > 100) {
+            // Remove oldest entries (just clear and start fresh)
+            m_failedLoads.clear();
+        }
+    }
+}
+
+void MediaPopup::ClearFailedLoads()
+{
+    m_failedLoads.clear();
 }

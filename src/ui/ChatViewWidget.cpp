@@ -820,7 +820,16 @@ bool ChatViewWidget::IsSameMedia(const MediaInfo& a, const MediaInfo& b) const
 
 void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& position)
 {
-    if (!m_mediaPopup) return;
+    if (!m_mediaPopup) {
+        CVWLOG("ShowMediaPopup: no popup widget");
+        return;
+    }
+    
+    // Validate input - must have either a fileId or a localPath
+    if (info.fileId == 0 && info.localPath.IsEmpty() && info.thumbnailPath.IsEmpty()) {
+        CVWLOG("ShowMediaPopup: no valid media reference (fileId=0, no paths)");
+        return;
+    }
 
     // Cancel any pending hide
     m_hideTimer.Stop();
@@ -863,7 +872,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
             if (m_mainFrame) {
                 TelegramClient* client = m_mainFrame->GetTelegramClient();
-                if (client) {
+                if (client && !client->IsDownloading(info.thumbnailFileId) && !HasPendingDownload(info.thumbnailFileId)) {
                     CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
                     wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
                     client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
@@ -927,7 +936,16 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     // - If only thumbnail exists, it will show thumbnail
     // - If nothing exists, it will show placeholder/loading
     m_currentlyShowingMedia = info;
-    m_mediaPopup->ShowMedia(info, position);
+    
+    // Show the popup directly - don't use CallAfter as it adds latency
+    // and can cause the popup to not appear if mouse moves away quickly
+    try {
+        m_mediaPopup->ShowMedia(info, position);
+    } catch (const std::exception& e) {
+        CVWLOG("ShowMediaPopup: exception in ShowMedia: " << e.what());
+    } catch (...) {
+        CVWLOG("ShowMediaPopup: unknown exception in ShowMedia");
+    }
 }
 
 void ChatViewWidget::HideMediaPopup()
@@ -936,10 +954,20 @@ void ChatViewWidget::HideMediaPopup()
     m_currentlyShowingMedia = MediaInfo();
     m_isOverMediaSpan = false;
 
-    if (m_mediaPopup && m_mediaPopup->IsShown()) {
-        // Stop all playback when hiding
-        m_mediaPopup->StopAllPlayback();
-        m_mediaPopup->Hide();
+    if (m_mediaPopup) {
+        try {
+            // Always stop playback - even if popup isn't visible yet
+            // (video might be loading in background)
+            m_mediaPopup->StopAllPlayback();
+            
+            if (m_mediaPopup->IsShown()) {
+                m_mediaPopup->Hide();
+            }
+        } catch (const std::exception& e) {
+            CVWLOG("HideMediaPopup: exception: " << e.what());
+        } catch (...) {
+            CVWLOG("HideMediaPopup: unknown exception");
+        }
     }
 }
 
@@ -962,6 +990,12 @@ void ChatViewWidget::OnHideTimer(wxTimerEvent& event)
 void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
 {
     CVWLOG("UpdateMediaPopup called: fileId=" << fileId << " path=" << localPath.ToStdString());
+    
+    // Validate input
+    if (fileId == 0 || localPath.IsEmpty()) {
+        CVWLOG("UpdateMediaPopup: invalid fileId or path");
+        return;
+    }
     
     // First, check if this was a user-initiated download to open
     OnMediaDownloadComplete(fileId, localPath);
@@ -1021,9 +1055,19 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
 
 void ChatViewWidget::OpenMedia(const MediaInfo& info)
 {
+    // Validate that we have something to open
+    if (info.fileId == 0 && info.localPath.IsEmpty()) {
+        CVWLOG("OpenMedia: no valid media to open");
+        return;
+    }
+    
     if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
         // Open with default application
-        wxLaunchDefaultApplication(info.localPath);
+        try {
+            wxLaunchDefaultApplication(info.localPath);
+        } catch (const std::exception& e) {
+            CVWLOG("OpenMedia: exception launching application: " << e.what());
+        }
     } else if (info.fileId != 0 && m_mainFrame) {
         // Need to download first, then open
         TelegramClient* client = m_mainFrame->GetTelegramClient();
@@ -1427,7 +1471,13 @@ void ChatViewWidget::OnHoverTimer(wxTimerEvent& event)
         wxPoint posToShow = m_pendingHoverPos;
         m_pendingHoverMedia = MediaInfo();
         
-        ShowMediaPopup(mediaToShow, posToShow);
+        try {
+            ShowMediaPopup(mediaToShow, posToShow);
+        } catch (const std::exception& e) {
+            CVWLOG("OnHoverTimer: exception showing popup: " << e.what());
+        } catch (...) {
+            CVWLOG("OnHoverTimer: unknown exception showing popup");
+        }
     }
 }
 

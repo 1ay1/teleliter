@@ -132,101 +132,158 @@ bool IsNativelySupportedImageFormat(const wxString& path)
 #ifdef HAVE_WEBP
 static bool LoadWebPImage(const wxString& path, wxImage& outImage)
 {
-    // Read file into memory
-    std::ifstream file(path.ToStdString(), std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        return false;
-    }
-    
-    std::streamsize size = file.tellg();
-    if (size <= 0) {
-        return false;
-    }
-    
-    file.seekg(0, std::ios::beg);
-    std::vector<uint8_t> buffer(size);
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-        return false;
-    }
-    file.close();
-    
-    // Get WebP image info
-    int width = 0, height = 0;
-    if (!WebPGetInfo(buffer.data(), buffer.size(), &width, &height)) {
-        return false;
-    }
-    
-    if (width <= 0 || height <= 0) {
-        return false;
-    }
-    
-    // Decode WebP to RGBA
-    uint8_t* rgba = WebPDecodeRGBA(buffer.data(), buffer.size(), &width, &height);
-    if (!rgba) {
-        return false;
-    }
-    
-    // Create wxImage from RGBA data
-    // wxImage expects separate RGB and alpha channels
-    outImage.Create(width, height, false);
-    if (!outImage.IsOk()) {
+    try {
+        // Read file into memory
+        std::ifstream file(path.ToStdString(), std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            std::cerr << "[FileUtils] LoadWebPImage: failed to open file" << std::endl;
+            return false;
+        }
+        
+        std::streamsize size = file.tellg();
+        if (size <= 0) {
+            std::cerr << "[FileUtils] LoadWebPImage: empty file" << std::endl;
+            return false;
+        }
+        
+        // Limit file size to prevent memory issues (50MB max)
+        if (size > 50 * 1024 * 1024) {
+            std::cerr << "[FileUtils] LoadWebPImage: file too large (" << size << " bytes)" << std::endl;
+            return false;
+        }
+        
+        file.seekg(0, std::ios::beg);
+        std::vector<uint8_t> buffer(size);
+        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+            std::cerr << "[FileUtils] LoadWebPImage: failed to read file" << std::endl;
+            return false;
+        }
+        file.close();
+        
+        // Get WebP image info
+        int width = 0, height = 0;
+        if (!WebPGetInfo(buffer.data(), buffer.size(), &width, &height)) {
+            std::cerr << "[FileUtils] LoadWebPImage: WebPGetInfo failed" << std::endl;
+            return false;
+        }
+        
+        // Validate dimensions
+        if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+            std::cerr << "[FileUtils] LoadWebPImage: invalid dimensions " << width << "x" << height << std::endl;
+            return false;
+        }
+        
+        // Check for excessive pixel count (prevent OOM)
+        if (static_cast<int64_t>(width) * height > 64 * 1024 * 1024) {
+            std::cerr << "[FileUtils] LoadWebPImage: image too large (" << width << "x" << height << ")" << std::endl;
+            return false;
+        }
+        
+        // Decode WebP to RGBA
+        uint8_t* rgba = WebPDecodeRGBA(buffer.data(), buffer.size(), &width, &height);
+        if (!rgba) {
+            std::cerr << "[FileUtils] LoadWebPImage: WebPDecodeRGBA failed" << std::endl;
+            return false;
+        }
+        
+        // Create wxImage from RGBA data
+        // wxImage expects separate RGB and alpha channels
+        outImage.Create(width, height, false);
+        if (!outImage.IsOk()) {
+            std::cerr << "[FileUtils] LoadWebPImage: failed to create wxImage" << std::endl;
+            WebPFree(rgba);
+            return false;
+        }
+        
+        outImage.InitAlpha();
+        
+        unsigned char* imgData = outImage.GetData();
+        unsigned char* alphaData = outImage.GetAlpha();
+        
+        if (!imgData || !alphaData) {
+            std::cerr << "[FileUtils] LoadWebPImage: null image data pointers" << std::endl;
+            WebPFree(rgba);
+            return false;
+        }
+        
+        for (int i = 0; i < width * height; i++) {
+            imgData[i * 3 + 0] = rgba[i * 4 + 0];  // R
+            imgData[i * 3 + 1] = rgba[i * 4 + 1];  // G
+            imgData[i * 3 + 2] = rgba[i * 4 + 2];  // B
+            alphaData[i] = rgba[i * 4 + 3];         // A
+        }
+        
         WebPFree(rgba);
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[FileUtils] LoadWebPImage exception: " << e.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "[FileUtils] LoadWebPImage: unknown exception" << std::endl;
         return false;
     }
-    
-    outImage.InitAlpha();
-    
-    unsigned char* imgData = outImage.GetData();
-    unsigned char* alphaData = outImage.GetAlpha();
-    
-    for (int i = 0; i < width * height; i++) {
-        imgData[i * 3 + 0] = rgba[i * 4 + 0];  // R
-        imgData[i * 3 + 1] = rgba[i * 4 + 1];  // G
-        imgData[i * 3 + 2] = rgba[i * 4 + 2];  // B
-        alphaData[i] = rgba[i * 4 + 3];         // A
-    }
-    
-    WebPFree(rgba);
-    return true;
 }
 #endif
 
 bool LoadImageWithWebPSupport(const wxString& path, wxImage& outImage)
 {
-    if (!wxFileExists(path)) {
-        return false;
-    }
-    
-    wxFileName fn(path);
-    wxString ext = fn.GetExt().Lower();
-    
-    // Handle WebP files specially
-    if (ext == "webp") {
-#ifdef HAVE_WEBP
-        return LoadWebPImage(path, outImage);
-#else
-        return false;
-#endif
-    }
-    
-    // For other formats, use wxImage's native loading
-    if (IsNativelySupportedImageFormat(path)) {
-        bool result = outImage.LoadFile(path);
-        if (!result) {
-            // Try loading with explicit type
-            wxImage testImg;
-            if (ext == "jpg" || ext == "jpeg") {
-                result = testImg.LoadFile(path, wxBITMAP_TYPE_JPEG);
-            } else if (ext == "png") {
-                result = testImg.LoadFile(path, wxBITMAP_TYPE_PNG);
-            }
-            if (result) {
-                outImage = testImg;
-            }
+    try {
+        if (path.IsEmpty()) {
+            return false;
         }
-        return result;
+        
+        if (!wxFileExists(path)) {
+            return false;
+        }
+        
+        wxFileName fn(path);
+        wxString ext = fn.GetExt().Lower();
+        
+        // Handle WebP files specially
+        if (ext == "webp") {
+#ifdef HAVE_WEBP
+            return LoadWebPImage(path, outImage);
+#else
+            return false;
+#endif
+        }
+        
+        // For other formats, use wxImage's native loading
+        if (IsNativelySupportedImageFormat(path)) {
+            bool result = outImage.LoadFile(path);
+            if (!result) {
+                // Try loading with explicit type
+                wxImage testImg;
+                if (ext == "jpg" || ext == "jpeg") {
+                    result = testImg.LoadFile(path, wxBITMAP_TYPE_JPEG);
+                } else if (ext == "png") {
+                    result = testImg.LoadFile(path, wxBITMAP_TYPE_PNG);
+                }
+                if (result && testImg.IsOk()) {
+                    outImage = testImg;
+                }
+            }
+            
+            // Validate the loaded image
+            if (result && outImage.IsOk()) {
+                int w = outImage.GetWidth();
+                int h = outImage.GetHeight();
+                if (w <= 0 || h <= 0 || w > 16384 || h > 16384) {
+                    std::cerr << "[FileUtils] LoadImageWithWebPSupport: invalid dimensions " << w << "x" << h << std::endl;
+                    return false;
+                }
+            }
+            
+            return result && outImage.IsOk();
+        }
+        
+        // Unsupported format
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "[FileUtils] LoadImageWithWebPSupport exception: " << e.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "[FileUtils] LoadImageWithWebPSupport: unknown exception" << std::endl;
+        return false;
     }
-    
-    // Unsupported format
-    return false;
 }

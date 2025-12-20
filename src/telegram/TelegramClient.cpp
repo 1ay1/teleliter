@@ -895,8 +895,27 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
     
     TDLOG("DownloadFile: requested fileId=%d priority=%d fileName=%s", fileId, priority, fileName.ToStdString().c_str());
     
+    // Limit concurrent downloads to prevent overloading the UI and network
+    static const size_t MAX_CONCURRENT_DOWNLOADS = 10;
+    
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        
+        // Count active downloads
+        size_t activeCount = 0;
+        for (const auto& pair : m_activeDownloads) {
+            if (pair.second.state == DownloadState::Downloading || 
+                pair.second.state == DownloadState::Pending) {
+                activeCount++;
+            }
+        }
+        
+        // If at capacity, only allow high priority downloads
+        if (activeCount >= MAX_CONCURRENT_DOWNLOADS && priority < 8) {
+            TDLOG("DownloadFile: at capacity (%zu downloads), skipping low priority fileId=%d", activeCount, fileId);
+            return;
+        }
+        
         auto it = m_activeDownloads.find(fileId);
         if (it != m_activeDownloads.end()) {
             // Already downloading or completed - don't start again
@@ -908,8 +927,28 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
                 TDLOG("DownloadFile: fileId=%d already completed, skipping", fileId);
                 return;
             }
+            // If pending, don't add again
+            if (it->second.state == DownloadState::Pending) {
+                TDLOG("DownloadFile: fileId=%d already pending, skipping", fileId);
+                return;
+            }
             // If failed, allow retry
             TDLOG("DownloadFile: fileId=%d was in state %d, allowing retry", fileId, static_cast<int>(it->second.state));
+        }
+        
+        // Clean up old completed/failed downloads to prevent memory growth
+        if (m_activeDownloads.size() > 100) {
+            std::vector<int32_t> toRemove;
+            for (const auto& pair : m_activeDownloads) {
+                if (pair.second.state == DownloadState::Completed || 
+                    pair.second.state == DownloadState::Cancelled) {
+                    toRemove.push_back(pair.first);
+                }
+            }
+            for (int32_t id : toRemove) {
+                m_activeDownloads.erase(id);
+            }
+            TDLOG("DownloadFile: cleaned up %zu old downloads", toRemove.size());
         }
         
         // Track this download
@@ -1039,6 +1078,7 @@ void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
     TDLOG("Download error for file %d: %s", fileId, error.ToStdString().c_str());
     
     bool shouldRetry = false;
+    int retryCount = 0;
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
         auto it = m_activeDownloads.find(fileId);
@@ -1046,6 +1086,7 @@ void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
             it->second.state = DownloadState::Failed;
             it->second.errorMessage = error;
             shouldRetry = it->second.CanRetry();
+            retryCount = it->second.retryCount;
         }
     }
     
@@ -1057,10 +1098,21 @@ void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
     });
     
     if (shouldRetry) {
-        // Schedule retry after a brief delay
-        PostToMainThread([this, fileId]() {
-            wxMilliSleep(500);  // Brief delay before retry
-            RetryDownload(fileId);
+        // Schedule retry after a delay using CallAfter with a one-shot timer
+        // Exponential backoff: 500ms, 1000ms, 2000ms based on retry count
+        int delayMs = 500 * (1 << retryCount);  // 500, 1000, 2000, etc.
+        delayMs = std::min(delayMs, 5000);  // Cap at 5 seconds
+        
+        // Use a one-shot timer to avoid blocking the main thread
+        PostToMainThread([this, fileId, delayMs]() {
+            // Create a one-shot timer for the retry
+            wxTimer* retryTimer = new wxTimer();
+            retryTimer->Bind(wxEVT_TIMER, [this, fileId, retryTimer](wxTimerEvent&) {
+                RetryDownload(fileId);
+                retryTimer->Stop();
+                delete retryTimer;
+            });
+            retryTimer->StartOnce(delayMs);
         });
     }
 }
@@ -2048,7 +2100,13 @@ void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
         auto func = std::move(toProcess.front());
         toProcess.pop();
         if (func) {
-            func();
+            try {
+                func();
+            } catch (const std::exception& e) {
+                TDLOG("OnTdlibUpdate: exception in callback: %s", e.what());
+            } catch (...) {
+                TDLOG("OnTdlibUpdate: unknown exception in callback");
+            }
         }
     }
 }

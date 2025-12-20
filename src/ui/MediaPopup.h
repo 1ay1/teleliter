@@ -9,6 +9,7 @@
 #include "MediaTypes.h"
 #include <memory>
 #include <functional>
+#include <set>
 
 // Forward declarations
 class LottiePlayer;
@@ -19,6 +20,13 @@ static const int LOADING_TIMER_ID = 10001;
 static const int LOTTIE_ANIM_TIMER_ID = 10002;
 static const int WEBM_ANIM_TIMER_ID = 10003;
 static const int VIDEO_LOAD_TIMER_ID = 10004;
+static const int ASYNC_LOAD_TIMER_ID = 10005;
+
+// Maximum time to wait for video to load before falling back to thumbnail
+static const int VIDEO_LOAD_TIMEOUT_MS = 8000;
+
+// Maximum number of failed load attempts before giving up on a file
+static const int MAX_LOAD_FAILURES = 3;
 
 // HexChat-style popup for media preview
 class MediaPopup : public wxPopupWindow
@@ -62,6 +70,7 @@ protected:
     void OnMediaLoaded(wxMediaEvent& event);
     void OnMediaFinished(wxMediaEvent& event);
     void OnMediaStop(wxMediaEvent& event);
+    void OnMediaStateChanged(wxMediaEvent& event);
     void OnLoadingTimer(wxTimerEvent& event);
     void OnVideoLoadTimer(wxTimerEvent& event);
     void OnLottieAnimTimer(wxTimerEvent& event);
@@ -80,6 +89,15 @@ private:
     void DrawMediaLabel(wxDC& dc, const wxSize& size);
     bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
     
+    // Async image loading to prevent UI blocking
+    void LoadImageAsync(const wxString& path);
+    void OnAsyncLoadTimer(wxTimerEvent& event);
+    
+    // Track failed loads to avoid repeated attempts
+    bool HasFailedRecently(const wxString& path) const;
+    void MarkLoadFailed(const wxString& path);
+    void ClearFailedLoads();
+    
     wxColour m_bgColor;
     wxColour m_borderColor;
     wxColour m_textColor;
@@ -89,6 +107,7 @@ private:
     wxBitmap m_bitmap;
     bool m_hasImage;
     bool m_isLoading;
+    bool m_isDownloadingMedia;  // True when showing thumbnail with download in progress
     bool m_hasError;
     wxString m_errorMessage;
     
@@ -116,6 +135,17 @@ private:
     
     // Click callback
     std::function<void(const MediaInfo&)> m_clickCallback;
+    
+    // Async image loading state
+    wxString m_pendingImagePath;
+    wxTimer m_asyncLoadTimer;
+    bool m_asyncLoadPending;
+    
+    // Track files that failed to load (to avoid repeated attempts)
+    std::set<wxString> m_failedLoads;
+    
+    // Video load start time for timeout detection
+    int64_t m_videoLoadStartTime;
     
     // Size constraints for stickers/emojis (smaller)
     static constexpr int STICKER_MAX_WIDTH = 250;
