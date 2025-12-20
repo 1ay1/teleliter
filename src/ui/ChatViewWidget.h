@@ -123,6 +123,9 @@ private:
     void CreateNewMessageButton();
     wxString FormatTimestamp(int64_t unixTime);
     wxString FormatSmartTimestamp(int64_t unixTime);
+
+    // Helper to ensure media is downloaded
+    void EnsureMediaDownloaded(const MediaInfo& info);
     
     // Event handlers
     void OnMouseMove(wxMouseEvent& event);

@@ -617,6 +617,8 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     if (m_mediaCtrl->Load(path)) {
         // OnMediaLoaded will be called when ready
         m_isLoading = true;
+        m_loadingFrame = 0;
+        m_loadingTimer.Start(150);
         MPLOG("PlayVideo: video loading started");
     } else {
         MPLOG("PlayVideo: failed to load video, falling back to thumbnail");
@@ -631,6 +633,8 @@ void MediaPopup::FallbackToThumbnail()
 {
     MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
           << " localPath=" << m_mediaInfo.localPath.ToStdString());
+    
+    m_loadingTimer.Stop();
     
     // Try to use the thumbnail from the current media info
     if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
@@ -674,6 +678,7 @@ void MediaPopup::StopVideo()
         m_mediaCtrl->Stop();
         m_mediaCtrl->Hide();
     }
+    m_loadingTimer.Stop();
     m_isPlayingVideo = false;
     m_videoPath.Clear();
     // Note: Don't stop animated stickers here - they are independent
@@ -682,6 +687,7 @@ void MediaPopup::StopVideo()
 void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
 {
     MPLOG("OnMediaLoaded: video ready to play");
+    m_loadingTimer.Stop();
     m_isLoading = false;
     m_isPlayingVideo = true;
 
@@ -827,11 +833,27 @@ void MediaPopup::ShowLoading()
 
 void MediaPopup::OnLoadingTimer(wxTimerEvent& event)
 {
-    m_loadingFrame = (m_loadingFrame + 1) % 8;
+    m_loadingFrame++; // Increment frame count (modulo used in OnPaint)
+
+    // Check for video timeout (30 * 150ms = 4.5 seconds)
+    // When loading video, m_mediaCtrl is set but m_isPlayingVideo is false
+    if (m_isLoading && m_mediaCtrl && !m_isPlayingVideo) {
+        if (m_loadingFrame > 30) {
+            MPLOG("OnLoadingTimer: video load timed out, falling back to thumbnail");
+            m_loadingTimer.Stop();
+            StopVideo();
+            FallbackToThumbnail();
+            return;
+        }
+        // Continue running timer even if IsShown() is false (video loads in background/separate window)
+    } else if (!IsShown()) {
+        // Stop timer if popup is hidden and we're not waiting for video load
+        m_loadingTimer.Stop();
+        return;
+    }
+
     if (IsShown() && m_isLoading) {
         Refresh();
-    } else {
-        m_loadingTimer.Stop();
     }
 }
 

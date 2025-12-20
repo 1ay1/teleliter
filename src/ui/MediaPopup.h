@@ -18,6 +18,7 @@ class WebmPlayer;
 static const int LOADING_TIMER_ID = 10001;
 static const int LOTTIE_ANIM_TIMER_ID = 10002;
 static const int WEBM_ANIM_TIMER_ID = 10003;
+static const int VIDEO_LOAD_TIMER_ID = 10004;
 
 // HexChat-style popup for media preview
 class MediaPopup : public wxPopupWindow
@@ -62,6 +63,7 @@ protected:
     void OnMediaFinished(wxMediaEvent& event);
     void OnMediaStop(wxMediaEvent& event);
     void OnLoadingTimer(wxTimerEvent& event);
+    void OnVideoLoadTimer(wxTimerEvent& event);
     void OnLottieAnimTimer(wxTimerEvent& event);
     void OnLottieFrame(const wxBitmap& frame);
     void OnWebmAnimTimer(wxTimerEvent& event);
@@ -100,6 +102,7 @@ private:
     bool m_loopVideo;
     bool m_videoMuted;
     wxString m_videoPath;
+    wxTimer m_videoLoadTimer;
     
     // Animated sticker playback (Lottie .tgs)
     std::unique_ptr<LottiePlayer> m_lottiePlayer;

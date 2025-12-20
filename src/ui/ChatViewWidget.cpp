@@ -188,6 +188,28 @@ void ChatViewWidget::SetupDisplayControl()
         });
 }
 
+void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo& info)
+{
+    // Auto-download visible media if not already downloaded
+    if (m_mainFrame && info.fileId != 0 && info.localPath.IsEmpty()) {
+        // Check if we are already downloading this file
+        if (!HasPendingDownload(info.fileId)) {
+            TelegramClient* client = m_mainFrame->GetTelegramClient();
+            if (client) {
+                // Determine priority (higher for smaller files/images)
+                int priority = 5;
+                if (info.type == MediaType::Photo || info.type == MediaType::Sticker) {
+                    priority = 10;
+                }
+                
+                wxString displayName = info.fileName.IsEmpty() ? "Auto-download" : info.fileName;
+                client->DownloadFile(info.fileId, priority, displayName, 0);
+                AddPendingDownload(info.fileId, info);
+            }
+        }
+    }
+}
+
 void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
 {
     if (!m_messageFormatter) return;
@@ -249,6 +271,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
+        EnsureMediaDownloaded(info);
+
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
@@ -266,6 +290,14 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.caption = msg.mediaCaption;
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
+
+        // For video, ensure thumbnail is downloaded first
+        if (info.thumbnailFileId != 0 && info.thumbnailPath.IsEmpty()) {
+            MediaInfo thumbInfo = info;
+            thumbInfo.fileId = info.thumbnailFileId;
+            thumbInfo.localPath = ""; // Force download check for thumb
+            EnsureMediaDownloaded(thumbInfo);
+        }
 
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
@@ -331,6 +363,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
 
+        EnsureMediaDownloaded(info);
+
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
@@ -347,6 +381,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         info.caption = msg.mediaCaption;
         info.thumbnailFileId = msg.mediaThumbnailFileId;
         info.thumbnailPath = msg.mediaThumbnailPath;
+
+        EnsureMediaDownloaded(info);
 
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
@@ -532,6 +568,8 @@ void ChatViewWidget::SetLoading(bool loading)
 
 void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& info)
 {
+    CVWLOG("AddMediaSpan: fileId=" << info.fileId << " thumbId=" << info.thumbnailFileId 
+           << " pos=" << startPos << "-" << endPos);
     MediaSpan span;
     span.startPos = startPos;
     span.endPos = endPos;
@@ -558,7 +596,8 @@ void ChatViewWidget::UpdateMediaSpanPath(int32_t fileId, const wxString& localPa
 {
     if (fileId == 0 || localPath.IsEmpty()) return;
     
-    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " path=" << localPath.ToStdString() << " isThumbnailHint=" << isThumbnail);
+    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " path=" << localPath.ToStdString() 
+           << " isThumbnailHint=" << isThumbnail << " totalSpans=" << m_mediaSpans.size());
     
     int updatedCount = 0;
     
