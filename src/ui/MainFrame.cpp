@@ -1288,10 +1288,15 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
     }
     m_chatViewWidget->ClearMessages();
     
-    // Sort messages by date (oldest first) to ensure correct display order
+    // Sort messages by message ID (primary) then date (secondary) for correct order
+    // Telegram message IDs are monotonically increasing within a chat, making them
+    // more reliable for ordering than timestamps (which have second granularity)
     std::vector<MessageInfo> sortedMessages = messages;
     std::sort(sortedMessages.begin(), sortedMessages.end(),
               [](const MessageInfo& a, const MessageInfo& b) {
+                  if (a.id != b.id) {
+                      return a.id < b.id;
+                  }
                   return a.date < b.date;
               });
     

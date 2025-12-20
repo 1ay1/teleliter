@@ -5,6 +5,8 @@
 #include <iostream>
 #include <sstream>
 #include <ctime>
+#include <set>
+#include <algorithm>
 
 // Debug logging - disabled for release
 #define TDLOG(msg) do {} while(0)
@@ -589,12 +591,32 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int
                 }
             }
             
-            // Append to existing messages and get a copy for the UI
+            // Merge with existing messages, avoiding duplicates
             std::vector<MessageInfo> allMessages;
             {
                 std::lock_guard<std::mutex> lock(m_dataMutex);
                 auto& existing = m_messages[chatId];
-                existing.insert(existing.end(), newMessages.begin(), newMessages.end());
+                
+                // Build a set of existing message IDs to avoid duplicates
+                std::set<int64_t> existingIds;
+                for (const auto& msg : existing) {
+                    existingIds.insert(msg.id);
+                }
+                
+                // Add only new messages that aren't already present
+                for (const auto& msg : newMessages) {
+                    if (existingIds.find(msg.id) == existingIds.end()) {
+                        existing.push_back(msg);
+                        existingIds.insert(msg.id);
+                    }
+                }
+                
+                // Sort by message ID to ensure correct chronological order
+                std::sort(existing.begin(), existing.end(),
+                    [](const MessageInfo& a, const MessageInfo& b) {
+                        return a.id < b.id;
+                    });
+                
                 allMessages = existing;  // Copy for thread-safe access
             }
             

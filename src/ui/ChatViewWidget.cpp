@@ -328,7 +328,7 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo>& messages)
         DisplayMessage(msg);
     }
     EndBatchUpdate();
-    ScrollToBottom();
+    ScrollToBottomIfAtBottom();
 }
 
 void ChatViewWidget::BeginBatchUpdate()
