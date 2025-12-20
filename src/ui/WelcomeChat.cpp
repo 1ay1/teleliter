@@ -1,6 +1,6 @@
 #include "WelcomeChat.h"
 #include "MainFrame.h"
-#include "TelegramClient.h"
+#include "../telegram/TelegramClient.h"
 
 // Debug logging - disabled for release
 // #define WCLOG(msg) std::cerr << "[WelcomeChat] " << msg << std::endl

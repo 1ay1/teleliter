@@ -1,9 +1,7 @@
-#ifndef TRANSFERMANAGER_H
-#define TRANSFERMANAGER_H
+#ifndef TRANSFERTYPES_H
+#define TRANSFERTYPES_H
 
 #include <wx/wx.h>
-#include <wx/gauge.h>
-#include <map>
 #include <functional>
 
 // Transfer direction
@@ -55,7 +53,6 @@ struct TransferInfo {
             return "Done";
         }
         
-        // In progress - show percentage and size
         wxString sizeText;
         double transferred = static_cast<double>(transferredBytes);
         double total = static_cast<double>(totalBytes);
@@ -84,65 +81,4 @@ struct TransferInfo {
 // Callback for transfer events
 using TransferCallback = std::function<void(const TransferInfo&)>;
 
-// Manages all file transfers with progress tracking
-class TransferManager
-{
-public:
-    TransferManager();
-    ~TransferManager();
-    
-    // Start a new transfer, returns transfer ID
-    int StartUpload(const wxString& filePath, int64_t totalBytes = 0);
-    int StartDownload(const wxString& fileName, int64_t totalBytes = 0);
-    
-    // Update transfer progress (called by TDLib callbacks)
-    void UpdateProgress(int transferId, int64_t transferredBytes, int64_t totalBytes);
-    
-    // Mark transfer as complete
-    void CompleteTransfer(int transferId, const wxString& localPath = "");
-    
-    // Mark transfer as failed
-    void FailTransfer(int transferId, const wxString& error);
-    
-    // Cancel a transfer
-    void CancelTransfer(int transferId);
-    
-    // Get transfer info
-    TransferInfo* GetTransfer(int transferId);
-    const TransferInfo* GetTransfer(int transferId) const;
-    
-    // Get active transfer count
-    int GetActiveCount() const;
-    
-    // Get the most recent active transfer (for status bar display)
-    const TransferInfo* GetCurrentTransfer() const;
-    
-    // Check if any transfers are active
-    bool HasActiveTransfers() const;
-    
-    // Set callback for progress updates (to update UI)
-    void SetProgressCallback(TransferCallback callback);
-    
-    // Set callback for completion
-    void SetCompleteCallback(TransferCallback callback);
-    
-    // Set callback for errors
-    void SetErrorCallback(TransferCallback callback);
-    
-    // Clean up completed/failed transfers older than X seconds
-    void CleanupOldTransfers(int maxAgeSeconds = 60);
-    
-private:
-    int m_nextId;
-    std::map<int, TransferInfo> m_transfers;
-    
-    TransferCallback m_progressCallback;
-    TransferCallback m_completeCallback;
-    TransferCallback m_errorCallback;
-    
-    void NotifyProgress(const TransferInfo& info);
-    void NotifyComplete(const TransferInfo& info);
-    void NotifyError(const TransferInfo& info);
-};
-
-#endif // TRANSFERMANAGER_H
+#endif // TRANSFERTYPES_H

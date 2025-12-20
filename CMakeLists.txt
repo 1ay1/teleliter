@@ -115,13 +115,15 @@ find_package(ZLIB REQUIRED)
 
 # Source files
 set(SOURCES
-    src/App.cpp
-    src/MainFrame.cpp
-    src/MediaPopup.cpp
-    src/FileDropTarget.cpp
-    src/TransferManager.cpp
-    src/WelcomeChat.cpp
-    src/TelegramClient.cpp
+    src/ui/App.cpp
+    src/ui/MainFrame.cpp
+    src/ui/MediaPopup.cpp
+    src/ui/FileDropTarget.cpp
+    src/ui/FileUtils.cpp
+    src/ui/MessageFormatter.cpp
+    src/ui/WelcomeChat.cpp
+    src/telegram/TransferManager.cpp
+    src/telegram/TelegramClient.cpp
     src/main.cpp
 )
 
@@ -131,6 +133,7 @@ add_executable(teleliter ${SOURCES})
 # Include directories
 target_include_directories(teleliter PRIVATE
     ${TDLIB_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # Link libraries - order matters for static linking

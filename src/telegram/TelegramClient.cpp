@@ -1,6 +1,6 @@
 #include "TelegramClient.h"
-#include "MainFrame.h"
-#include "WelcomeChat.h"
+#include "../ui/MainFrame.h"
+#include "../ui/WelcomeChat.h"
 
 #include <iostream>
 #include <sstream>

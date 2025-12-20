@@ -1,6 +1,6 @@
 #include "MainFrame.h"
 #include "WelcomeChat.h"
-#include "TelegramClient.h"
+#include "../telegram/TelegramClient.h"
 #include <wx/artprov.h>
 #include <wx/settings.h>
 #include <wx/filename.h>
@@ -34,6 +34,7 @@ wxEND_EVENT_TABLE()
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
     : wxFrame(NULL, wxID_ANY, title, pos, size),
       m_telegramClient(nullptr),
+      m_messageFormatter(nullptr),
       m_mainSplitter(nullptr),
       m_rightSplitter(nullptr),
       m_leftPanel(nullptr),
@@ -103,6 +104,10 @@ MainFrame::~MainFrame()
         m_telegramClient->Stop();
         delete m_telegramClient;
         m_telegramClient = nullptr;
+    }
+    if (m_messageFormatter) {
+        delete m_messageFormatter;
+        m_messageFormatter = nullptr;
     }
 }
 
@@ -409,7 +414,7 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     // Bind key events for clipboard paste
     m_inputBox->Bind(wxEVT_KEY_DOWN, &MainFrame::OnInputKeyDown, this);
     
-    inputSizer->Add(m_inputBox, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+    inputSizer->Add(m_inputBox, 1, wxEXPAND);
     
     inputPanel->SetSizer(inputSizer);
     sizer->Add(inputPanel, 0, wxEXPAND | wxALL, 2);
@@ -422,6 +427,17 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
             OnFilesDropped(files);
         });
     m_chatDisplay->SetDropTarget(dropTarget);
+    
+    // Create message formatter for the chat display
+    m_messageFormatter = new MessageFormatter(m_chatDisplay);
+    m_messageFormatter->SetTimestampColor(m_timestampColor);
+    m_messageFormatter->SetTextColor(m_textColor);
+    m_messageFormatter->SetServiceColor(m_serviceColor);
+    m_messageFormatter->SetMediaColor(m_mediaColor);
+    m_messageFormatter->SetEditedColor(m_editedColor);
+    m_messageFormatter->SetForwardColor(m_forwardColor);
+    m_messageFormatter->SetReplyColor(m_replyColor);
+    m_messageFormatter->SetUserColors(m_userColors);
 }
 
 void MainFrame::CreateMemberList(wxWindow* parent)
@@ -457,7 +473,7 @@ void MainFrame::SetupStatusBar()
     statusBar->SetBackgroundColour(m_bgColor);
     
     // Field widths: chat info | progress label | progress gauge | connection status
-    int widths[] = {-3, 150, 100, 80};
+    int widths[] = {-3, 150, 100, 120};
     statusBar->SetStatusWidths(4, widths);
     
     // Create progress label (in field 1)
@@ -549,15 +565,7 @@ void MainFrame::OnTransferError(const TransferInfo& info)
     }
 }
 
-wxColour MainFrame::GetUserColor(const wxString& username)
-{
-    // Hash the username to get consistent color
-    unsigned long hash = 0;
-    for (size_t i = 0; i < username.length(); i++) {
-        hash = static_cast<unsigned long>(username[i].GetValue()) + (hash << 6) + (hash << 16) - hash;
-    }
-    return m_userColors[hash % 16];
-}
+
 
 void MainFrame::AddMediaSpan(long startPos, long endPos, const MediaInfo& info)
 {
@@ -651,15 +659,15 @@ void MainFrame::PopulateDummyData()
     // Add sample messages
     m_chatDisplay->BeginSuppressUndo();
     
-    AppendServiceMessage("12:00:00", "You joined the group");
-    AppendServiceMessage("12:00:00", "Group created by Admin");
+    m_messageFormatter->AppendServiceMessage("12:00:00", "You joined the group");
+    m_messageFormatter->AppendServiceMessage("12:00:00", "Group created by Admin");
     
-    AppendMessage("12:00:15", "Alice", "Hey everyone! Just installed Arch btw :P");
-    AppendMessage("12:00:22", "Bob", "Hi Alice, how long did that take?");
-    AppendMessage("12:00:35", "Alice", "About 3 hours, but I learned a lot!");
-    AppendMessage("12:00:42", "Charlie", "Nice! I'm still on Ubuntu");
+    m_messageFormatter->AppendMessage("12:00:15", "Alice", "Hey everyone! Just installed Arch btw :P");
+    m_messageFormatter->AppendMessage("12:00:22", "Bob", "Hi Alice, how long did that take?");
+    m_messageFormatter->AppendMessage("12:00:35", "Alice", "About 3 hours, but I learned a lot!");
+    m_messageFormatter->AppendMessage("12:00:42", "Charlie", "Nice! I'm still on Ubuntu");
     
-    AppendReplyMessage("12:00:58", "David", "Alice: Just installed Arch btw", 
+    m_messageFormatter->AppendReplyMessage("12:00:58", "David", "Alice: Just installed Arch btw", 
                        "Congrats! The Arch wiki is your best friend now");
     
     // Sample media message with MediaInfo
@@ -667,227 +675,49 @@ void MainFrame::PopulateDummyData()
     photoInfo.type = MediaType::Photo;
     photoInfo.caption = "Look at my desktop!";
     photoInfo.id = "photo123";
-    AppendMediaMessage("12:01:10", "Eve", photoInfo, "Look at my desktop!");
+    m_messageFormatter->AppendMediaMessage("12:01:10", "Eve", photoInfo, "Look at my desktop!");
+    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), photoInfo);
     
-    AppendMessage("12:01:25", "Frank", "That looks clean! What DE are you using?");
-    AppendMessage("12:01:32", "Eve", "It's KDE Plasma with some custom themes");
+    m_messageFormatter->AppendMessage("12:01:25", "Frank", "That looks clean! What DE are you using?");
+    m_messageFormatter->AppendMessage("12:01:32", "Eve", "It's KDE Plasma with some custom themes");
     
-    AppendForwardMessage("12:01:45", "Grace", "Tech News", 
+    m_messageFormatter->AppendForwardMessage("12:01:45", "Grace", "Tech News", 
                          "Linux kernel 6.8 released with major performance improvements");
     
-    AppendJoinMessage("12:01:55", "NewUser");
+    m_messageFormatter->AppendJoinMessage("12:01:55", "NewUser");
     
-    AppendMessage("12:02:05", "Admin", "Welcome NewUser! Please read the pinned messages");
-    AppendMessage("12:02:15", "NewUser", "Thanks! Happy to be here");
+    m_messageFormatter->AppendMessage("12:02:05", "Admin", "Welcome NewUser! Please read the pinned messages");
+    m_messageFormatter->AppendMessage("12:02:15", "NewUser", "Thanks! Happy to be here");
     
-    AppendEditedMessage("12:02:30", "Henry", "Has anyone tried Wayland yet? It works great now!");
+    m_messageFormatter->AppendEditedMessage("12:02:30", "Henry", "Has anyone tried Wayland yet? It works great now!");
     
-    AppendMessage("12:02:45", "Alice", "Yes! Been using it for months, very stable");
-    AppendMessage("12:02:58", "Bob", "Still having some issues with screen sharing in Discord");
+    m_messageFormatter->AppendMessage("12:02:45", "Alice", "Yes! Been using it for months, very stable");
+    m_messageFormatter->AppendMessage("12:02:58", "Bob", "Still having some issues with screen sharing in Discord");
     
     // Sample file message
     MediaInfo fileInfo;
     fileInfo.type = MediaType::File;
     fileInfo.fileName = "linux-guide.pdf";
     fileInfo.fileSize = "2.4 MB";
-    AppendMediaMessage("12:03:10", "Charlie", fileInfo, "");
+    m_messageFormatter->AppendMediaMessage("12:03:10", "Charlie", fileInfo, "");
+    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), fileInfo);
     
-    AppendLeaveMessage("12:03:20", "OldUser");
+    m_messageFormatter->AppendLeaveMessage("12:03:20", "OldUser");
     
-    AppendMessage("12:03:30", "David", "Check out this link: https://kernel.org");
+    m_messageFormatter->AppendMessage("12:03:30", "David", "Check out this link: https://kernel.org");
     
     // Sample sticker
     MediaInfo stickerInfo;
     stickerInfo.type = MediaType::Sticker;
     stickerInfo.emoji = "😎";
-    AppendMediaMessage("12:03:45", "Eve", stickerInfo, "");
+    m_messageFormatter->AppendMediaMessage("12:03:45", "Eve", stickerInfo, "");
+    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), stickerInfo);
     
     m_chatDisplay->EndSuppressUndo();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
 }
 
-void MainFrame::AppendMessage(const wxString& timestamp, const wxString& sender,
-                              const wxString& message)
-{
-    // Format: [HH:MM:SS] <sender> message
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(GetUserColor(sender));
-    m_chatDisplay->WriteText("<" + sender + "> ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_textColor);
-    m_chatDisplay->WriteText(message + "\n");
-    m_chatDisplay->EndTextColour();
-}
 
-void MainFrame::AppendServiceMessage(const wxString& timestamp, const wxString& message)
-{
-    // Format: [HH:MM:SS] * message
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_serviceColor);
-    m_chatDisplay->WriteText("* " + message + "\n");
-    m_chatDisplay->EndTextColour();
-}
-
-void MainFrame::AppendJoinMessage(const wxString& timestamp, const wxString& user)
-{
-    // Format: [HH:MM:SS] --> user joined the group
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_serviceColor);
-    m_chatDisplay->WriteText("--> " + user + " joined the group\n");
-    m_chatDisplay->EndTextColour();
-}
-
-void MainFrame::AppendLeaveMessage(const wxString& timestamp, const wxString& user)
-{
-    // Format: [HH:MM:SS] <-- user left the group
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_serviceColor);
-    m_chatDisplay->WriteText("<-- " + user + " left the group\n");
-    m_chatDisplay->EndTextColour();
-}
-
-void MainFrame::AppendMediaMessage(const wxString& timestamp, const wxString& sender,
-                                   const MediaInfo& media, const wxString& caption)
-{
-    // Format: [HH:MM:SS] <sender> [Photo] caption
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(GetUserColor(sender));
-    m_chatDisplay->WriteText("<" + sender + "> ");
-    m_chatDisplay->EndTextColour();
-    
-    // Get position before media tag for hover tracking
-    long startPos = m_chatDisplay->GetLastPosition();
-    
-    // Media tag
-    m_chatDisplay->BeginTextColour(m_mediaColor);
-    m_chatDisplay->BeginUnderline();
-    
-    wxString mediaLabel;
-    switch (media.type) {
-        case MediaType::Photo:
-            mediaLabel = "[Photo]";
-            break;
-        case MediaType::Video:
-            mediaLabel = "[Video]";
-            break;
-        case MediaType::Sticker:
-            mediaLabel = "[Sticker " + media.emoji + "]";
-            break;
-        case MediaType::GIF:
-            mediaLabel = "[GIF]";
-            break;
-        case MediaType::Voice:
-            mediaLabel = "[Voice]";
-            break;
-        case MediaType::VideoNote:
-            mediaLabel = "[Video Message]";
-            break;
-        case MediaType::File:
-            mediaLabel = "[File: " + media.fileName + "]";
-            break;
-        default:
-            mediaLabel = "[Media]";
-            break;
-    }
-    
-    m_chatDisplay->WriteText(mediaLabel);
-    m_chatDisplay->EndUnderline();
-    m_chatDisplay->EndTextColour();
-    
-    // Get position after media tag
-    long endPos = m_chatDisplay->GetLastPosition();
-    
-    // Store media span for hover detection
-    AddMediaSpan(startPos, endPos, media);
-    
-    // Caption
-    if (!caption.IsEmpty()) {
-        m_chatDisplay->BeginTextColour(m_textColor);
-        m_chatDisplay->WriteText(" " + caption);
-        m_chatDisplay->EndTextColour();
-    }
-    
-    m_chatDisplay->WriteText("\n");
-}
-
-void MainFrame::AppendReplyMessage(const wxString& timestamp, const wxString& sender,
-                                   const wxString& replyTo, const wxString& message)
-{
-    // Format: [HH:MM:SS] <sender> [> replyTo] message
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(GetUserColor(sender));
-    m_chatDisplay->WriteText("<" + sender + "> ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_replyColor);
-    m_chatDisplay->WriteText("[> " + replyTo + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_textColor);
-    m_chatDisplay->WriteText(message + "\n");
-    m_chatDisplay->EndTextColour();
-}
-
-void MainFrame::AppendForwardMessage(const wxString& timestamp, const wxString& sender,
-                                     const wxString& forwardFrom, const wxString& message)
-{
-    // Format: [HH:MM:SS] <sender> [Fwd: forwardFrom] message
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(GetUserColor(sender));
-    m_chatDisplay->WriteText("<" + sender + "> ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_forwardColor);
-    m_chatDisplay->WriteText("[Fwd: " + forwardFrom + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_textColor);
-    m_chatDisplay->WriteText(message + "\n");
-    m_chatDisplay->EndTextColour();
-}
-
-void MainFrame::AppendEditedMessage(const wxString& timestamp, const wxString& sender,
-                                    const wxString& message)
-{
-    // Format: [HH:MM:SS] <sender> message (edited)
-    m_chatDisplay->BeginTextColour(m_timestampColor);
-    m_chatDisplay->WriteText("[" + timestamp + "] ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(GetUserColor(sender));
-    m_chatDisplay->WriteText("<" + sender + "> ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_textColor);
-    m_chatDisplay->WriteText(message + " ");
-    m_chatDisplay->EndTextColour();
-    
-    m_chatDisplay->BeginTextColour(m_editedColor);
-    m_chatDisplay->WriteText("(edited)\n");
-    m_chatDisplay->EndTextColour();
-}
 
 // Mouse event handlers for hover detection
 
@@ -997,8 +827,9 @@ void MainFrame::OnFilesDropped(const wxArrayString& files)
         
         // TODO: Actually upload via TDLib
         // For now, simulate progress and complete
-        AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
+        m_messageFormatter->AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
                           media, "");
+        AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), media);
         
         // Simulate completion (will be replaced by TDLib callbacks)
         m_transferManager.CompleteTransfer(transferId, file);
@@ -1099,7 +930,7 @@ void MainFrame::OnNewChat(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter username or phone number:", "New Private Chat");
     if (dlg.ShowModal() == wxID_OK) {
         wxString contact = dlg.GetValue();
-        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Starting chat with " + contact);
     }
 }
@@ -1109,7 +940,7 @@ void MainFrame::OnNewGroup(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter group name:", "New Group");
     if (dlg.ShowModal() == wxID_OK) {
         wxString groupName = dlg.GetValue();
-        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Creating group: " + groupName);
     }
 }
@@ -1119,7 +950,7 @@ void MainFrame::OnNewChannel(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter channel name:", "New Channel");
     if (dlg.ShowModal() == wxID_OK) {
         wxString channelName = dlg.GetValue();
-        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Creating channel: " + channelName);
     }
 }
@@ -1134,7 +965,7 @@ void MainFrame::OnSearch(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Search messages, chats, and users:", "Search");
     if (dlg.ShowModal() == wxID_OK) {
         wxString query = dlg.GetValue();
-        AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                             "Searching for: " + query);
     }
 }
@@ -1288,7 +1119,7 @@ void MainFrame::OnMemberListItemActivated(wxListEvent& event)
         username = username.Left(parenPos);
     }
     
-    AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
+    m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
                         "Opening profile: " + username);
 }
 
@@ -1335,7 +1166,7 @@ void MainFrame::OnInputEnter(wxCommandEvent& event)
     // Fallback: display locally
     wxDateTime now = wxDateTime::Now();
     wxString timestamp = now.Format("%H:%M:%S");
-    AppendMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, message);
+    m_messageFormatter->AppendMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, message);
     
     m_inputBox->Clear();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
@@ -1546,13 +1377,13 @@ void MainFrame::DisplayMessage(const MessageInfo& msg)
     
     // Handle forwarded messages
     if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
-        AppendForwardMessage(timestamp, sender, msg.forwardedFrom, msg.text);
+        m_messageFormatter->AppendForwardMessage(timestamp, sender, msg.forwardedFrom, msg.text);
         return;
     }
     
     // Handle edited messages
     if (msg.isEdited) {
-        AppendEditedMessage(timestamp, sender, msg.text);
+        m_messageFormatter->AppendEditedMessage(timestamp, sender, msg.text);
         return;
     }
     
@@ -1584,17 +1415,18 @@ void MainFrame::DisplayMessage(const MessageInfo& msg)
             mediaInfo.type = MediaType::GIF;
         }
         
-        AppendMediaMessage(timestamp, sender, mediaInfo, msg.mediaCaption);
+        m_messageFormatter->AppendMediaMessage(timestamp, sender, mediaInfo, msg.mediaCaption);
+        AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), mediaInfo);
         
         // If there's also text, display it
         if (!msg.text.IsEmpty() && !msg.text.StartsWith("[")) {
-            AppendMessage(timestamp, sender, msg.text);
+            m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
         }
         return;
     }
     
     // Regular text message
-    AppendMessage(timestamp, sender, msg.text);
+    m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
 }
 
 void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText)
@@ -1605,7 +1437,7 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
     
     // For now, just add a service message noting the edit
     // A more sophisticated implementation would find and update the original message
-    AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"),
+    m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"),
                         wxString::Format("Message %lld was edited: %s", messageId, newText));
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
 }
