@@ -47,7 +47,7 @@ public:
     void RefreshChatList();
     void OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>& messages);
     void OnNewMessage(const MessageInfo& message);
-    void OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText);
+    void OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText, const wxString& senderName);
     void OnFileDownloaded(int32_t fileId, const wxString& localPath);
     void OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize);
     void OnDownloadStarted(int32_t fileId, const wxString& fileName, int64_t totalSize);

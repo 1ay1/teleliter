@@ -1348,6 +1348,9 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
         display->Freeze();
         display->BeginSuppressUndo();
     }
+    
+    // Clear reloading state now that we have fresh messages
+    m_chatViewWidget->SetReloading(false);
     m_chatViewWidget->ClearMessages();
     
     // Sort messages by message ID (primary) then date (secondary) for correct order
@@ -1530,6 +1533,12 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
         return;
     }
     
+    // Skip messages while reloading to prevent display corruption
+    if (m_chatViewWidget && m_chatViewWidget->IsReloading()) {
+        DBGLOG("OnNewMessage: skipping message id=" << message.id << " while reloading");
+        return;
+    }
+    
     // Remove the "read up to here" marker if present, since user is actively viewing
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
         MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
@@ -1543,6 +1552,10 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
     if (m_chatViewWidget && message.id != 0 && m_chatViewWidget->IsMessageOutOfOrder(message.id)) {
         DBGLOG("OnNewMessage: message id=" << message.id << " is out of order (last=" 
                << m_chatViewWidget->GetLastDisplayedMessageId() << "), reloading chat");
+        // Set reloading flag to ignore incoming messages until reload completes
+        m_chatViewWidget->SetReloading(true);
+        // Clear display immediately to prevent stale content
+        m_chatViewWidget->ClearMessages();
         // Reload all messages to get correct order
         if (m_telegramClient) {
             m_telegramClient->OpenChatAndLoadMessages(message.chatId);
@@ -1572,7 +1585,7 @@ void MainFrame::DisplayMessage(const MessageInfo& msg)
     m_chatViewWidget->DisplayMessage(msg);
 }
 
-void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText)
+void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText, const wxString& senderName)
 {
     if (chatId != m_currentChatId) {
         return;
@@ -1591,16 +1604,16 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
         return;
     }
     
-    // Only show edit notifications for actual text message changes
-    // Don't show the raw message ID - just indicate an edit happened
+    // Show edit notification with sender name and full message content
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter() && !newText.IsEmpty()) {
-        // Truncate long messages for the notification
+        wxString sender = senderName.IsEmpty() ? "Someone" : senderName;
+        // Show the full message (or truncate if extremely long)
         wxString displayText = newText;
-        if (displayText.Length() > 100) {
-            displayText = displayText.Left(100) + "...";
+        if (displayText.Length() > 500) {
+            displayText = displayText.Left(500) + "...";
         }
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"),
-                            wxString::Format("A message was edited: %s", displayText));
+                            wxString::Format("* %s edited: %s", sender, displayText));
         m_chatViewWidget->ScrollToBottomIfAtBottom();
     }
 }

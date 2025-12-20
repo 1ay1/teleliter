@@ -8,6 +8,7 @@
 #include <wx/timer.h>
 #include "MediaTypes.h"
 #include <memory>
+#include <functional>
 
 // Forward declarations
 class LottiePlayer;
@@ -51,8 +52,12 @@ public:
     
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
     
+    // Set callback for when popup is clicked
+    void SetClickCallback(std::function<void(const MediaInfo&)> callback) { m_clickCallback = callback; }
+    
 protected:
     void OnPaint(wxPaintEvent& event);
+    void OnLeftDown(wxMouseEvent& event);
     void OnMediaLoaded(wxMediaEvent& event);
     void OnMediaFinished(wxMediaEvent& event);
     void OnMediaStop(wxMediaEvent& event);
@@ -106,8 +111,17 @@ private:
     bool m_isPlayingWebm;
     wxTimer m_webmAnimTimer;
     
-    static constexpr int MAX_WIDTH = 250;
-    static constexpr int MAX_HEIGHT = 200;
+    // Click callback
+    std::function<void(const MediaInfo&)> m_clickCallback;
+    
+    // Size constraints for stickers/emojis (smaller)
+    static constexpr int STICKER_MAX_WIDTH = 250;
+    static constexpr int STICKER_MAX_HEIGHT = 200;
+    
+    // Size constraints for photos/videos (larger for better preview)
+    static constexpr int PHOTO_MAX_WIDTH = 450;
+    static constexpr int PHOTO_MAX_HEIGHT = 400;
+    
     static constexpr int MIN_WIDTH = 120;
     static constexpr int MIN_HEIGHT = 70;
     static constexpr int PADDING = 8;

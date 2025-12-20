@@ -35,6 +35,7 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_wasAtBottom(true),
       m_newMessageCount(0),
       m_isLoading(false),
+      m_isReloading(false),
       m_batchUpdateDepth(0),
       m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0),
@@ -53,6 +54,12 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
 
     // Create media popup (hidden initially)
     m_mediaPopup = new MediaPopup(this);
+    
+    // Set click callback to open media when popup is clicked
+    m_mediaPopup->SetClickCallback([this](const MediaInfo& info) {
+        OpenMedia(info);
+        HideMediaPopup();
+    });
 
     // Create edit history popup (hidden initially)
     m_editHistoryPopup = nullptr;  // Created on demand
@@ -780,8 +787,10 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     m_hideTimer.Stop();
 
     // Don't re-show if already showing the same media (prevents flickering and video restart)
-    // BUT: allow reload if paths changed (download completed)
-    if (m_mediaPopup->IsShown() && IsSameMedia(m_currentlyShowingMedia, info)) {
+    // Check both if popup is shown AND if we're tracking the same media
+    bool alreadyShowingSame = IsSameMedia(m_currentlyShowingMedia, info);
+    
+    if (alreadyShowingSame) {
         // Check if paths have changed (download completed since last show)
         bool localPathChanged = (m_currentlyShowingMedia.localPath != info.localPath && 
                                  !info.localPath.IsEmpty() && wxFileExists(info.localPath));
@@ -790,12 +799,21 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         
         if (!localPathChanged && !thumbnailPathChanged) {
             // Same media, no path changes, don't reload
-            CVWLOG("ShowMediaPopup: same media already showing, no path changes, skipping");
+            CVWLOG("ShowMediaPopup: same media already showing/tracked, no path changes, skipping");
             return;
         }
         CVWLOG("ShowMediaPopup: same media but paths changed, allowing reload. localPathChanged=" 
                << localPathChanged << " thumbnailPathChanged=" << thumbnailPathChanged);
     }
+    
+    // Hide any existing popup before showing NEW media (not same media)
+    if (m_mediaPopup->IsShown() && !alreadyShowingSame) {
+        m_mediaPopup->StopAllPlayback();
+        m_mediaPopup->Hide();
+    }
+    
+    // Also hide edit history popup
+    HideEditHistoryPopup();
     
     CVWLOG("ShowMediaPopup: fileId=" << info.fileId << " type=" << static_cast<int>(info.type)
            << " localPath=" << info.localPath.ToStdString()
@@ -839,10 +857,11 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     }
 
     // If the file isn't downloaded yet, trigger a download
+    // But only if we haven't already requested this download (prevent duplicates)
     if (info.localPath.IsEmpty() || !wxFileExists(info.localPath) || needsVideoDownload) {
-        if (info.fileId != 0 && m_mainFrame) {
+        if (info.fileId != 0 && m_mainFrame && !HasPendingDownload(info.fileId)) {
             TelegramClient* client = m_mainFrame->GetTelegramClient();
-            if (client) {
+            if (client && !client->IsDownloading(info.fileId)) {
                 // Start download with high priority for preview
                 wxString displayName = info.fileName;
                 if (displayName.IsEmpty()) {
@@ -1294,10 +1313,10 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
                 m_isOverMediaSpan = true;
                 m_hideTimer.Stop();  // Cancel any pending hide
 
-                // Check if we're already showing this exact media
-                if (m_mediaPopup && m_mediaPopup->IsShown() &&
-                    IsSameMedia(m_currentlyShowingMedia, span->info)) {
-                    // Already showing this media, do nothing
+                // Check if we're already showing or about to show this exact media
+                if (IsSameMedia(m_currentlyShowingMedia, span->info) ||
+                    IsSameMedia(m_pendingHoverMedia, span->info)) {
+                    // Already showing or pending this media, do nothing
                     event.Skip();
                     return;
                 }
@@ -1364,7 +1383,12 @@ void ChatViewWidget::OnHoverTimer(wxTimerEvent& event)
     // Timer fired - show the popup if we still have pending media and still over media span
     if (m_isOverMediaSpan &&
         (m_pendingHoverMedia.fileId != 0 || !m_pendingHoverMedia.localPath.IsEmpty())) {
-        ShowMediaPopup(m_pendingHoverMedia, m_pendingHoverPos);
+        // Clear pending state before showing to prevent re-triggering
+        MediaInfo mediaToShow = m_pendingHoverMedia;
+        wxPoint posToShow = m_pendingHoverPos;
+        m_pendingHoverMedia = MediaInfo();
+        
+        ShowMediaPopup(mediaToShow, posToShow);
     }
 }
 

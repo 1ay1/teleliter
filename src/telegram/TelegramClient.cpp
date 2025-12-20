@@ -1360,8 +1360,9 @@ void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
                                       td_api::object_ptr<td_api::MessageContent>& content)
 {
     wxString newText = ExtractMessageText(content.get());
+    wxString senderName;
     
-    // Update in cache
+    // Update in cache and get sender name
     {
         std::lock_guard<std::mutex> lock(m_dataMutex);
         auto& messages = m_messages[chatId];
@@ -1369,14 +1370,15 @@ void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
             if (msg.id == messageId) {
                 msg.text = newText;
                 msg.isEdited = true;
+                senderName = msg.senderName;
                 break;
             }
         }
     }
     
-    PostToMainThread([this, chatId, messageId, newText]() {
+    PostToMainThread([this, chatId, messageId, newText, senderName]() {
         if (m_mainFrame) {
-            m_mainFrame->OnMessageEdited(chatId, messageId, newText);
+            m_mainFrame->OnMessageEdited(chatId, messageId, newText, senderName);
         }
     });
 }

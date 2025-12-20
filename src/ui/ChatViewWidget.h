@@ -34,6 +34,10 @@ public:
     bool IsMessageOutOfOrder(int64_t messageId) const;
     int64_t GetLastDisplayedMessageId() const { return m_lastDisplayedMessageId; }
     
+    // Reloading state - when true, new messages are ignored until reload completes
+    void SetReloading(bool reloading) { m_isReloading = reloading; }
+    bool IsReloading() const { return m_isReloading; }
+    
     // Smart scrolling - only auto-scroll if at bottom
     void ScrollToBottomIfAtBottom();
     bool IsAtBottom() const;
@@ -192,6 +196,7 @@ private:
     bool m_wasAtBottom;
     int m_newMessageCount;
     bool m_isLoading;
+    bool m_isReloading;  // True when reloading messages due to out-of-order detection
     int m_batchUpdateDepth;
     
     // Message grouping state (HexChat-style)

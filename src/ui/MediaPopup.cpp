@@ -64,6 +64,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_isPlayingWebm(false),
       m_webmAnimTimer(this, WEBM_ANIM_TIMER_ID)
 {
+    // Set hand cursor to indicate popup is clickable
+    SetCursor(wxCursor(wxCURSOR_HAND));
+    
     ApplyHexChatStyle();
     SetSize(MIN_WIDTH, MIN_HEIGHT);
     
@@ -75,6 +78,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
     
     // Bind webm animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnWebmAnimTimer, this, WEBM_ANIM_TIMER_ID);
+    
+    // Bind click event to open media
+    Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
 }
 
 MediaPopup::~MediaPopup()
@@ -149,8 +155,8 @@ void MediaPopup::PlayAnimatedSticker(const wxString& path)
         m_lottiePlayer = std::make_unique<LottiePlayer>();
     }
     
-    // Set render size to fit popup
-    m_lottiePlayer->SetRenderSize(MAX_WIDTH - PADDING * 2, MAX_HEIGHT - PADDING * 2 - 20);
+    // Set render size to fit popup (use sticker size for animated stickers)
+    m_lottiePlayer->SetRenderSize(STICKER_MAX_WIDTH - PADDING * 2, STICKER_MAX_HEIGHT - PADDING * 2 - 20);
     m_lottiePlayer->SetLoop(true);
     
     // Set callback to receive frames
@@ -191,8 +197,8 @@ void MediaPopup::PlayWebmSticker(const wxString& path)
         m_webmPlayer = std::make_unique<WebmPlayer>();
     }
     
-    // Set render size to fit popup
-    m_webmPlayer->SetRenderSize(MAX_WIDTH - PADDING * 2, MAX_HEIGHT - PADDING * 2 - 20);
+    // Set render size to fit popup (use sticker size for webm stickers)
+    m_webmPlayer->SetRenderSize(STICKER_MAX_WIDTH - PADDING * 2, STICKER_MAX_HEIGHT - PADDING * 2 - 20);
     m_webmPlayer->SetLoop(true);
     
     // Set callback to receive frames
@@ -305,7 +311,7 @@ void MediaPopup::CreateMediaCtrl()
     // Use default backend - wxMEDIABACKEND_GSTREAMER on Linux
     if (!m_mediaCtrl->Create(this, wxID_ANY, wxEmptyString,
                               wxPoint(PADDING + BORDER_WIDTH, PADDING + BORDER_WIDTH),
-                              wxSize(MAX_WIDTH - PADDING * 2, MAX_HEIGHT - PADDING * 2 - 24),
+                              wxSize(PHOTO_MAX_WIDTH - PADDING * 2, PHOTO_MAX_HEIGHT - PADDING * 2 - 24),
                               wxMC_NO_AUTORESIZE)) {
         delete m_mediaCtrl;
         m_mediaCtrl = nullptr;
@@ -408,16 +414,14 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
                     Refresh();
                     return;
 #else
-                    PlayVideo(info.localPath, true, true);
                     SetPosition(pos);
-                    Show();
+                    PlayVideo(info.localPath, true, true);
                     return;
 #endif
                     
                 case StickerFormat::Gif:
-                    PlayVideo(info.localPath, true, true);
                     SetPosition(pos);
-                    Show();
+                    PlayVideo(info.localPath, true, true);
                     return;
                     
                 case StickerFormat::Tgs:
@@ -508,9 +512,11 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
              info.type == MediaType::VideoNote) && IsVideoFormat(info.localPath)) {
             bool shouldLoop = (info.type == MediaType::GIF);
             bool shouldMute = (info.type == MediaType::GIF || info.type == MediaType::VideoNote);
-            PlayVideo(info.localPath, shouldLoop, shouldMute);
+            // Set position BEFORE PlayVideo so the popup is in the right place
             SetPosition(pos);
-            Show();
+            // PlayVideo will call Show() internally after setting up the media control
+            // Don't call Show() again here to avoid duplicate window issues
+            PlayVideo(info.localPath, shouldLoop, shouldMute);
             return;
         } else if (IsSupportedImageFormat(info.localPath)) {
             SetImage(info.localPath);
@@ -554,64 +560,109 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 
 void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 {
+    MPLOG("PlayVideo called: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
+
+    // IMPORTANT: Video playback behavior differs between platforms:
+    //
+    // macOS (AVFoundation backend):
+    //   - wxMediaCtrl renders video directly inside its parent window
+    //   - The popup window and video are properly composited together
+    //   - Both Show() on popup and wxMediaCtrl work as expected
+    //
+    // Linux/Wayland (GStreamer backend):
+    //   - GStreamer creates its OWN separate top-level window for video output
+    //   - This window is independent of the wxMediaCtrl's parent (our popup)
+    //   - If we call Show() on the popup, we get TWO windows:
+    //     1. The MediaPopup (shows as a black square - just the background)
+    //     2. GStreamer's video window (shows the actual video playing)
+    //   - Solution: Don't show the popup at all, let GStreamer's window be the only visible one
+    //
+    // This is why we DON'T call Show() on the popup for video playback on Linux.
+
     // Stop all other playback first
     StopAllPlayback();
-    
+
     m_videoPath = path;
     m_loopVideo = loop;
     m_videoMuted = muted;
     m_isPlayingVideo = false;
     m_hasImage = false;
-    
+
+    // Set size for video BEFORE creating media control
+    int videoWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
+    int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
+    SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+
+    // DON'T call Show() here - see explanation at top of this function.
+    // On Linux/GStreamer, calling Show() would create a duplicate black square
+    // because GStreamer creates its own video window separately.
+    // On macOS this wouldn't be needed, but not calling Show() is harmless there.
+
     // Create media control if needed
     CreateMediaCtrl();
-    
+
     if (!m_mediaCtrl) {
         // Fallback to thumbnail if media control creation failed
+        MPLOG("PlayVideo: failed to create media control, falling back to thumbnail");
         FallbackToThumbnail();
         return;
     }
-    
-    // Set size for video
-    int videoWidth = MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
-    int videoHeight = MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
-    
-    SetSize(MAX_WIDTH, MAX_HEIGHT);
-    m_mediaCtrl->SetSize(PADDING + BORDER_WIDTH, PADDING + BORDER_WIDTH, 
-                         videoWidth, videoHeight);
+
+    // Set media control size - position at 0,0 since we're not showing the popup frame
+    m_mediaCtrl->SetSize(0, 0, videoWidth, videoHeight);
     m_mediaCtrl->Show();
-    
+
     // Load and play the video
+    MPLOG("PlayVideo: loading video file");
     if (m_mediaCtrl->Load(path)) {
         // OnMediaLoaded will be called when ready
         m_isLoading = true;
+        MPLOG("PlayVideo: video loading started");
     } else {
+        MPLOG("PlayVideo: failed to load video, falling back to thumbnail");
         m_mediaCtrl->Hide();
         FallbackToThumbnail();
     }
-    
+
     Refresh();
 }
 
 void MediaPopup::FallbackToThumbnail()
 {
+    MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
+          << " localPath=" << m_mediaInfo.localPath.ToStdString());
+    
     // Try to use the thumbnail from the current media info
     if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
+        MPLOG("FallbackToThumbnail: using thumbnail");
         m_hasError = false;
         m_errorMessage.Clear();
         SetImage(m_mediaInfo.thumbnailPath);
         UpdateSize();
         Refresh();
+    } else if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath) &&
+               IsSupportedImageFormat(m_mediaInfo.localPath)) {
+        // Try to use the local path if it's an image
+        MPLOG("FallbackToThumbnail: using localPath as image");
+        m_hasError = false;
+        m_errorMessage.Clear();
+        SetImage(m_mediaInfo.localPath);
+        UpdateSize();
+        Refresh();
     } else if (!m_mediaInfo.emoji.IsEmpty()) {
         // Show emoji placeholder
+        MPLOG("FallbackToThumbnail: showing emoji placeholder");
         m_hasError = false;
         m_errorMessage.Clear();
         m_hasImage = false;
         UpdateSize();
         Refresh();
     } else {
-        m_hasError = true;
-        m_errorMessage = "Media not available";
+        // Show a placeholder indicating video/media
+        MPLOG("FallbackToThumbnail: no thumbnail available, showing placeholder");
+        m_hasError = false;
+        m_errorMessage.Clear();
+        m_hasImage = false;
         UpdateSize();
         Refresh();
     }
@@ -630,9 +681,10 @@ void MediaPopup::StopVideo()
 
 void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
 {
+    MPLOG("OnMediaLoaded: video ready to play");
     m_isLoading = false;
     m_isPlayingVideo = true;
-    
+
     if (m_mediaCtrl) {
         // Set volume (0 = muted, 1.0 = full)
         if (m_videoMuted) {
@@ -640,36 +692,36 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
         } else {
             m_mediaCtrl->SetVolume(0.5);  // 50% volume for previews
         }
-        
+
         // Get video size and resize popup accordingly
         wxSize videoSize = m_mediaCtrl->GetBestSize();
         if (videoSize.GetWidth() > 0 && videoSize.GetHeight() > 0) {
             int vidWidth = videoSize.GetWidth();
             int vidHeight = videoSize.GetHeight();
-            
+
             // Scale to fit within max dimensions
-            if (vidWidth > MAX_WIDTH - PADDING * 2 || vidHeight > MAX_HEIGHT - PADDING * 2 - 24) {
-                double scaleX = (double)(MAX_WIDTH - PADDING * 2) / vidWidth;
-                double scaleY = (double)(MAX_HEIGHT - PADDING * 2 - 24) / vidHeight;
+            if (vidWidth > PHOTO_MAX_WIDTH - PADDING * 2 || vidHeight > PHOTO_MAX_HEIGHT - PADDING * 2 - 24) {
+                double scaleX = (double)(PHOTO_MAX_WIDTH - PADDING * 2) / vidWidth;
+                double scaleY = (double)(PHOTO_MAX_HEIGHT - PADDING * 2 - 24) / vidHeight;
                 double scale = std::min(scaleX, scaleY);
-                
+
                 vidWidth = (int)(vidWidth * scale);
                 vidHeight = (int)(vidHeight * scale);
             }
-            
+
             // Ensure minimum size
             vidWidth = std::max(vidWidth, MIN_WIDTH - PADDING * 2);
             vidHeight = std::max(vidHeight, MIN_HEIGHT - PADDING * 2 - 24);
-            
+
             m_mediaCtrl->SetSize(PADDING + BORDER_WIDTH, PADDING + BORDER_WIDTH,
                                 vidWidth, vidHeight);
             SetSize(vidWidth + PADDING * 2 + BORDER_WIDTH * 2,
                    vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24);
         }
-        
+
         m_mediaCtrl->Play();
     }
-    
+
     Refresh();
 }
 
@@ -707,13 +759,24 @@ void MediaPopup::SetImage(const wxImage& image)
     m_loadingTimer.Stop();
     m_hasError = false;
     
+    // Use larger size for photos/videos, smaller for stickers/emojis
+    int maxWidth, maxHeight;
+    if (m_mediaInfo.type == MediaType::Photo || m_mediaInfo.type == MediaType::Video ||
+        m_mediaInfo.type == MediaType::GIF) {
+        maxWidth = PHOTO_MAX_WIDTH;
+        maxHeight = PHOTO_MAX_HEIGHT;
+    } else {
+        maxWidth = STICKER_MAX_WIDTH;
+        maxHeight = STICKER_MAX_HEIGHT;
+    }
+    
     // Scale image to fit within max dimensions while preserving aspect ratio
     int imgWidth = image.GetWidth();
     int imgHeight = image.GetHeight();
     
-    if (imgWidth > MAX_WIDTH || imgHeight > MAX_HEIGHT) {
-        double scaleX = (double)MAX_WIDTH / imgWidth;
-        double scaleY = (double)MAX_HEIGHT / imgHeight;
+    if (imgWidth > maxWidth || imgHeight > maxHeight) {
+        double scaleX = (double)maxWidth / imgWidth;
+        double scaleY = (double)maxHeight / imgHeight;
         double scale = std::min(scaleX, scaleY);
         
         imgWidth = (int)(imgWidth * scale);
@@ -831,6 +894,15 @@ wxString MediaPopup::GetMediaIcon() const
     }
 }
 
+void MediaPopup::OnLeftDown(wxMouseEvent& event)
+{
+    MPLOG("MediaPopup clicked, invoking callback if set");
+    if (m_clickCallback) {
+        m_clickCallback(m_mediaInfo);
+    }
+    event.Skip();
+}
+
 void MediaPopup::UpdateSize()
 {
     int width = MIN_WIDTH;
@@ -890,40 +962,64 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int imgY = contentY;
         dc.DrawBitmap(m_bitmap, imgX, imgY, true);
         
-        // If this is a thumbnail and the main file is still downloading, show an overlay indicator
+        // Check if this is a video type that should show a play button
+        bool isVideoType = (m_mediaInfo.type == MediaType::Video || 
+                           m_mediaInfo.type == MediaType::GIF || 
+                           m_mediaInfo.type == MediaType::VideoNote);
+        
+        // If this is a thumbnail and the main file is still downloading, show download indicator
         bool isShowingThumbnail = !m_mediaInfo.thumbnailPath.IsEmpty() && 
                                    wxFileExists(m_mediaInfo.thumbnailPath) &&
                                    (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
         bool needsDownload = m_mediaInfo.fileId != 0 && 
                              (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
         
-        if (isShowingThumbnail && needsDownload && 
-            (m_mediaInfo.type == MediaType::Video || m_mediaInfo.type == MediaType::GIF || 
-             m_mediaInfo.type == MediaType::VideoNote)) {
-            // Draw a semi-transparent overlay with download indicator
-            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 128)));
+        // Calculate center for overlay icons
+        int centerX = imgX + m_bitmap.GetWidth() / 2;
+        int centerY = imgY + m_bitmap.GetHeight() / 2;
+        int radius = 24;
+        
+        if (isVideoType) {
+            // Draw semi-transparent dark overlay behind play button
+            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 100)));
             dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawCircle(centerX, centerY, radius + 4);
             
-            // Draw play button circle in center
-            int centerX = imgX + m_bitmap.GetWidth() / 2;
-            int centerY = imgY + m_bitmap.GetHeight() / 2;
-            int radius = 20;
-            
-            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF)));
+            // Draw play button circle
+            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF, 220)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
             
-            // Draw download arrow inside
-            dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
-            dc.DrawLine(centerX, centerY - 8, centerX, centerY + 5);
-            dc.DrawLine(centerX - 6, centerY, centerX, centerY + 8);
-            dc.DrawLine(centerX + 6, centerY, centerX, centerY + 8);
-            
-            // Draw "Click to download" text below
-            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-            dc.SetTextForeground(wxColour(0x72, 0x9F, 0xCF));
-            wxString hint = "Hover to download";
-            wxSize hintSize = dc.GetTextExtent(hint);
-            dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 5);
+            if (isShowingThumbnail && needsDownload) {
+                // Draw download arrow (file needs to be downloaded first)
+                dc.SetPen(wxPen(wxColour(255, 255, 255), 2));
+                dc.DrawLine(centerX, centerY - 8, centerX, centerY + 5);
+                dc.DrawLine(centerX - 6, centerY, centerX, centerY + 8);
+                dc.DrawLine(centerX + 6, centerY, centerX, centerY + 8);
+                
+                // Draw hint text
+                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+                dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
+                wxString hint = "Click to download";
+                wxSize hintSize = dc.GetTextExtent(hint);
+                dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
+            } else {
+                // Draw play triangle (file is available, click to open)
+                wxPoint triangle[3];
+                triangle[0] = wxPoint(centerX - 6, centerY - 10);
+                triangle[1] = wxPoint(centerX - 6, centerY + 10);
+                triangle[2] = wxPoint(centerX + 10, centerY);
+                dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
+                dc.SetPen(*wxTRANSPARENT_PEN);
+                dc.DrawPolygon(3, triangle);
+                
+                // Draw hint text
+                dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+                dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
+                wxString hint = "Click to play";
+                wxSize hintSize = dc.GetTextExtent(hint);
+                dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
+            }
         }
         
         // Draw the label at the bottom
