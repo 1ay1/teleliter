@@ -82,27 +82,10 @@ void ChatViewWidget::CreateLayout()
 
     sizer->Add(m_topicBar, 0, wxEXPAND);
 
-    // Download progress bar (hidden by default)
-    m_downloadBar = new wxPanel(this, wxID_ANY);
-    m_downloadBar->SetBackgroundColour(wxColour(0x1E, 0x1E, 0x2E));
-    
-    wxBoxSizer* downloadSizer = new wxBoxSizer(wxHORIZONTAL);
-    
-    m_downloadLabel = new wxStaticText(m_downloadBar, wxID_ANY, "");
-    m_downloadLabel->SetForegroundColour(wxColour(0x89, 0xB4, 0xFA));  // Blue
-    m_downloadLabel->SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-    
-    m_downloadGauge = new wxGauge(m_downloadBar, wxID_ANY, 100, wxDefaultPosition, wxSize(150, 12), wxGA_HORIZONTAL | wxGA_SMOOTH);
-    m_downloadGauge->SetBackgroundColour(wxColour(0x31, 0x32, 0x44));
-    
-    downloadSizer->Add(m_downloadLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 8);
-    downloadSizer->Add(m_downloadGauge, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
-    
-    m_downloadBar->SetSizer(downloadSizer);
-    m_downloadBar->SetMinSize(wxSize(-1, 20));
-    m_downloadBar->Hide();
-    
-    sizer->Add(m_downloadBar, 0, wxEXPAND);
+    // Download progress is now shown in status bar, not here
+    m_downloadBar = nullptr;
+    m_downloadLabel = nullptr;
+    m_downloadGauge = nullptr;
 
     // ChatArea for display - uses same formatting as WelcomeChat
     m_chatArea = new ChatArea(this);
@@ -686,52 +669,23 @@ void ChatViewWidget::RemovePendingDownload(int32_t fileId)
 
 void ChatViewWidget::ShowDownloadProgress(const wxString& fileName, int percent)
 {
-    if (!m_downloadBar || !m_downloadLabel || !m_downloadGauge) return;
-    
-    m_activeDownloads++;
-    m_downloadHideTimer.Stop();
-    
-    wxString label = "⬇ " + fileName;
-    if (percent > 0 && percent < 100) {
-        label += wxString::Format(" %d%%", percent);
-    }
-    
-    m_downloadLabel->SetLabel(label);
-    m_downloadGauge->SetValue(percent);
-    
-    if (!m_downloadBar->IsShown()) {
-        m_downloadBar->Show();
-        GetSizer()->Layout();
-    }
+    // Download progress is now shown in status bar via MainFrame
+    // This method is kept for API compatibility but is a no-op
+    (void)fileName;
+    (void)percent;
 }
 
 void ChatViewWidget::UpdateDownloadProgress(int percent)
 {
-    if (!m_downloadGauge) return;
-    
-    m_downloadGauge->SetValue(percent);
-    
-    // Update label with percentage
-    wxString currentLabel = m_downloadLabel->GetLabel();
-    int spacePos = currentLabel.Find(' ', true);
-    if (spacePos != wxNOT_FOUND && currentLabel.Mid(spacePos).Contains("%")) {
-        currentLabel = currentLabel.BeforeLast(' ');
-    }
-    if (percent > 0 && percent < 100) {
-        m_downloadLabel->SetLabel(currentLabel + wxString::Format(" %d%%", percent));
-    }
+    // Download progress is now shown in status bar via MainFrame
+    // This method is kept for API compatibility but is a no-op
+    (void)percent;
 }
 
 void ChatViewWidget::HideDownloadProgress()
 {
-    m_activeDownloads--;
-    if (m_activeDownloads <= 0) {
-        m_activeDownloads = 0;
-        if (m_downloadBar && m_downloadBar->IsShown()) {
-            m_downloadBar->Hide();
-            GetSizer()->Layout();
-        }
-    }
+    // Download progress is now shown in status bar via MainFrame
+    // This method is kept for API compatibility but is a no-op
 }
 
 bool ChatViewWidget::IsSameMedia(const MediaInfo& a, const MediaInfo& b) const

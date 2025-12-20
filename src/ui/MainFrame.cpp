@@ -78,14 +78,14 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST, MainFrame::OnMemberListItemActivated)
     EVT_LIST_ITEM_RIGHT_CLICK(ID_MEMBER_LIST, MainFrame::OnMemberListRightClick)
     EVT_TIMER(ID_REFRESH_TIMER, MainFrame::OnRefreshTimer)
-
+    EVT_TIMER(ID_STATUS_TIMER, MainFrame::OnStatusTimer)
 wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
     : wxFrame(NULL, wxID_ANY, title, pos, size),
       m_telegramClient(nullptr),
       m_refreshTimer(nullptr),
-
+      m_statusTimer(nullptr),
       m_mainSplitter(nullptr),
       m_rightSplitter(nullptr),
       m_leftPanel(nullptr),
@@ -97,6 +97,7 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
       m_rightPanel(nullptr),
       m_memberList(nullptr),
       m_memberCountLabel(nullptr),
+      m_statusBar(nullptr),
 
       m_showChatList(true),
       m_showMembers(true),
@@ -112,6 +113,10 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     SetupFonts();
     CreateMenuBar();
     CreateMainLayout();
+
+    // Setup status bar manager
+    m_statusBar = new StatusBarManager(this);
+    m_statusBar->Setup();
     
     // Create TelegramClient and start it immediately for faster login
     m_telegramClient = new TelegramClient();
@@ -125,10 +130,45 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     
     // Start TDLib immediately in background so it's ready when user wants to login
     m_telegramClient->Start();
+
+    // Connect status bar to telegram client
+    m_statusBar->SetTelegramClient(m_telegramClient);
+
+    // Setup transfer manager callbacks
+    m_transferManager.SetProgressCallback([this](const TransferInfo& info) {
+        m_statusBar->SetActiveTransferCount(m_transferManager.GetActiveCount());
+        m_statusBar->UpdateTransferProgress(info);
+    });
+    m_transferManager.SetCompleteCallback([this](const TransferInfo& info) {
+        m_statusBar->OnTransferComplete(info);
+        if (!m_transferManager.HasActiveTransfers()) {
+            CallAfter([this]() {
+                wxMilliSleep(2000);
+                if (!m_transferManager.HasActiveTransfers()) {
+                    m_statusBar->HideTransferProgress();
+                }
+            });
+        }
+    });
+    m_transferManager.SetErrorCallback([this](const TransferInfo& info) {
+        m_statusBar->OnTransferError(info);
+        if (!m_transferManager.HasActiveTransfers()) {
+            CallAfter([this]() {
+                wxMilliSleep(3000);
+                if (!m_transferManager.HasActiveTransfers()) {
+                    m_statusBar->HideTransferProgress();
+                }
+            });
+        }
+    });
     
     // Start refresh timer (every 30 seconds)
     m_refreshTimer = new wxTimer(this, ID_REFRESH_TIMER);
     m_refreshTimer->Start(30000);
+
+    // Start status bar update timer (every 1 second)
+    m_statusTimer = new wxTimer(this, ID_STATUS_TIMER);
+    m_statusTimer->Start(1000);
     
     // Ensure welcome chat is visible on startup
     if (m_welcomeChat && m_chatViewWidget && m_chatPanel) {
@@ -146,6 +186,11 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
 
 MainFrame::~MainFrame()
 {
+    if (m_statusTimer) {
+        m_statusTimer->Stop();
+        delete m_statusTimer;
+        m_statusTimer = nullptr;
+    }
 
     if (m_refreshTimer) {
         m_refreshTimer->Stop();
@@ -902,7 +947,11 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             }
             
             // Update status bar - no chat selected
-
+            if (m_statusBar) {
+                m_statusBar->SetCurrentChatId(0);
+                m_statusBar->SetCurrentChatTitle("");
+                m_statusBar->SetCurrentChatMemberCount(0);
+            }
             
             // Disable upload buttons when no chat selected
             if (m_inputBoxWidget) {
@@ -935,6 +984,10 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             }
             
             // Update status bar with current chat info
+            if (m_statusBar) {
+                m_statusBar->SetCurrentChatId(chatId);
+                m_statusBar->SetCurrentChatTitle(m_currentChatTitle);
+            }
 
             // Use sizer Show/Hide to properly manage layout
             wxSizer* sizer = m_chatPanel->GetSizer();
@@ -1009,6 +1062,11 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                         topicInfo = "Private chat";
                     }
                     m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+                    
+                    // Update status bar with member count
+                    if (m_statusBar && chatInfo.memberCount > 0) {
+                        m_statusBar->SetCurrentChatMemberCount(chatInfo.memberCount);
+                    }
                 }
                 
                 m_telegramClient->OpenChatAndLoadMessages(chatId);
@@ -1036,7 +1094,11 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             m_chatPanel->Layout();
             
             // Update status bar
-
+            if (m_statusBar) {
+                m_statusBar->SetCurrentChatId(0);
+                m_statusBar->SetCurrentChatTitle(m_currentChatTitle);
+                m_statusBar->SetCurrentChatMemberCount(0);
+            }
             
             // Set focus to input box and enable upload buttons
             if (m_inputBoxWidget) {
@@ -1123,6 +1185,14 @@ void MainFrame::OnLoginSuccess(const wxString& userName)
     m_isLoggedIn = true;
     m_currentUser = userName;
     
+    // Update status bar
+    if (m_statusBar) {
+        m_statusBar->SetLoggedIn(true);
+        m_statusBar->SetOnline(true);
+        m_statusBar->SetCurrentUser(userName);
+        m_statusBar->ResetSessionTimer();
+    }
+    
     // Update InputBoxWidget with current user
     if (m_inputBoxWidget) {
         m_inputBoxWidget->SetCurrentUser(userName);
@@ -1148,6 +1218,15 @@ void MainFrame::OnLoggedOut()
     m_isLoggedIn = false;
     m_currentUser.Clear();
     m_currentChatId = 0;
+    
+    // Update status bar
+    if (m_statusBar) {
+        m_statusBar->SetLoggedIn(false);
+        m_statusBar->SetOnline(false);
+        m_statusBar->SetCurrentUser("");
+        m_statusBar->SetCurrentChatTitle("");
+        m_statusBar->SetCurrentChatId(0);
+    }
     
 
     
@@ -1233,6 +1312,19 @@ void MainFrame::RefreshChatList()
     
     // Refresh chat list widget with sorted chats
     m_chatListWidget->RefreshChatList(sortedChats);
+    
+    // Update status bar with chat counts
+    if (m_statusBar) {
+        int totalChats = static_cast<int>(sortedChats.size());
+        int unreadChats = 0;
+        for (const auto& chat : sortedChats) {
+            if (chat.unreadCount > 0) {
+                unreadChats++;
+            }
+        }
+        m_statusBar->SetTotalChats(totalChats);
+        m_statusBar->SetUnreadChats(unreadChats);
+    }
     
     // Expand categories that have items
     wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
@@ -1436,42 +1528,55 @@ void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
             info.localPath = localPath;
             m_chatViewWidget->RemovePendingDownload(fileId);
         }
-        
-        // Hide download progress bar after completion
-        m_chatViewWidget->HideDownloadProgress();
+    }
+    
+    // Complete the transfer in TransferManager (status bar will auto-update)
+    auto it = m_fileToTransferId.find(fileId);
+    if (it != m_fileToTransferId.end()) {
+        m_transferManager.CompleteTransfer(it->second, localPath);
+        m_fileToTransferId.erase(it);
     }
 }
 
 void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize)
 {
-    // Show progress in chat view's download bar
-    if (m_chatViewWidget && totalSize > 0) {
-        int percent = static_cast<int>((downloadedSize * 100) / totalSize);
-        m_chatViewWidget->UpdateDownloadProgress(percent);
+    // Update progress in TransferManager (status bar will auto-update via callback)
+    auto it = m_fileToTransferId.find(fileId);
+    if (it != m_fileToTransferId.end()) {
+        m_transferManager.UpdateProgress(it->second, downloadedSize, totalSize);
     }
 }
 
 void MainFrame::OnDownloadStarted(int32_t fileId, const wxString& fileName, int64_t totalSize)
 {
-    // Show download progress bar in chat view
-    if (m_chatViewWidget) {
-        m_chatViewWidget->ShowDownloadProgress(fileName, 0);
-    }
+    // Start a new download in TransferManager
+    int transferId = m_transferManager.StartDownload(fileName, totalSize);
+    m_fileToTransferId[fileId] = transferId;
+    
+    DBGLOG("Download started: fileId=" << fileId << " transferId=" << transferId << " file=" << fileName.ToStdString());
 }
 
 void MainFrame::OnDownloadFailed(int32_t fileId, const wxString& error)
 {
-    // Hide progress bar on failure
-    if (m_chatViewWidget) {
-        m_chatViewWidget->HideDownloadProgress();
+    // Fail the transfer in TransferManager
+    auto it = m_fileToTransferId.find(fileId);
+    if (it != m_fileToTransferId.end()) {
+        m_transferManager.FailTransfer(it->second, error);
+        m_fileToTransferId.erase(it);
     }
 }
 
 void MainFrame::OnDownloadRetrying(int32_t fileId, int retryCount)
 {
-    // Show retry in progress bar
-    if (m_chatViewWidget) {
-        m_chatViewWidget->ShowDownloadProgress(wxString::Format("Retrying... (%d)", retryCount), 0);
+    // Update transfer status to show retry
+    auto it = m_fileToTransferId.find(fileId);
+    if (it != m_fileToTransferId.end()) {
+        // Reset transfer to in-progress state for retry
+        TransferInfo* info = m_transferManager.GetTransfer(it->second);
+        if (info) {
+            info->status = TransferStatus::InProgress;
+            info->error = wxString::Format("Retry %d/%d", retryCount, 3);
+        }
     }
 }
 
@@ -1664,6 +1769,19 @@ void MainFrame::OnRefreshTimer(wxTimerEvent& event)
     // Periodic refresh - reload chats to get updated unread counts
     if (m_telegramClient && m_telegramClient->IsLoggedIn()) {
         m_telegramClient->LoadChats();
+    }
+}
+
+void MainFrame::OnStatusTimer(wxTimerEvent& event)
+{
+    // Update status bar periodically (connection status, session time, etc.)
+    if (m_statusBar) {
+        m_statusBar->SetOnline(m_telegramClient && m_telegramClient->IsLoggedIn());
+        m_statusBar->SetLoggedIn(m_isLoggedIn);
+        m_statusBar->SetCurrentUser(m_currentUser);
+        m_statusBar->SetCurrentChatTitle(m_currentChatTitle);
+        m_statusBar->SetCurrentChatId(m_currentChatId);
+        m_statusBar->UpdateStatusBar();
     }
 }
 

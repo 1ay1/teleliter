@@ -17,6 +17,7 @@
 
 #include "MenuIds.h"
 #include "MediaTypes.h"
+#include "StatusBarManager.h"
 #include "../telegram/TransferManager.h"
 
 // Forward declarations
@@ -114,6 +115,7 @@ private:
     
     // Timer event handlers
     void OnRefreshTimer(wxTimerEvent& event);
+    void OnStatusTimer(wxTimerEvent& event);
     
     // UI event handlers
     void OnChatTreeSelectionChanged(wxTreeEvent& event);
@@ -129,6 +131,11 @@ private:
     TelegramClient* m_telegramClient;
     TransferManager m_transferManager;
     wxTimer* m_refreshTimer;
+    wxTimer* m_statusTimer;
+    wxStopWatch m_sessionTimer;
+    
+    // Mapping from TDLib fileId to TransferManager transferId
+    std::map<int32_t, int> m_fileToTransferId;
     
     // Unread message tracking (chatId -> last read message ID)
     std::map<int64_t, int64_t> m_lastReadMessages;
@@ -152,6 +159,9 @@ private:
     wxPanel* m_rightPanel;
     wxListCtrl* m_memberList;
     wxStaticText* m_memberCountLabel;
+    
+    // Status bar manager
+    StatusBarManager* m_statusBar;
     
     // Colors
     wxColour m_bgColor;
