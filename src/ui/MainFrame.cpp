@@ -594,7 +594,7 @@ void MainFrame::PopulateDummyData()
             MediaInfo stickerInfo;
             stickerInfo.type = MediaType::Sticker;
             stickerInfo.fileId = 0;  // Test data - no real file ID
-            stickerInfo.emoji = "😄";
+            stickerInfo.emoji = ":)";
             {
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:07", "Frank", stickerInfo, "");
@@ -619,7 +619,7 @@ void MainFrame::PopulateDummyData()
             
             // Reply message
             formatter->AppendReplyMessage("12:10", "Alice", "Bob: Check out this funny cat video!", 
-                               "Haha that's so cute! 😂");
+                               "Haha that's so cute! :D");
             
             // Forward message
             formatter->AppendForwardMessage("12:11", "Bob", "Tech News Channel", 
@@ -1021,7 +1021,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                 DBGLOG("Test chat selected, loading dummy data");
                 // Load dummy data for testing
                 m_chatViewWidget->ClearMessages();
-                m_chatViewWidget->SetTopicText("Test Chat", "Demo mode • Testing features");
+                m_chatViewWidget->SetTopicText("Test Chat", "Demo mode - Testing features");
                 PopulateDummyData();
             } else if (m_telegramClient) {
                 DBGLOG("Loading messages from TDLib for chatId=" << chatId);
@@ -1036,12 +1036,12 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                     if (chatInfo.isChannel) {
                         topicInfo = "Channel";
                         if (chatInfo.memberCount > 0) {
-                            topicInfo += wxString::Format(" • %d subscribers", chatInfo.memberCount);
+                            topicInfo += wxString::Format(" - %d subscribers", chatInfo.memberCount);
                         }
                     } else if (chatInfo.isSupergroup || chatInfo.isGroup) {
                         topicInfo = chatInfo.isSupergroup ? "Supergroup" : "Group";
                         if (chatInfo.memberCount > 0) {
-                            topicInfo += wxString::Format(" • %d members", chatInfo.memberCount);
+                            topicInfo += wxString::Format(" - %d members", chatInfo.memberCount);
                         }
                     } else if (chatInfo.isBot) {
                         topicInfo = "Bot";

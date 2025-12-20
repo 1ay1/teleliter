@@ -123,25 +123,26 @@ void StatusBarManager::UpdateStatusBar()
     m_parent->SetStatusText(sessionTime, 1);
     
     // Field 2: Connection status with colors
+    // Use ASCII-compatible characters for cross-platform support (Linux fonts may not have Unicode bullets)
     if (m_connectionLabel) {
         wxString connStatus;
         wxColour connColor;
         
         if (m_isOnline) {
-            connStatus = "● Online";
+            connStatus = "[*] Online";
             if (!m_connectionDC.IsEmpty()) {
                 connStatus += " " + m_connectionDC;
             }
             connColor = m_onlineColor;
         } else if (m_telegramClient && m_telegramClient->IsRunning()) {
-            // Animated connecting indicator
-            static const wxString spinners[] = {"◐", "◓", "◑", "◒"};
+            // Animated connecting indicator using ASCII
+            static const wxString spinners[] = {"|", "/", "-", "\\"};
             static int spinFrame = 0;
             spinFrame = (spinFrame + 1) % 4;
-            connStatus = spinners[spinFrame] + wxString(" Connecting...");
+            connStatus = "[" + spinners[spinFrame] + "] Connecting...";
             connColor = m_connectingColor;
         } else {
-            connStatus = "○ Offline";
+            connStatus = "[ ] Offline";
             connColor = m_offlineColor;
         }
         
@@ -156,10 +157,10 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
     
     m_hasActiveTransfers = true;
     
-    // Animated spinner characters
-    static const wxString spinners[] = {"◐", "◓", "◑", "◒"};
+    // Animated spinner characters (ASCII for cross-platform support)
+    static const wxString spinners[] = {"|", "/", "-", "\\"};
     m_transferAnimFrame = (m_transferAnimFrame + 1) % 4;
-    wxString spinner = spinners[m_transferAnimFrame];
+    wxString spinner = "[" + spinners[m_transferAnimFrame] + "]";
     
     // Calculate speed
     long currentTime = m_transferTimer.Time();
@@ -192,12 +193,12 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
         etaStr = FormatETA(remaining, m_currentSpeed);
     }
     
-    // Build ASCII progress bar
+    // Build ASCII progress bar (using # and - for cross-platform support)
     int percent = info.GetProgressPercent();
     wxString progressBar = BuildProgressBar(percent, 10);
     
-    // Direction symbol
-    wxString dirSymbol = info.direction == TransferDirection::Upload ? "⬆" : "⬇";
+    // Direction symbol (ASCII for cross-platform support)
+    wxString dirSymbol = info.direction == TransferDirection::Upload ? "^" : "v";
     
     // Truncate filename if too long
     wxString fileName = info.fileName;
@@ -205,7 +206,7 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo& info)
         fileName = fileName.Left(17) + "...";
     }
     
-    // Build final label: "◐ ⬇ file.jpg [██████░░░░] 45% 1.2MB/s ~5s"
+    // Build final label: "[|] v file.jpg [######----] 45% 1.2MB/s ~5s"
     wxString label = spinner + " " + dirSymbol + " " + fileName + " [" + progressBar + "] " + wxString::Format("%d%%", percent);
     
     if (!speedStr.IsEmpty()) {
@@ -233,8 +234,8 @@ void StatusBarManager::OnTransferComplete(const TransferInfo& info)
     m_currentSpeed = 0.0;
     m_lastTransferredBytes = 0;
     
-    // Direction symbol
-    wxString dirSymbol = info.direction == TransferDirection::Upload ? "+" : "v";
+    // Direction symbol (ASCII)
+    wxString dirSymbol = info.direction == TransferDirection::Upload ? "^" : "v";
     
     // Show completion with checkmark
     wxString label = "[OK] " + dirSymbol + " " + info.fileName + " [==========] Done!";
@@ -249,8 +250,8 @@ void StatusBarManager::OnTransferError(const TransferInfo& info)
     m_speedSamples.clear();
     m_currentSpeed = 0.0;
     
-    // Direction symbol
-    wxString dirSymbol = info.direction == TransferDirection::Upload ? "+" : "v";
+    // Direction symbol (ASCII)
+    wxString dirSymbol = info.direction == TransferDirection::Upload ? "^" : "v";
     
     // Show error with X mark
     wxString label = "[FAIL] " + dirSymbol + " " + info.fileName + " Failed: " + info.error;
@@ -320,9 +321,10 @@ wxString StatusBarManager::BuildProgressBar(int percent, int width) const
     int filled = (percent * width) / 100;
     int empty = width - filled;
     
+    // Use ASCII characters for cross-platform support (Linux fonts may not have block chars)
     wxString bar;
-    for (int i = 0; i < filled; i++) bar += "█";
-    for (int i = 0; i < empty; i++) bar += "░";
+    for (int i = 0; i < filled; i++) bar += "#";
+    for (int i = 0; i < empty; i++) bar += "-";
     
     return bar;
 }

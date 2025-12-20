@@ -51,6 +51,9 @@ public:
     void EndItalic() { m_chatDisplay->EndItalic(); }
     void BeginUnderline() { m_chatDisplay->BeginUnderline(); }
     void EndUnderline() { m_chatDisplay->EndUnderline(); }
+    
+    // Reset all styles to default (prevents style leaking)
+    void ResetStyles();
 
     // ===== High-level message formatting (HexChat style) =====
     

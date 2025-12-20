@@ -108,7 +108,7 @@ void ChatViewWidget::SetTopicText(const wxString& chatName, const wxString& info
     if (!chatName.IsEmpty()) {
         topic = chatName;
         if (!info.IsEmpty()) {
-            topic += "  •  " + info;
+            topic += "  -  " + info;
         }
         m_topicText->SetLabel(topic);
         m_topicBar->Show();
@@ -132,7 +132,7 @@ void ChatViewWidget::ClearTopicText()
 void ChatViewWidget::CreateNewMessageButton()
 {
     m_newMessageButton = new wxButton(this, ID_NEW_MESSAGE_BUTTON,
-        wxString::FromUTF8("↓ New Messages"),
+        "v New Messages",
         wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
 
     m_newMessageButton->SetBackgroundColour(wxColour(0x72, 0x9F, 0xCF));
@@ -492,7 +492,7 @@ void ChatViewWidget::ShowNewMessageIndicator()
     if (!m_newMessageButton) return;
 
     // Update button text with count
-    wxString label = wxString::Format(wxString::FromUTF8("↓ %d New Message%s"),
+    wxString label = wxString::Format("v %d New Message%s",
         m_newMessageCount, m_newMessageCount == 1 ? "" : "s");
     m_newMessageButton->SetLabel(label);
 

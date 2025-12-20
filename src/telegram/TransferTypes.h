@@ -74,7 +74,7 @@ struct TransferInfo {
     }
     
     wxString GetDirectionSymbol() const {
-        return direction == TransferDirection::Upload ? "⬆" : "⬇";
+        return direction == TransferDirection::Upload ? "^" : "v";
     }
 };
 

@@ -79,6 +79,28 @@ void ChatArea::CreateUI()
 void ChatArea::Clear()
 {
     m_chatDisplay->Clear();
+    ResetStyles();
+}
+
+void ChatArea::ResetStyles()
+{
+    if (!m_chatDisplay) return;
+    
+    // Force end any potentially open style blocks
+    // This prevents style leaking (especially underline) from corrupting future text
+    m_chatDisplay->EndAllStyles();
+    
+    // Reset all text styles to prevent style corruption from leaking
+    // This ensures underline, bold, italic, etc. don't persist
+    wxRichTextAttr defaultStyle;
+    defaultStyle.SetTextColour(m_fgColor);
+    defaultStyle.SetBackgroundColour(m_bgColor);
+    defaultStyle.SetFont(m_chatFont);
+    defaultStyle.SetFontUnderlined(false);
+    defaultStyle.SetFontWeight(wxFONTWEIGHT_NORMAL);
+    defaultStyle.SetFontStyle(wxFONTSTYLE_NORMAL);
+    m_chatDisplay->SetDefaultStyle(defaultStyle);
+    m_chatDisplay->SetBasicStyle(defaultStyle);
 }
 
 void ChatArea::ScrollToBottom()

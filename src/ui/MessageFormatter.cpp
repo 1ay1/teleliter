@@ -393,7 +393,7 @@ void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxStr
     if (truncatedReply.length() > 50) {
         truncatedReply = truncatedReply.Left(47) + "...";
     }
-    m_chatArea->WriteText("│ " + truncatedReply);
+    m_chatArea->WriteText("| " + truncatedReply);
     m_chatArea->EndItalic();
     m_chatArea->EndTextColour();
     
@@ -426,7 +426,7 @@ void MessageFormatter::AppendForwardMessage(const wxString& timestamp, const wxS
     // Forward indicator with arrow
     m_chatArea->BeginTextColour(m_forwardColor);
     m_chatArea->BeginItalic();
-    m_chatArea->WriteText("↪ Forwarded from ");
+    m_chatArea->WriteText(">> Forwarded from ");
     m_chatArea->BeginBold();
     m_chatArea->WriteText(forwardFrom);
     m_chatArea->EndBold();
@@ -455,17 +455,17 @@ void MessageFormatter::AppendUnreadMarker()
     
     // Visual marker showing where messages have been read up to
     m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
-    m_chatArea->WriteText("─────────────────────── ");
+    m_chatArea->WriteText("----------------------- ");
     m_chatArea->EndTextColour();
     
     m_chatArea->BeginTextColour(wxColour(0x6E, 0xE9, 0x6E)); // Lighter green for text
     m_chatArea->BeginBold();
-    m_chatArea->WriteText("← read up to here");
+    m_chatArea->WriteText("<- read up to here");
     m_chatArea->EndBold();
     m_chatArea->EndTextColour();
     
     m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
-    m_chatArea->WriteText(" ───────────────────────\n");
+    m_chatArea->WriteText(" -----------------------\n");
     m_chatArea->EndTextColour();
     
     // Track end position of marker

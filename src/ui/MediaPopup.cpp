@@ -811,23 +811,23 @@ wxString MediaPopup::GetMediaIcon() const
 {
     switch (m_mediaInfo.type) {
         case MediaType::Photo:
-            return wxString::FromUTF8("\xF0\x9F\x96\xBC\xEF\xB8\x8F");  // 🖼️
+            return "[Photo]";
         case MediaType::Video:
-            return wxString::FromUTF8("\xF0\x9F\x8E\xAC");  // 🎬
+            return "[Video]";
         case MediaType::Sticker:
-            return m_mediaInfo.emoji.IsEmpty() ? wxString::FromUTF8("\xF0\x9F\x8E\xAD") : m_mediaInfo.emoji;  // 🎭
+            return m_mediaInfo.emoji.IsEmpty() ? "[Sticker]" : m_mediaInfo.emoji;
         case MediaType::GIF:
-            return wxString::FromUTF8("\xF0\x9F\x8E\x9E\xEF\xB8\x8F");  // 🎞️
+            return "[GIF]";
         case MediaType::Voice:
-            return wxString::FromUTF8("\xF0\x9F\x8E\xA4");  // 🎤
+            return "[Voice]";
         case MediaType::VideoNote:
-            return wxString::FromUTF8("\xF0\x9F\x93\xB9");  // 📹
+            return "[VideoMsg]";
         case MediaType::File:
-            return wxString::FromUTF8("\xF0\x9F\x93\x84");  // 📄
+            return "[File]";
         case MediaType::Reaction:
             return m_mediaInfo.emoji;
         default:
-            return wxString::FromUTF8("\xF0\x9F\x93\x8E");  // 📎
+            return "[Media]";
     }
 }
 
@@ -942,7 +942,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         
     } else if (m_isLoading) {
         // Loading state - show animated spinner with "Downloading..."
-        static const wxString spinners[] = {"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"};
+        static const wxString spinners[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
         wxString spinner = spinners[m_loadingFrame % 8];
         
         dc.SetFont(wxFont(32, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
