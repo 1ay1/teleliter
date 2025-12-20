@@ -5,6 +5,8 @@
 #include <wx/filename.h>
 #include <iostream>
 
+#define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString& path)
 {
@@ -352,11 +354,33 @@ bool MediaPopup::IsSameMedia(const MediaInfo& a, const MediaInfo& b) const
 
 void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 {
+    MPLOG("ShowMedia called: fileId=" << info.fileId << " type=" << static_cast<int>(info.type)
+          << " localPath=" << info.localPath.ToStdString()
+          << " thumbnailPath=" << info.thumbnailPath.ToStdString()
+          << " isDownloading=" << info.isDownloading);
+    
     // Check if we're already showing the same media - avoid unnecessary reloads
+    // BUT: if localPath changed (download completed), we need to reload!
     if (IsShown() && IsSameMedia(m_mediaInfo, info)) {
-        // Same media, just update position if needed
-        SetPosition(pos);
-        return;
+        // Check if the localPath has changed (download completed)
+        bool localPathChanged = (m_mediaInfo.localPath != info.localPath && 
+                                 !info.localPath.IsEmpty() && wxFileExists(info.localPath));
+        bool thumbnailPathChanged = (m_mediaInfo.thumbnailPath != info.thumbnailPath && 
+                                     !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
+        
+        MPLOG("ShowMedia: same media check - localPathChanged=" << localPathChanged 
+              << " thumbnailPathChanged=" << thumbnailPathChanged
+              << " current.localPath=" << m_mediaInfo.localPath.ToStdString()
+              << " new.localPath=" << info.localPath.ToStdString());
+        
+        if (!localPathChanged && !thumbnailPathChanged) {
+            // Same media, no path changes, just update position if needed
+            MPLOG("ShowMedia: same media, no changes, skipping reload");
+            SetPosition(pos);
+            return;
+        }
+        MPLOG("ShowMedia: path changed, reloading media");
+        // Path changed - fall through to reload with new file
     }
     
     // Stop all current playback and reset state
@@ -431,6 +455,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         
         // Fall back to thumbnail for preview (thumbnails are usually static WebP/JPEG)
         if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
+            MPLOG("ShowMedia: sticker - falling back to thumbnail: " << info.thumbnailPath.ToStdString());
             SetImage(info.thumbnailPath);
             UpdateSize();
             SetPosition(pos);
@@ -441,6 +466,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         
         // If file not downloaded yet but we have a file ID, show loading
         if (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath))) {
+            MPLOG("ShowMedia: sticker file not ready, showing loading for fileId=" << info.fileId);
             m_isLoading = true;
             m_loadingFrame = 0;
             m_loadingTimer.Start(150);
@@ -511,9 +537,12 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     
     // No local file - show loading if downloading
     if (info.isDownloading || info.fileId != 0) {
+        MPLOG("ShowMedia: no local file, showing loading state for fileId=" << info.fileId);
         m_isLoading = true;
         m_loadingFrame = 0;
         m_loadingTimer.Start(150);
+    } else {
+        MPLOG("ShowMedia: no local file and no fileId, showing placeholder");
     }
     
     UpdateSize();

@@ -1,8 +1,10 @@
 #include "ChatViewWidget.h"
 #include "MainFrame.h"
-#include <iostream>
 #include "MessageFormatter.h"
 #include "MediaPopup.h"
+#include <iostream>
+
+#define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 #include "FileDropTarget.h"
 #include "../telegram/Types.h"
 #include "../telegram/TelegramClient.h"
@@ -715,8 +717,13 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     // Don't re-show if already showing the same media (prevents flickering and video restart)
     if (m_mediaPopup->IsShown() && IsSameMedia(m_currentlyShowingMedia, info)) {
         // Same media already showing, don't reload
+        CVWLOG("ShowMediaPopup: same media already showing, skipping");
         return;
     }
+    
+    CVWLOG("ShowMediaPopup: fileId=" << info.fileId << " type=" << static_cast<int>(info.type)
+           << " localPath=" << info.localPath.ToStdString()
+           << " thumbnailPath=" << info.thumbnailPath.ToStdString());
 
     // For stickers, download the thumbnail if not already available
     if (info.type == MediaType::Sticker) {
@@ -724,6 +731,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
             if (m_mainFrame) {
                 TelegramClient* client = m_mainFrame->GetTelegramClient();
                 if (client) {
+                    CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
                     wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
                     client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
                     AddPendingDownload(info.thumbnailFileId, info);
@@ -772,6 +780,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                         default: displayName = "Media"; break;
                     }
                 }
+                CVWLOG("ShowMediaPopup: downloading media file, fileId=" << info.fileId << " name=" << displayName.ToStdString());
                 client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
                 // Track this as a pending download so we can update popup when complete
                 AddPendingDownload(info.fileId, info);
@@ -818,34 +827,61 @@ void ChatViewWidget::OnHideTimer(wxTimerEvent& event)
 
 void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
 {
+    CVWLOG("UpdateMediaPopup called: fileId=" << fileId << " path=" << localPath.ToStdString());
+    
     // First, check if this was a user-initiated download to open
     OnMediaDownloadComplete(fileId, localPath);
 
-    if (!m_mediaPopup || !m_mediaPopup->IsShown()) {
+    if (!m_mediaPopup) {
+        CVWLOG("UpdateMediaPopup: no popup exists");
+        return;
+    }
+    
+    if (!m_mediaPopup->IsShown()) {
+        CVWLOG("UpdateMediaPopup: popup not shown, skipping update");
         return;
     }
 
     // Check if this file ID matches the current popup's media or thumbnail
     const MediaInfo& currentInfo = m_mediaPopup->GetMediaInfo();
+    CVWLOG("UpdateMediaPopup: current popup fileId=" << currentInfo.fileId 
+           << " thumbnailFileId=" << currentInfo.thumbnailFileId
+           << " currentPath=" << currentInfo.localPath.ToStdString());
 
     // Check if this is a thumbnail download (for stickers or other media)
     if (currentInfo.thumbnailFileId == fileId) {
+        CVWLOG("UpdateMediaPopup: matched thumbnail, updating with path=" << localPath.ToStdString());
         MediaInfo updatedInfo = currentInfo;
         updatedInfo.thumbnailPath = localPath;
         updatedInfo.isDownloading = false;
         wxPoint pos = m_mediaPopup->GetPosition();
+        // Update our tracking so subsequent hovers don't reset
+        m_currentlyShowingMedia = updatedInfo;
         m_mediaPopup->ShowMedia(updatedInfo, pos);
         return;
     }
 
     // Check if this is the main file download
     if (currentInfo.fileId == fileId) {
+        CVWLOG("UpdateMediaPopup: matched main file, updating with path=" << localPath.ToStdString());
         MediaInfo updatedInfo = currentInfo;
         updatedInfo.localPath = localPath;
         updatedInfo.isDownloading = false;
         wxPoint pos = m_mediaPopup->GetPosition();
+        // Update our tracking so subsequent hovers don't reset
+        m_currentlyShowingMedia = updatedInfo;
         // Re-show with updated info - ShowMedia will handle format detection
         m_mediaPopup->ShowMedia(updatedInfo, pos);
+        return;
+    }
+    
+    // Also check pending downloads - the popup might be showing a different file 
+    // but we should update tracking
+    if (HasPendingDownload(fileId)) {
+        CVWLOG("UpdateMediaPopup: fileId not matching current popup but found in pending downloads");
+    } else {
+        CVWLOG("UpdateMediaPopup: fileId=" << fileId << " does not match current popup (fileId=" 
+               << currentInfo.fileId << ", thumbnailFileId=" << currentInfo.thumbnailFileId << ")");
     }
 }
 
