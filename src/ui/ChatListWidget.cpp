@@ -5,7 +5,6 @@
 
 ChatListWidget::ChatListWidget(wxWindow* parent, MainFrame* mainFrame)
     : wxPanel(parent, wxID_ANY),
-      m_mainFrame(mainFrame),
       m_chatTree(nullptr),
       m_bgColor(0x23, 0x23, 0x23),
       m_fgColor(0xD0, 0xD0, 0xD0),

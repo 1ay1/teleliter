@@ -1,9 +1,6 @@
 #include "FileDropTarget.h"
-#include "MainFrame.h"
-
-FileDropTarget::FileDropTarget(MainFrame* frame, FileDropCallback callback)
-    : m_frame(frame),
-      m_callback(callback)
+FileDropTarget::FileDropTarget(FileDropCallback callback)
+    : m_callback(callback)
 {
 }
 

@@ -16,7 +16,7 @@ using FileDropCallback = std::function<void(const wxArrayString& files)>;
 class FileDropTarget : public wxFileDropTarget
 {
 public:
-    FileDropTarget(MainFrame* frame, FileDropCallback callback);
+    FileDropTarget(FileDropCallback callback);
     virtual ~FileDropTarget() = default;
     
     virtual bool OnDropFiles(wxCoord x, wxCoord y, const wxArrayString& filenames) override;
@@ -28,7 +28,7 @@ private:
     bool IsSupportedFile(const wxString& filename) const;
     wxString GetFileType(const wxString& filename) const;
     
-    MainFrame* m_frame;
+
     FileDropCallback m_callback;
 };
 

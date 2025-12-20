@@ -169,7 +169,7 @@ void ChatViewWidget::SetupDisplayControl()
 
     // Set up drag and drop for file uploads
     if (m_mainFrame) {
-        FileDropTarget* dropTarget = new FileDropTarget(m_mainFrame,
+        FileDropTarget* dropTarget = new FileDropTarget(
             [this](const wxArrayString& files) {
                 if (m_mainFrame) {
                     m_mainFrame->OnFilesDropped(files);

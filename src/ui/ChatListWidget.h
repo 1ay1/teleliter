@@ -52,7 +52,6 @@ private:
     void UpdateChatItem(const wxTreeItemId& item, const ChatInfo& chat);
     wxString FormatChatTitle(const ChatInfo& chat) const;
     
-    MainFrame* m_mainFrame;
     wxTreeCtrl* m_chatTree;
     
     // Tree structure

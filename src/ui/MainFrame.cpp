@@ -685,9 +685,6 @@ void MainFrame::OnFilesDropped(const wxArrayString& files)
     }
     
     for (const auto& file : files) {
-        wxFileName fn(file);
-        wxString filename = fn.GetFullName();
-        
         // Start upload with transfer manager for progress tracking
         wxFile wxf(file);
         int64_t fileSize = wxf.IsOpened() ? wxf.Length() : 0;
