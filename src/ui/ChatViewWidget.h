@@ -7,6 +7,7 @@
 #include <wx/gauge.h>
 #include <vector>
 #include <map>
+#include <set>
 
 #include "ChatArea.h"
 #include "MediaTypes.h"
@@ -29,6 +30,10 @@ public:
     void ClearMessages();
     void ScrollToBottom();
     
+    // Message ordering
+    bool IsMessageOutOfOrder(int64_t messageId) const;
+    int64_t GetLastDisplayedMessageId() const { return m_lastDisplayedMessageId; }
+    
     // Smart scrolling - only auto-scroll if at bottom
     void ScrollToBottomIfAtBottom();
     bool IsAtBottom() const;
@@ -47,6 +52,7 @@ public:
     void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
     MediaSpan* GetMediaSpanAtPosition(long pos);
     void ClearMediaSpans();
+    void UpdateMediaSpanPath(int32_t fileId, const wxString& localPath, bool isThumbnail = false);
     
     // Edit span tracking (for showing original text on hover)
     void AddEditSpan(long startPos, long endPos, int64_t messageId, 
@@ -153,12 +159,11 @@ private:
     wxPanel* m_topicBar;
     wxStaticText* m_topicText;
     
-    // Download progress bar
+    // Download progress bar (legacy - now shown in status bar)
     wxPanel* m_downloadBar;
     wxStaticText* m_downloadLabel;
     wxGauge* m_downloadGauge;
     wxTimer m_downloadHideTimer;
-    int m_activeDownloads;
     
     // Media spans for clickable media
     std::vector<MediaSpan> m_mediaSpans;
@@ -192,6 +197,10 @@ private:
     // Message grouping state (HexChat-style)
     wxString m_lastDisplayedSender;
     int64_t m_lastDisplayedTimestamp;
+    
+    // Track displayed message IDs for ordering
+    std::set<int64_t> m_displayedMessageIds;
+    int64_t m_lastDisplayedMessageId;
     
     // Current username for highlight detection
     wxString m_currentUsername;

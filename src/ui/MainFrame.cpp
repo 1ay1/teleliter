@@ -1070,7 +1070,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
                 }
                 
                 m_telegramClient->OpenChatAndLoadMessages(chatId);
-                m_telegramClient->MarkChatAsRead(chatId);
+                // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are displayed
             } else {
                 DBGLOG("ERROR: m_telegramClient is null!");
             }
@@ -1394,30 +1394,84 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
         }
     }
     
-    DBGLOG("Displaying " << sortedMessages.size() << " messages (unreadCount=" << unreadCount << ")");
+    // If we have local tracking for this chat and the lastReadId is the newest message,
+    // then we've already viewed this chat and there are no unread messages for us
+    if (lastReadId > 0 && !sortedMessages.empty()) {
+        int64_t newestMsgId = sortedMessages.back().id;
+        if (lastReadId >= newestMsgId) {
+            // We've already read up to or past the newest message - no marker needed
+            DBGLOG("Local tracking shows lastReadId=" << lastReadId << " >= newestMsgId=" << newestMsgId << ", no marker");
+            unreadCount = 0;
+        }
+    }
+    
+    DBGLOG("=== UNREAD MARKER DEBUG ===");
+    DBGLOG("Displaying " << sortedMessages.size() << " messages");
+    DBGLOG("  unreadCount=" << unreadCount);
+    DBGLOG("  lastReadId=" << lastReadId);
+    
+    // First pass: find the first unread INCOMING message
+    // We only care about incoming messages for the unread marker - 
+    // your own outgoing messages are never "unread" to you
+    int64_t firstUnreadIncomingId = 0;
+    if (unreadCount > 0 && lastReadId > 0) {
+        for (const auto& msg : sortedMessages) {
+            // Skip outgoing messages - only incoming can be unread
+            if (msg.isOutgoing) continue;
+            
+            // First incoming message after lastReadId is the first unread
+            if (msg.id > lastReadId) {
+                firstUnreadIncomingId = msg.id;
+                DBGLOG("  First unread incoming: id=" << msg.id << " from=" << msg.senderName.ToStdString() 
+                       << " (msg.id " << msg.id << " > lastReadId " << lastReadId << ")");
+                break;
+            } else {
+                DBGLOG("  Skipping incoming msg id=" << msg.id << " (not after lastReadId=" << lastReadId << ")");
+            }
+        }
+    }
+    
+    // If unreadCount > 0 but no unread incoming messages found, don't show marker
+    // This can happen when all "unread" messages are your own outgoing messages
+    if (unreadCount > 0 && firstUnreadIncomingId == 0 && lastReadId > 0) {
+        DBGLOG("  No unread incoming messages found despite unreadCount=" << unreadCount << ", skipping marker");
+    }
+    
+    // If unreadCount is 0, we should NOT show any marker - everything is read
+    if (unreadCount == 0) {
+        DBGLOG("  unreadCount=0, no marker will be shown");
+        firstUnreadIncomingId = 0;  // Ensure no marker
+    }
+    
+    DBGLOG("  Final firstUnreadIncomingId=" << firstUnreadIncomingId);
+    DBGLOG("=== END UNREAD MARKER DEBUG ===");
     
     // Display messages in chronological order (oldest first)
     for (auto it = sortedMessages.begin(); it != sortedMessages.end(); ++it) {
-        // Insert unread marker before first unread message (HexChat style)
-        if (!unreadMarkerInserted && unreadCount > 0) {
-            // Check if this message is after the last read one (it's unread)
-            if (lastReadId > 0 && it->id > lastReadId) {
-                // This is the first unread message, insert marker before it
-                MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
-                if (formatter) {
-                    formatter->AppendUnreadMarker();
-                }
-                unreadMarkerInserted = true;
+        // Insert unread marker before first unread INCOMING message (HexChat style)
+        if (!unreadMarkerInserted && firstUnreadIncomingId != 0 && it->id == firstUnreadIncomingId) {
+            MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
+            if (formatter) {
+                formatter->AppendUnreadMarker();
             }
+            unreadMarkerInserted = true;
         }
         
-        // If no lastReadId but has unread, insert marker based on unread count
-        if (!unreadMarkerInserted && unreadCount > 0 && lastReadId == 0) {
-            // Calculate position: marker goes before the last N unread messages
-            size_t currentIndex = std::distance(sortedMessages.begin(), it);
-            size_t totalMessages = sortedMessages.size();
-            size_t unreadStartIndex = totalMessages - unreadCount;
-            if (currentIndex == unreadStartIndex) {
+        // Fallback: If no lastReadId but has unread, insert marker based on unread count
+        // Only consider incoming messages for unread marker placement
+        if (!unreadMarkerInserted && unreadCount > 0 && lastReadId == 0 && !it->isOutgoing) {
+            // Count incoming messages before current position and total
+            size_t currentIncomingIndex = 0;
+            for (auto cit = sortedMessages.begin(); cit != it; ++cit) {
+                if (!cit->isOutgoing) currentIncomingIndex++;
+            }
+            size_t totalIncoming = 0;
+            for (const auto& m : sortedMessages) {
+                if (!m.isOutgoing) totalIncoming++;
+            }
+            // Place marker before the first message in the unread range
+            if (totalIncoming > 0 && 
+                currentIncomingIndex == totalIncoming - std::min(static_cast<size_t>(unreadCount), totalIncoming)) {
                 MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
                 if (formatter) {
                     formatter->AppendUnreadMarker();
@@ -1437,6 +1491,19 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
         display->Update();
     }
     m_chatViewWidget->ScrollToBottom();
+    
+    // Mark the chat as read now that messages are loaded and displayed
+    // This ensures the unread marker is shown first, then the chat is marked as read
+    if (m_telegramClient && !sortedMessages.empty()) {
+        // Find the last message ID (newest)
+        int64_t lastMsgId = sortedMessages.back().id;
+        if (lastMsgId > 0) {
+            // Update our local tracking
+            MarkMessageAsRead(chatId, lastMsgId);
+            // Tell TDLib we've viewed up to this message
+            m_telegramClient->MarkChatAsRead(chatId);
+        }
+    }
     
     DBGLOG("Finished displaying messages, scrolled to bottom");
 }
@@ -1489,7 +1556,19 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
         }
     }
     
-    // Display the new message
+    // Check if this message is out of order (e.g., sync delivered an older message)
+    // If so, we need to reload all messages to maintain correct ordering
+    if (m_chatViewWidget && message.id != 0 && m_chatViewWidget->IsMessageOutOfOrder(message.id)) {
+        DBGLOG("OnNewMessage: message id=" << message.id << " is out of order (last=" 
+               << m_chatViewWidget->GetLastDisplayedMessageId() << "), reloading chat");
+        // Reload all messages to get correct order
+        if (m_telegramClient) {
+            m_telegramClient->OpenChatAndLoadMessages(message.chatId);
+        }
+        return;
+    }
+    
+    // Display the new message (appending to end since it's in order)
     DisplayMessage(message);
     if (m_chatViewWidget) {
         // Use smart scrolling - only scroll if user was already at bottom
@@ -1528,14 +1607,18 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
 
 void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
 {
+    DBGLOG("OnFileDownloaded: fileId=" << fileId << " path=" << localPath.ToStdString());
+    
     // Check if this is a pending download for media preview in ChatViewWidget
     if (m_chatViewWidget) {
+        // Update all media spans that reference this fileId (handles both main files and thumbnails)
+        m_chatViewWidget->UpdateMediaSpanPath(fileId, localPath);
+        
         // Update media popup if it's showing this file
         m_chatViewWidget->UpdateMediaPopup(fileId, localPath);
         
+        // Clean up pending download tracking
         if (m_chatViewWidget->HasPendingDownload(fileId)) {
-            MediaInfo info = m_chatViewWidget->GetPendingDownload(fileId);
-            info.localPath = localPath;
             m_chatViewWidget->RemovePendingDownload(fileId);
         }
     }
@@ -1855,9 +1938,20 @@ void MainFrame::UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount)
 
 int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const
 {
+    // First check our local tracking
     auto it = m_lastReadMessages.find(chatId);
-    if (it != m_lastReadMessages.end()) {
+    if (it != m_lastReadMessages.end() && it->second != 0) {
         return it->second;
     }
+    
+    // Fallback to TDLib's tracked value from ChatInfo
+    if (m_telegramClient) {
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+        if (found && chat.lastReadInboxMessageId != 0) {
+            return chat.lastReadInboxMessageId;
+        }
+    }
+    
     return 0;
 }

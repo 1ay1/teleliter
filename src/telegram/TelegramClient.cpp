@@ -1285,27 +1285,55 @@ void TelegramClient::MarkChatAsRead(int64_t chatId)
 {
     bool found = false;
     ChatInfo chat = GetChat(chatId, &found);
-    if (!found || chat.unreadCount == 0) {
+    if (!found) {
         return;
     }
     
-    // Get the last message ID
-    int64_t lastMessageId = 0;
+    // Get all message IDs from the cache
+    std::vector<int64_t> messageIds;
     {
         std::lock_guard<std::mutex> lock(m_dataMutex);
         auto& messages = m_messages[chatId];
-        if (!messages.empty()) {
-            lastMessageId = messages.back().id;
+        for (const auto& msg : messages) {
+            if (msg.id > 0) {
+                messageIds.push_back(msg.id);
+            }
         }
     }
     
-    if (lastMessageId > 0) {
+    if (!messageIds.empty()) {
+        TDLOG("MarkChatAsRead: chatId=%lld, marking %zu messages as read", (long long)chatId, messageIds.size());
+        
         auto request = td_api::make_object<td_api::viewMessages>();
         request->chat_id_ = chatId;
-        request->message_ids_.push_back(lastMessageId);
+        request->message_ids_ = std::move(messageIds);
         request->force_read_ = true;
         
-        Send(std::move(request), nullptr);
+        Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+            if (result && result->get_id() == td_api::ok::ID) {
+                TDLOG("MarkChatAsRead: successfully marked messages as read for chatId=%lld", (long long)chatId);
+                // Update local state
+                {
+                    std::lock_guard<std::mutex> lock(m_dataMutex);
+                    auto it = m_chats.find(chatId);
+                    if (it != m_chats.end()) {
+                        it->second.unreadCount = 0;
+                        // Update lastReadInboxMessageId to the newest message
+                        auto& msgs = m_messages[chatId];
+                        if (!msgs.empty()) {
+                            int64_t lastId = 0;
+                            for (const auto& m : msgs) {
+                                if (m.id > lastId) lastId = m.id;
+                            }
+                            it->second.lastReadInboxMessageId = lastId;
+                        }
+                    }
+                }
+            } else if (result && result->get_id() == td_api::error::ID) {
+                auto error = td_api::move_object_as<td_api::error>(result);
+                TDLOG("MarkChatAsRead: ERROR %d - %s", error->code_, error->message_.c_str());
+            }
+        });
     }
 }
 
@@ -1361,6 +1389,7 @@ void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
     info.id = chat->id_;
     info.title = wxString::FromUTF8(chat->title_);
     info.unreadCount = chat->unread_count_;
+    info.lastReadInboxMessageId = chat->last_read_inbox_message_id_;
     
     // Parse positions
     for (auto& pos : chat->positions_) {
@@ -1567,7 +1596,8 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
     
     PostToMainThread([this, fileId, isDownloading, isComplete, localPath, downloadedSize, totalSize]() {
         if (m_mainFrame) {
-            if (isComplete) {
+            if (isComplete && !localPath.IsEmpty()) {
+                // Only report completed if we have a valid path
                 m_mainFrame->OnFileDownloaded(fileId, localPath);
             } else if (isDownloading) {
                 m_mainFrame->OnFileProgress(fileId, downloadedSize, totalSize);
@@ -1598,6 +1628,7 @@ void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessag
         auto it = m_chats.find(chatId);
         if (it != m_chats.end()) {
             it->second.unreadCount = unreadCount;
+            it->second.lastReadInboxMessageId = lastReadInboxMessageId;
         } else {
             return;  // Chat not found
         }

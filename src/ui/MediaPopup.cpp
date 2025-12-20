@@ -5,8 +5,8 @@
 #include <wx/filename.h>
 #include <iostream>
 
-// #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
-#define MPLOG(msg) do {} while(0)
+#define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+// #define MPLOG(msg) do {} while(0)
 
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString& path)

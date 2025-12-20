@@ -4,8 +4,8 @@
 #include "MediaPopup.h"
 #include <iostream>
 
-// #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
-#define CVWLOG(msg) do {} while(0)
+#define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
+// #define CVWLOG(msg) do {} while(0)
 #include "FileDropTarget.h"
 #include "../telegram/Types.h"
 #include "../telegram/TelegramClient.h"
@@ -28,7 +28,6 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_downloadLabel(nullptr),
       m_downloadGauge(nullptr),
       m_downloadHideTimer(this),
-      m_activeDownloads(0),
       m_hoverTimer(this),
       m_hideTimer(this),
       m_lastHoveredTextPos(-1),
@@ -38,6 +37,7 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_isLoading(false),
       m_batchUpdateDepth(0),
       m_lastDisplayedTimestamp(0),
+      m_lastDisplayedMessageId(0),
       m_contextMenuPos(-1)
 {
     // Bind timer events
@@ -184,6 +184,21 @@ void ChatViewWidget::SetupDisplayControl()
 void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
 {
     if (!m_messageFormatter) return;
+
+    // Track message ID to detect duplicates and out-of-order messages
+    if (msg.id != 0) {
+        // Skip if already displayed
+        if (m_displayedMessageIds.count(msg.id) > 0) {
+            CVWLOG("DisplayMessage: skipping duplicate message id=" << msg.id);
+            return;
+        }
+        m_displayedMessageIds.insert(msg.id);
+        
+        // Track the last displayed message ID
+        if (msg.id > m_lastDisplayedMessageId) {
+            m_lastDisplayedMessageId = msg.id;
+        }
+    }
 
     wxString timestamp = FormatTimestamp(msg.date);
     wxString sender = msg.senderName.IsEmpty() ? "Unknown" : msg.senderName;
@@ -426,6 +441,24 @@ void ChatViewWidget::ClearMessages()
     }
     m_lastDisplayedSender.Clear();
     m_lastDisplayedTimestamp = 0;
+    
+    // Reset message ID tracking
+    m_displayedMessageIds.clear();
+    m_lastDisplayedMessageId = 0;
+}
+
+bool ChatViewWidget::IsMessageOutOfOrder(int64_t messageId) const
+{
+    // A message is out of order if:
+    // 1. We have displayed messages and this message ID is less than the last one
+    // 2. This means it should have been inserted earlier, not appended
+    if (m_lastDisplayedMessageId == 0) {
+        return false;  // No messages displayed yet, so not out of order
+    }
+    
+    // If the message ID is less than the last displayed, it's out of order
+    // (Telegram message IDs are monotonically increasing)
+    return messageId < m_lastDisplayedMessageId;
 }
 
 void ChatViewWidget::ScrollToBottom()
@@ -512,6 +545,35 @@ MediaSpan* ChatViewWidget::GetMediaSpanAtPosition(long pos)
 void ChatViewWidget::ClearMediaSpans()
 {
     m_mediaSpans.clear();
+}
+
+void ChatViewWidget::UpdateMediaSpanPath(int32_t fileId, const wxString& localPath, bool isThumbnail)
+{
+    if (fileId == 0 || localPath.IsEmpty()) return;
+    
+    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " path=" << localPath.ToStdString() << " isThumbnailHint=" << isThumbnail);
+    
+    int updatedCount = 0;
+    
+    // Update all media spans that reference this fileId
+    // Check both main file and thumbnail - a fileId could match either
+    for (auto& span : m_mediaSpans) {
+        // Check if this is the main file
+        if (span.info.fileId == fileId) {
+            CVWLOG("UpdateMediaSpanPath: updating localPath for span with fileId=" << fileId);
+            span.info.localPath = localPath;
+            span.info.isDownloading = false;
+            updatedCount++;
+        }
+        // Also check if this is a thumbnail (same fileId could be thumbnail for another media)
+        if (span.info.thumbnailFileId == fileId) {
+            CVWLOG("UpdateMediaSpanPath: updating thumbnailPath for span with thumbnailFileId=" << fileId);
+            span.info.thumbnailPath = localPath;
+            updatedCount++;
+        }
+    }
+    
+    CVWLOG("UpdateMediaSpanPath: updated " << updatedCount << " spans");
 }
 
 void ChatViewWidget::AddEditSpan(long startPos, long endPos, int64_t messageId,
@@ -718,10 +780,21 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     m_hideTimer.Stop();
 
     // Don't re-show if already showing the same media (prevents flickering and video restart)
+    // BUT: allow reload if paths changed (download completed)
     if (m_mediaPopup->IsShown() && IsSameMedia(m_currentlyShowingMedia, info)) {
-        // Same media already showing, don't reload
-        CVWLOG("ShowMediaPopup: same media already showing, skipping");
-        return;
+        // Check if paths have changed (download completed since last show)
+        bool localPathChanged = (m_currentlyShowingMedia.localPath != info.localPath && 
+                                 !info.localPath.IsEmpty() && wxFileExists(info.localPath));
+        bool thumbnailPathChanged = (m_currentlyShowingMedia.thumbnailPath != info.thumbnailPath && 
+                                     !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
+        
+        if (!localPathChanged && !thumbnailPathChanged) {
+            // Same media, no path changes, don't reload
+            CVWLOG("ShowMediaPopup: same media already showing, no path changes, skipping");
+            return;
+        }
+        CVWLOG("ShowMediaPopup: same media but paths changed, allowing reload. localPathChanged=" 
+               << localPathChanged << " thumbnailPathChanged=" << thumbnailPathChanged);
     }
     
     CVWLOG("ShowMediaPopup: fileId=" << info.fileId << " type=" << static_cast<int>(info.type)

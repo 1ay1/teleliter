@@ -23,6 +23,7 @@ struct ChatInfo {
     wxString lastMessage;
     int64_t lastMessageDate;
     int32_t unreadCount;
+    int64_t lastReadInboxMessageId;
     int32_t memberCount;
     bool isPinned;
     bool isMuted;
@@ -39,8 +40,8 @@ struct ChatInfo {
     int64_t basicGroupId;
     
     ChatInfo() 
-        : id(0), lastMessageDate(0), unreadCount(0), memberCount(0),
-          isPinned(false), isMuted(false), order(0), isPrivate(false),
+        : id(0), lastMessageDate(0), unreadCount(0), lastReadInboxMessageId(0),
+          memberCount(0), isPinned(false), isMuted(false), order(0), isPrivate(false),
           isGroup(false), isSupergroup(false), isChannel(false), isBot(false),
           userId(0), supergroupId(0), basicGroupId(0) {}
 };
