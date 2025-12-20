@@ -28,6 +28,7 @@ enum {
     ID_SHOW_MEMBERS,
     ID_SHOW_CHAT_INFO,
     ID_FULLSCREEN,
+    ID_UNREAD_FIRST,
     
     // Widget IDs
     ID_CHAT_TREE,

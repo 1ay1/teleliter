@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/popupwin.h>
 #include <wx/dcbuffer.h>
+#include <wx/mediactrl.h>
 #include "MediaTypes.h"
 
 // HexChat-style popup for media preview
@@ -19,15 +20,26 @@ public:
     void ShowLoading();
     void ShowError(const wxString& message);
     
+    // Video/GIF playback
+    void PlayVideo(const wxString& path, bool loop = false, bool muted = true);
+    void StopVideo();
+    bool IsPlayingVideo() const { return m_isPlayingVideo; }
+    
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
     
 protected:
     void OnPaint(wxPaintEvent& event);
+    void OnMediaLoaded(wxMediaEvent& event);
+    void OnMediaFinished(wxMediaEvent& event);
+    void OnMediaStop(wxMediaEvent& event);
     
 private:
     void UpdateSize();
     void ApplyHexChatStyle();
     wxString GetMediaLabel() const;
+    wxString GetMediaIcon() const;
+    void CreateMediaCtrl();
+    void DestroyMediaCtrl();
     
     wxColour m_bgColor;
     wxColour m_borderColor;
@@ -41,10 +53,17 @@ private:
     bool m_hasError;
     wxString m_errorMessage;
     
-    static constexpr int MAX_WIDTH = 400;
-    static constexpr int MAX_HEIGHT = 300;
-    static constexpr int MIN_WIDTH = 150;
-    static constexpr int MIN_HEIGHT = 80;
+    // Video/GIF playback
+    wxMediaCtrl* m_mediaCtrl;
+    bool m_isPlayingVideo;
+    bool m_loopVideo;
+    bool m_videoMuted;
+    wxString m_videoPath;
+    
+    static constexpr int MAX_WIDTH = 250;
+    static constexpr int MAX_HEIGHT = 200;
+    static constexpr int MIN_WIDTH = 120;
+    static constexpr int MIN_HEIGHT = 70;
     static constexpr int PADDING = 8;
     static constexpr int BORDER_WIDTH = 1;
     

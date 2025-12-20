@@ -1,4 +1,11 @@
 #include "FileUtils.h"
+#include <wx/filename.h>
+
+#ifdef HAVE_WEBP
+#include <webp/decode.h>
+#include <fstream>
+#include <vector>
+#endif
 
 const wxArrayString& GetImageExtensions()
 {
@@ -94,4 +101,119 @@ FileMediaType GetMediaTypeFromExtension(const wxString& filename)
     }
     
     return FileMediaType::Document;
+}
+
+bool HasWebPSupport()
+{
+#ifdef HAVE_WEBP
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool IsNativelySupportedImageFormat(const wxString& path)
+{
+    wxFileName fn(path);
+    wxString ext = fn.GetExt().Lower();
+    
+    // These formats are natively supported by wxWidgets
+    if (ext == "jpg" || ext == "jpeg" || ext == "png" || 
+        ext == "gif" || ext == "bmp" || ext == "ico" || 
+        ext == "tiff" || ext == "tif" || ext == "xpm" ||
+        ext == "pcx" || ext == "pnm") {
+        return true;
+    }
+    
+    return false;
+}
+
+#ifdef HAVE_WEBP
+static bool LoadWebPImage(const wxString& path, wxImage& outImage)
+{
+    // Read file into memory
+    std::ifstream file(path.ToStdString(), std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return false;
+    }
+    
+    std::streamsize size = file.tellg();
+    if (size <= 0) {
+        return false;
+    }
+    
+    file.seekg(0, std::ios::beg);
+    std::vector<uint8_t> buffer(size);
+    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+        return false;
+    }
+    file.close();
+    
+    // Get WebP image info
+    int width = 0, height = 0;
+    if (!WebPGetInfo(buffer.data(), buffer.size(), &width, &height)) {
+        return false;
+    }
+    
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    
+    // Decode WebP to RGBA
+    uint8_t* rgba = WebPDecodeRGBA(buffer.data(), buffer.size(), &width, &height);
+    if (!rgba) {
+        return false;
+    }
+    
+    // Create wxImage from RGBA data
+    // wxImage expects separate RGB and alpha channels
+    outImage.Create(width, height, false);
+    if (!outImage.IsOk()) {
+        WebPFree(rgba);
+        return false;
+    }
+    
+    outImage.InitAlpha();
+    
+    unsigned char* imgData = outImage.GetData();
+    unsigned char* alphaData = outImage.GetAlpha();
+    
+    for (int i = 0; i < width * height; i++) {
+        imgData[i * 3 + 0] = rgba[i * 4 + 0];  // R
+        imgData[i * 3 + 1] = rgba[i * 4 + 1];  // G
+        imgData[i * 3 + 2] = rgba[i * 4 + 2];  // B
+        alphaData[i] = rgba[i * 4 + 3];         // A
+    }
+    
+    WebPFree(rgba);
+    return true;
+}
+#endif
+
+bool LoadImageWithWebPSupport(const wxString& path, wxImage& outImage)
+{
+    if (!wxFileExists(path)) {
+        return false;
+    }
+    
+    wxFileName fn(path);
+    wxString ext = fn.GetExt().Lower();
+    
+    // Handle WebP files specially
+    if (ext == "webp") {
+#ifdef HAVE_WEBP
+        return LoadWebPImage(path, outImage);
+#else
+        // WebP not supported - return false
+        return false;
+#endif
+    }
+    
+    // For other formats, use wxImage's native loading
+    if (IsNativelySupportedImageFormat(path)) {
+        return outImage.LoadFile(path);
+    }
+    
+    // Unsupported format
+    return false;
 }

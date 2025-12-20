@@ -49,18 +49,23 @@ public:
     bool IsLoggedIn() const { return m_authState == AuthState::Ready; }
     
     void LoadChats(int limit = 100);
-    const std::map<int64_t, ChatInfo>& GetChats() const { return m_chats; }
-    ChatInfo* GetChat(int64_t chatId);
+    std::map<int64_t, ChatInfo> GetChats() const;
+    ChatInfo GetChat(int64_t chatId, bool* found = nullptr) const;
     
-    void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 50);
+    void OpenChat(int64_t chatId);
+    void CloseChat(int64_t chatId);
+    void OpenChatAndLoadMessages(int64_t chatId, int limit = 100);
+    void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 100);
+    void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
+    void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 100);
     void SendMessage(int64_t chatId, const wxString& text);
     void SendFile(int64_t chatId, const wxString& filePath, const wxString& caption = "");
     
     void DownloadFile(int32_t fileId, int priority = 1);
     void CancelDownload(int32_t fileId);
     
-    UserInfo* GetUser(int64_t userId);
-    wxString GetUserDisplayName(int64_t userId);
+    UserInfo GetUser(int64_t userId, bool* found = nullptr) const;
+    wxString GetUserDisplayName(int64_t userId) const;
     
     void MarkChatAsRead(int64_t chatId);
     
@@ -77,6 +82,7 @@ private:
     std::map<int64_t, ChatInfo> m_chats;
     std::map<int64_t, UserInfo> m_users;
     std::map<int64_t, std::vector<MessageInfo>> m_messages;
+    mutable std::mutex m_dataMutex;  // Protects m_chats, m_users, m_messages
     
     std::uint64_t m_currentQueryId;
     std::map<std::uint64_t, std::function<void(td_api::object_ptr<td_api::Object>)>> m_handlers;

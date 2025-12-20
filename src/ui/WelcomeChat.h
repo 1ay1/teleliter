@@ -36,7 +36,11 @@ public:
     void CancelLogin();
     
     // Process user input from the input box
-    void ProcessInput(const wxString& input);
+    // Returns true if the input was handled, false if it should be passed to the regular handler
+    bool ProcessInput(const wxString& input);
+    
+    // Check if a command is a WelcomeChat-specific command
+    bool IsWelcomeChatCommand(const wxString& command) const;
     
     // TDLib callbacks (called by TelegramClient when auth state changes)
     void OnAuthStateChanged(int state);

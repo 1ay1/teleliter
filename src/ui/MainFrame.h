@@ -9,19 +9,23 @@
 #include <wx/fontenum.h>
 #include <wx/clipbrd.h>
 #include <wx/gauge.h>
+#include <wx/timer.h>
 #include <vector>
 #include <map>
+#include <set>
 
 #include "MenuIds.h"
 #include "MediaTypes.h"
-#include "MediaPopup.h"
-#include "FileDropTarget.h"
-#include "MessageFormatter.h"
 #include "../telegram/TransferManager.h"
 
 // Forward declarations
 class WelcomeChat;
 class TelegramClient;
+class ChatListWidget;
+class ChatViewWidget;
+class InputBoxWidget;
+class MediaPopup;
+class MessageFormatter;
 struct MessageInfo;
 struct ChatInfo;
 
@@ -44,15 +48,28 @@ public:
     void OnFileDownloaded(int32_t fileId, const wxString& localPath);
     void OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize);
     void ShowStatusError(const wxString& error);
+    void UpdateMemberList(int64_t chatId);
+    
+    // Unread message tracking
+    void MarkMessageAsRead(int64_t chatId, int64_t messageId);
+    void UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount);
+    int64_t GetLastReadMessageId(int64_t chatId) const;
     
     TelegramClient* GetTelegramClient() { return m_telegramClient; }
     int64_t GetCurrentChatId() const { return m_currentChatId; }
+    wxString GetCurrentUser() const { return m_currentUser; }
+    wxString GetCurrentChatTitle() const { return m_currentChatTitle; }
+    
+    // Widget access
+    ChatListWidget* GetChatListWidget() { return m_chatListWidget; }
+    ChatViewWidget* GetChatViewWidget() { return m_chatViewWidget; }
+    InputBoxWidget* GetInputBoxWidget() { return m_inputBoxWidget; }
+    wxListCtrl* GetMemberList() { return m_memberList; }
     
 private:
     // UI Setup
     void CreateMenuBar();
     void CreateMainLayout();
-    void CreateChatList(wxWindow* parent);
     void CreateChatPanel(wxWindow* parent);
     void CreateMemberList(wxWindow* parent);
     void SetupStatusBar();
@@ -65,15 +82,9 @@ private:
     void OnTransferComplete(const TransferInfo& info);
     void OnTransferError(const TransferInfo& info);
     
-    // Message display (delegated to MessageFormatter)
+    // Message display
     void DisplayMessage(const MessageInfo& msg);
     wxString FormatTimestamp(int64_t unixTime);
-    
-    // Media span tracking
-    void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
-    MediaSpan* GetMediaSpanAtPosition(long pos);
-    void ClearMediaSpans();
-    void OpenMedia(const MediaInfo& info);
     
     // Menu event handlers
     void OnExit(wxCommandEvent& event);
@@ -93,18 +104,16 @@ private:
     void OnToggleMembers(wxCommandEvent& event);
     void OnToggleChatInfo(wxCommandEvent& event);
     void OnFullscreen(wxCommandEvent& event);
+    void OnToggleUnreadFirst(wxCommandEvent& event);
+    
+    // Timer event handler for periodic refresh
+    void OnRefreshTimer(wxTimerEvent& event);
     
     // UI event handlers
     void OnChatTreeSelectionChanged(wxTreeEvent& event);
     void OnChatTreeItemActivated(wxTreeEvent& event);
     void OnMemberListItemActivated(wxListEvent& event);
     void OnMemberListRightClick(wxListEvent& event);
-    void OnInputEnter(wxCommandEvent& event);
-    void OnInputKeyDown(wxKeyEvent& event);
-    void OnChatDisplayMouseMove(wxMouseEvent& event);
-    void OnChatDisplayMouseLeave(wxMouseEvent& event);
-    void OnChatDisplayLeftDown(wxMouseEvent& event);
-    void HandleClipboardPaste();
     
     // Welcome chat
     void ForwardInputToWelcomeChat(const wxString& input);
@@ -112,42 +121,32 @@ private:
     
     // Core components
     TelegramClient* m_telegramClient;
-    MessageFormatter* m_messageFormatter;
     TransferManager m_transferManager;
+    wxTimer* m_refreshTimer;
+    
+    // Unread message tracking (chatId -> last read message ID)
+    std::map<int64_t, int64_t> m_lastReadMessages;
+    std::set<int64_t> m_chatsWithUnread;
     
     // Splitters
     wxSplitterWindow* m_mainSplitter;
     wxSplitterWindow* m_rightSplitter;
     
-    // Left panel - Chat list
+    // Left panel - Chat list widget
     wxPanel* m_leftPanel;
-    wxTreeCtrl* m_chatTree;
-    wxTreeItemId m_treeRoot;
-    wxTreeItemId m_pinnedChats;
-    wxTreeItemId m_privateChats;
-    wxTreeItemId m_groups;
-    wxTreeItemId m_channels;
-    wxTreeItemId m_bots;
-    wxTreeItemId m_teleliterItem;
-    std::map<wxTreeItemId, int64_t> m_treeItemToChatId;
-    std::map<int64_t, wxTreeItemId> m_chatIdToTreeItem;
+    ChatListWidget* m_chatListWidget;
     
     // Center panel - Chat area
     wxPanel* m_chatPanel;
     WelcomeChat* m_welcomeChat;
     wxTextCtrl* m_chatInfoBar;
-    wxRichTextCtrl* m_chatDisplay;
-    wxTextCtrl* m_inputBox;
+    ChatViewWidget* m_chatViewWidget;
+    InputBoxWidget* m_inputBoxWidget;
     
     // Right panel - Member list
     wxPanel* m_rightPanel;
     wxListCtrl* m_memberList;
     wxStaticText* m_memberCountLabel;
-    
-    // Media
-    MediaPopup* m_mediaPopup;
-    std::vector<MediaSpan> m_mediaSpans;
-    std::map<int32_t, MediaInfo> m_pendingDownloads;
     
     // Status bar
     wxGauge* m_progressGauge;
@@ -169,11 +168,13 @@ private:
     wxColour m_textColor;
     wxColour m_serviceColor;
     wxColour m_highlightColor;
+    wxColour m_actionColor;
     wxColour m_linkColor;
     wxColour m_mediaColor;
     wxColour m_editedColor;
     wxColour m_forwardColor;
     wxColour m_replyColor;
+    wxColour m_noticeColor;
     wxColour m_userColors[16];
     
     // Fonts
@@ -186,11 +187,15 @@ private:
     bool m_showChatList;
     bool m_showMembers;
     bool m_showChatInfo;
+    bool m_showUnreadFirst;
     bool m_isLoggedIn;
     wxString m_currentUser;
     int64_t m_currentChatId;
     wxString m_currentChatTitle;
     TelegramChatType m_currentChatType;
+    
+    // Timer ID
+    static const int ID_REFRESH_TIMER = wxID_HIGHEST + 200;
 
     wxDECLARE_EVENT_TABLE();
 };

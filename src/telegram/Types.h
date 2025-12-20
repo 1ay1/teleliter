@@ -52,8 +52,10 @@ struct MessageInfo {
     wxString senderName;
     wxString text;
     int64_t date;
+    int64_t editDate;
     bool isOutgoing;
     bool isEdited;
+    wxString originalText;  // Original text before edit (if available)
     
     bool hasPhoto;
     bool hasVideo;
@@ -76,7 +78,7 @@ struct MessageInfo {
     wxString forwardedFrom;
     
     MessageInfo() 
-        : id(0), chatId(0), senderId(0), date(0), isOutgoing(false),
+        : id(0), chatId(0), senderId(0), date(0), editDate(0), isOutgoing(false),
           isEdited(false), hasPhoto(false), hasVideo(false),
           hasDocument(false), hasVoice(false), hasVideoNote(false),
           hasSticker(false), hasAnimation(false), mediaFileId(0),

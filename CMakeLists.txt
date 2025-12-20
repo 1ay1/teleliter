@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find wxWidgets
-find_package(wxWidgets REQUIRED COMPONENTS core base richtext)
+find_package(wxWidgets REQUIRED COMPONENTS core base richtext media)
 include(${wxWidgets_USE_FILE})
 
 # Find TDLib - prefer locally built version in ~/.local
@@ -113,6 +113,33 @@ message(STATUS "TDLib libraries: ${TDLIB_LIBRARIES}")
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 
+# Find libwebp for WebP image support (Telegram stickers)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(WEBP libwebp)
+endif()
+
+if(NOT WEBP_FOUND)
+    # Try to find manually
+    find_path(WEBP_INCLUDE_DIRS webp/decode.h
+        PATHS /usr/include /usr/local/include /opt/homebrew/include
+    )
+    find_library(WEBP_LIBRARY webp
+        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib
+    )
+    if(WEBP_INCLUDE_DIRS AND WEBP_LIBRARY)
+        set(WEBP_FOUND TRUE)
+        set(WEBP_LIBRARIES ${WEBP_LIBRARY})
+    endif()
+endif()
+
+if(WEBP_FOUND)
+    message(STATUS "Found libwebp: ${WEBP_LIBRARIES}")
+    add_definitions(-DHAVE_WEBP)
+else()
+    message(WARNING "libwebp not found - WebP sticker images will not be displayed. Install with: apt install libwebp-dev (Linux) or brew install webp (macOS)")
+endif()
+
 # Source files
 set(SOURCES
     src/ui/App.cpp
@@ -122,6 +149,9 @@ set(SOURCES
     src/ui/FileUtils.cpp
     src/ui/MessageFormatter.cpp
     src/ui/WelcomeChat.cpp
+    src/ui/ChatListWidget.cpp
+    src/ui/ChatViewWidget.cpp
+    src/ui/InputBoxWidget.cpp
     src/telegram/TransferManager.cpp
     src/telegram/TelegramClient.cpp
     src/main.cpp
@@ -134,6 +164,7 @@ add_executable(teleliter ${SOURCES})
 target_include_directories(teleliter PRIVATE
     ${TDLIB_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${WEBP_INCLUDE_DIRS}
 )
 
 # Link libraries - order matters for static linking
@@ -143,6 +174,7 @@ target_link_libraries(teleliter
     OpenSSL::SSL
     OpenSSL::Crypto
     ZLIB::ZLIB
+    ${WEBP_LIBRARIES}
 )
 
 # On macOS, link required system frameworks

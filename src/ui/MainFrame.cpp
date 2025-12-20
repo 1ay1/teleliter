@@ -1,10 +1,22 @@
 #include "MainFrame.h"
 #include "WelcomeChat.h"
+#include "ChatListWidget.h"
+#include "ChatViewWidget.h"
+#include "InputBoxWidget.h"
+#include "MessageFormatter.h"
+#include "MediaPopup.h"
+#include "FileDropTarget.h"
 #include "../telegram/TelegramClient.h"
+#include "../telegram/Types.h"
 #include <wx/artprov.h>
 #include <wx/settings.h>
 #include <wx/filename.h>
 #include <ctime>
+// Debug logging - disabled for release
+#define DBGLOG(msg) do {} while(0)
+// Enable debug logging for troubleshooting:
+// #include <iostream>
+// #define DBGLOG(msg) std::cerr << "[MainFrame] " << msg << std::endl
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(wxID_EXIT, MainFrame::OnExit)
@@ -24,35 +36,36 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(ID_SHOW_MEMBERS, MainFrame::OnToggleMembers)
     EVT_MENU(ID_SHOW_CHAT_INFO, MainFrame::OnToggleChatInfo)
     EVT_MENU(ID_FULLSCREEN, MainFrame::OnFullscreen)
+    EVT_MENU(ID_UNREAD_FIRST, MainFrame::OnToggleUnreadFirst)
     EVT_TREE_SEL_CHANGED(ID_CHAT_TREE, MainFrame::OnChatTreeSelectionChanged)
     EVT_TREE_ITEM_ACTIVATED(ID_CHAT_TREE, MainFrame::OnChatTreeItemActivated)
     EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST, MainFrame::OnMemberListItemActivated)
     EVT_LIST_ITEM_RIGHT_CLICK(ID_MEMBER_LIST, MainFrame::OnMemberListRightClick)
-    EVT_TEXT_ENTER(ID_INPUT_BOX, MainFrame::OnInputEnter)
+    EVT_TIMER(ID_REFRESH_TIMER, MainFrame::OnRefreshTimer)
 wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
     : wxFrame(NULL, wxID_ANY, title, pos, size),
       m_telegramClient(nullptr),
-      m_messageFormatter(nullptr),
+      m_refreshTimer(nullptr),
       m_mainSplitter(nullptr),
       m_rightSplitter(nullptr),
       m_leftPanel(nullptr),
-      m_chatTree(nullptr),
+      m_chatListWidget(nullptr),
       m_chatPanel(nullptr),
       m_welcomeChat(nullptr),
       m_chatInfoBar(nullptr),
-      m_chatDisplay(nullptr),
-      m_inputBox(nullptr),
+      m_chatViewWidget(nullptr),
+      m_inputBoxWidget(nullptr),
       m_rightPanel(nullptr),
       m_memberList(nullptr),
       m_memberCountLabel(nullptr),
-      m_mediaPopup(nullptr),
       m_progressGauge(nullptr),
       m_progressLabel(nullptr),
       m_showChatList(true),
       m_showMembers(true),
       m_showChatInfo(true),
+      m_showUnreadFirst(true),
       m_isLoggedIn(false),
       m_currentUser(""),
       m_currentChatId(0),
@@ -64,9 +77,6 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     CreateMenuBar();
     CreateMainLayout();
     SetupStatusBar();
-    
-    // Create media popup (hidden initially)
-    m_mediaPopup = new MediaPopup(this);
     
     // Create TelegramClient and start it immediately for faster login
     m_telegramClient = new TelegramClient();
@@ -81,15 +91,19 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     // Start TDLib immediately in background so it's ready when user wants to login
     m_telegramClient->Start();
     
+    // Start refresh timer (every 30 seconds)
+    m_refreshTimer = new wxTimer(this, ID_REFRESH_TIMER);
+    m_refreshTimer->Start(30000);
+    
     // Update status bar to show connecting
     SetStatusText("Connecting...", 3);
     
     // Ensure welcome chat is visible on startup
-    if (m_welcomeChat && m_chatDisplay && m_chatPanel) {
+    if (m_welcomeChat && m_chatViewWidget && m_chatPanel) {
         wxSizer* sizer = m_chatPanel->GetSizer();
         if (sizer) {
             sizer->Show(m_welcomeChat, true);
-            sizer->Show(m_chatDisplay, false);
+            sizer->Show(m_chatViewWidget, false);
             m_chatPanel->Layout();
         }
     }
@@ -100,14 +114,16 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
 
 MainFrame::~MainFrame()
 {
+    if (m_refreshTimer) {
+        m_refreshTimer->Stop();
+        delete m_refreshTimer;
+        m_refreshTimer = nullptr;
+    }
+    
     if (m_telegramClient) {
         m_telegramClient->Stop();
         delete m_telegramClient;
         m_telegramClient = nullptr;
-    }
-    if (m_messageFormatter) {
-        delete m_messageFormatter;
-        m_messageFormatter = nullptr;
     }
 }
 
@@ -126,16 +142,18 @@ void MainFrame::SetupColors()
     m_chatInfoBgColor = wxColour(0x23, 0x23, 0x23);
     m_chatInfoFgColor = wxColour(0xD3, 0xD7, 0xCF);
     
-    // Message colors
-    m_timestampColor = wxColour(0x88, 0x88, 0x88);
-    m_textColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_serviceColor = wxColour(0x88, 0x88, 0x88);
-    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);
-    m_linkColor = wxColour(0x72, 0x9F, 0xCF);
-    m_mediaColor = wxColour(0x8A, 0xE2, 0x34);
-    m_editedColor = wxColour(0x88, 0x88, 0x88);
-    m_forwardColor = wxColour(0x72, 0x9F, 0xCF);
-    m_replyColor = wxColour(0x88, 0x88, 0x88);
+    // Message colors (HexChat-style)
+    m_timestampColor = wxColour(0x88, 0x88, 0x88);  // Gray
+    m_textColor = wxColour(0xD3, 0xD7, 0xCF);       // Light gray
+    m_serviceColor = wxColour(0x88, 0x88, 0x88);    // Gray for server messages
+    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);  // Yellow for highlights
+    m_actionColor = wxColour(0xCE, 0x5C, 0x00);     // Orange for /me actions
+    m_linkColor = wxColour(0x72, 0x9F, 0xCF);       // Blue for links
+    m_mediaColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for media tags
+    m_editedColor = wxColour(0x88, 0x88, 0x88);     // Gray for (edited)
+    m_forwardColor = wxColour(0xAD, 0x7F, 0xA8);    // Purple for forwards
+    m_replyColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for replies
+    m_noticeColor = wxColour(0xAD, 0x7F, 0xA8);     // Purple for notices
     
     // User colors (for sender names)
     m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
@@ -228,13 +246,16 @@ void MainFrame::CreateMenuBar()
     menuView->AppendCheckItem(ID_SHOW_CHAT_INFO, "Chat Info Bar");
     menuView->Check(ID_SHOW_CHAT_INFO, true);
     menuView->AppendSeparator();
+    menuView->AppendCheckItem(ID_UNREAD_FIRST, "Unread Chats First");
+    menuView->Check(ID_UNREAD_FIRST, true);
+    menuView->AppendSeparator();
     menuView->Append(ID_FULLSCREEN, "Fullscreen\tF11");
     menuBar->Append(menuView, "&View");
     
     // Window menu
     wxMenu* menuWindow = new wxMenu;
-    menuWindow->Append(wxID_ANY, "Previous Chat\tCtrl+Page_Up");
-    menuWindow->Append(wxID_ANY, "Next Chat\tCtrl+Page_Down");
+    menuWindow->Append(wxID_ANY, "Previous Chat\tCtrl+PgUp");
+    menuWindow->Append(wxID_ANY, "Next Chat\tCtrl+PgDn");
     menuWindow->AppendSeparator();
     menuWindow->Append(wxID_ANY, "Close Chat\tCtrl+W");
     menuBar->Append(menuWindow, "&Window");
@@ -262,10 +283,18 @@ void MainFrame::CreateMainLayout()
     m_mainSplitter->SetSashGravity(0.0);
     m_mainSplitter->SetMinimumPaneSize(120);
     
-    // Left panel - Chat list
+    // Left panel - Chat list widget
     m_leftPanel = new wxPanel(m_mainSplitter);
     m_leftPanel->SetBackgroundColour(m_treeBgColor);
-    CreateChatList(m_leftPanel);
+    
+    // Create chat list widget
+    m_chatListWidget = new ChatListWidget(m_leftPanel, this);
+    m_chatListWidget->SetTreeColors(m_treeBgColor, m_treeFgColor, m_treeSelBgColor);
+    m_chatListWidget->SetTreeFont(m_treeFont);
+    
+    wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
+    leftSizer->Add(m_chatListWidget, 1, wxEXPAND);
+    m_leftPanel->SetSizer(leftSizer);
     
     // Right splitter (chat area | member list)
     m_rightSplitter = new wxSplitterWindow(m_mainSplitter, wxID_ANY,
@@ -302,47 +331,7 @@ void MainFrame::CreateMainLayout()
     SetSizer(frameSizer);
 }
 
-void MainFrame::CreateChatList(wxWindow* parent)
-{
-    wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
-    
-    // Tree control for chat list
-    m_chatTree = new wxTreeCtrl(parent, ID_CHAT_TREE,
-        wxDefaultPosition, wxDefaultSize,
-        wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT | wxTR_NO_LINES | 
-        wxTR_FULL_ROW_HIGHLIGHT | wxBORDER_NONE | wxTR_SINGLE);
-    
-    m_chatTree->SetBackgroundColour(m_treeBgColor);
-    m_chatTree->SetForegroundColour(m_treeFgColor);
-    m_chatTree->SetFont(m_treeFont);
-    
-    // Create root
-    m_treeRoot = m_chatTree->AddRoot("Chats");
-    
-    // Add Teleliter at the top (like HexChat's network/status)
-    m_teleliterItem = m_chatTree->AppendItem(m_treeRoot, "Teleliter");
-    m_chatTree->SetItemBold(m_teleliterItem, true);
-    
-    // Create categories
-    m_pinnedChats = m_chatTree->AppendItem(m_treeRoot, "Pinned");
-    m_privateChats = m_chatTree->AppendItem(m_treeRoot, "Private Chats");
-    m_groups = m_chatTree->AppendItem(m_treeRoot, "Groups");
-    m_channels = m_chatTree->AppendItem(m_treeRoot, "Channels");
-    m_bots = m_chatTree->AppendItem(m_treeRoot, "Bots");
-    
-    // Make categories bold
-    m_chatTree->SetItemBold(m_pinnedChats, true);
-    m_chatTree->SetItemBold(m_privateChats, true);
-    m_chatTree->SetItemBold(m_groups, true);
-    m_chatTree->SetItemBold(m_channels, true);
-    m_chatTree->SetItemBold(m_bots, true);
-    
-    // Select Teleliter by default
-    m_chatTree->SelectItem(m_teleliterItem);
-    
-    sizer->Add(m_chatTree, 1, wxEXPAND);
-    parent->SetSizer(sizer);
-}
+
 
 void MainFrame::CreateChatPanel(wxWindow* parent)
 {
@@ -366,29 +355,17 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     m_welcomeChat = new WelcomeChat(parent, this);
     sizer->Add(m_welcomeChat, 1, wxEXPAND);
     
-    // Regular chat display (hidden initially, shown when a chat is selected)
-    m_chatDisplay = new wxRichTextCtrl(parent, ID_CHAT_DISPLAY,
-        wxEmptyString, wxDefaultPosition, wxDefaultSize,
-        wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
-    m_chatDisplay->SetBackgroundColour(m_bgColor);
-    m_chatDisplay->SetFont(m_chatFont);
+    // Chat view widget (hidden initially, shown when a chat is selected)
+    m_chatViewWidget = new ChatViewWidget(parent, this);
+    m_chatViewWidget->SetColors(m_bgColor, m_fgColor, m_timestampColor, m_textColor,
+        m_serviceColor, m_actionColor, m_mediaColor, m_editedColor,
+        m_forwardColor, m_replyColor, m_highlightColor, m_noticeColor);
+    m_chatViewWidget->SetUserColors(m_userColors);
+    m_chatViewWidget->SetChatFont(m_chatFont);
+    sizer->Add(m_chatViewWidget, 1, wxEXPAND);
     
-    wxRichTextAttr defaultStyle;
-    defaultStyle.SetTextColour(m_textColor);
-    defaultStyle.SetBackgroundColour(m_bgColor);
-    defaultStyle.SetFont(m_chatFont);
-    m_chatDisplay->SetDefaultStyle(defaultStyle);
-    m_chatDisplay->SetBasicStyle(defaultStyle);
-    
-    // Bind mouse events for hover detection
-    m_chatDisplay->Bind(wxEVT_MOTION, &MainFrame::OnChatDisplayMouseMove, this);
-    m_chatDisplay->Bind(wxEVT_LEAVE_WINDOW, &MainFrame::OnChatDisplayMouseLeave, this);
-    m_chatDisplay->Bind(wxEVT_LEFT_DOWN, &MainFrame::OnChatDisplayLeftDown, this);
-    
-    sizer->Add(m_chatDisplay, 1, wxEXPAND);
-    
-    // Hide chat display from sizer (not just visually) - welcome chat is shown initially
-    sizer->Show(m_chatDisplay, false);
+    // Hide chat view widget from sizer (not just visually) - welcome chat is shown initially
+    sizer->Show(m_chatViewWidget, false);
     sizer->Show(m_welcomeChat, true);
     
     // Bottom separator
@@ -396,48 +373,16 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     separator2->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
     sizer->Add(separator2, 0, wxEXPAND);
     
-    // Input area
-    wxPanel* inputPanel = new wxPanel(parent);
-    inputPanel->SetBackgroundColour(m_bgColor);
-    
-    wxBoxSizer* inputSizer = new wxBoxSizer(wxHORIZONTAL);
-    
-    // Input text box
-    m_inputBox = new wxTextCtrl(inputPanel, ID_INPUT_BOX, "",
-        wxDefaultPosition, wxSize(-1, 24),
-        wxTE_PROCESS_ENTER | wxBORDER_NONE);
-    m_inputBox->SetBackgroundColour(m_inputBgColor);
-    m_inputBox->SetForegroundColour(m_inputFgColor);
-    m_inputBox->SetFont(m_inputFont);
-    m_inputBox->SetHint("Type a command or message...");
-    
-    // Bind key events for clipboard paste
-    m_inputBox->Bind(wxEVT_KEY_DOWN, &MainFrame::OnInputKeyDown, this);
-    
-    inputSizer->Add(m_inputBox, 1, wxEXPAND);
-    
-    inputPanel->SetSizer(inputSizer);
-    sizer->Add(inputPanel, 0, wxEXPAND | wxALL, 2);
+    // Input box widget
+    m_inputBoxWidget = new InputBoxWidget(parent, this);
+    m_inputBoxWidget->SetColors(m_inputBgColor, m_inputFgColor);
+    m_inputBoxWidget->SetInputFont(m_inputFont);
+    m_inputBoxWidget->SetChatView(m_chatViewWidget);
+    m_inputBoxWidget->SetWelcomeChat(m_welcomeChat);
+    // Note: member list and message formatter will be connected after CreateMemberList
+    sizer->Add(m_inputBoxWidget, 0, wxEXPAND | wxALL, 2);
     
     parent->SetSizer(sizer);
-    
-    // Set up drag and drop for file uploads
-    FileDropTarget* dropTarget = new FileDropTarget(this, 
-        [this](const wxArrayString& files) {
-            OnFilesDropped(files);
-        });
-    m_chatDisplay->SetDropTarget(dropTarget);
-    
-    // Create message formatter for the chat display
-    m_messageFormatter = new MessageFormatter(m_chatDisplay);
-    m_messageFormatter->SetTimestampColor(m_timestampColor);
-    m_messageFormatter->SetTextColor(m_textColor);
-    m_messageFormatter->SetServiceColor(m_serviceColor);
-    m_messageFormatter->SetMediaColor(m_mediaColor);
-    m_messageFormatter->SetEditedColor(m_editedColor);
-    m_messageFormatter->SetForwardColor(m_forwardColor);
-    m_messageFormatter->SetReplyColor(m_replyColor);
-    m_messageFormatter->SetUserColors(m_userColors);
 }
 
 void MainFrame::CreateMemberList(wxWindow* parent)
@@ -465,6 +410,14 @@ void MainFrame::CreateMemberList(wxWindow* parent)
     sizer->Add(m_memberCountLabel, 0, wxALL, 3);
     
     parent->SetSizer(sizer);
+    
+    // Now connect the member list to the input box widget for tab completion
+    if (m_inputBoxWidget) {
+        m_inputBoxWidget->SetMemberList(m_memberList);
+        if (m_chatViewWidget) {
+            m_inputBoxWidget->SetMessageFormatter(m_chatViewWidget->GetMessageFormatter());
+        }
+    }
 }
 
 void MainFrame::SetupStatusBar()
@@ -567,75 +520,8 @@ void MainFrame::OnTransferError(const TransferInfo& info)
 
 
 
-void MainFrame::AddMediaSpan(long startPos, long endPos, const MediaInfo& info)
-{
-    MediaSpan span;
-    span.startPos = startPos;
-    span.endPos = endPos;
-    span.info = info;
-    m_mediaSpans.push_back(span);
-}
-
-MediaSpan* MainFrame::GetMediaSpanAtPosition(long pos)
-{
-    for (auto& span : m_mediaSpans) {
-        if (span.Contains(pos)) {
-            return &span;
-        }
-    }
-    return nullptr;
-}
-
-void MainFrame::ClearMediaSpans()
-{
-    m_mediaSpans.clear();
-}
-
-void MainFrame::OpenMedia(const MediaInfo& info)
-{
-    // Open the media file or URL
-    wxString pathToOpen;
-    
-    if (!info.localPath.IsEmpty()) {
-        pathToOpen = info.localPath;
-    } else if (!info.remoteUrl.IsEmpty()) {
-        pathToOpen = info.remoteUrl;
-    } else {
-        // No path available - show error in status bar
-        SetStatusText("Error: Media not yet downloaded", 0);
-        return;
-    }
-    
-    // Open with default application
-    wxLaunchDefaultApplication(pathToOpen);
-}
-
 void MainFrame::PopulateDummyData()
 {
-    // Add sample chats to tree
-    m_chatTree->AppendItem(m_pinnedChats, "Saved Messages");
-    m_chatTree->AppendItem(m_pinnedChats, "Family Group");
-    
-    m_chatTree->AppendItem(m_privateChats, "Alice");
-    m_chatTree->AppendItem(m_privateChats, "Bob");
-    m_chatTree->AppendItem(m_privateChats, "Charlie");
-    m_chatTree->AppendItem(m_privateChats, "David");
-    
-    m_chatTree->AppendItem(m_groups, "Family Group");
-    m_chatTree->AppendItem(m_groups, "Work Team");
-    m_chatTree->AppendItem(m_groups, "Linux Enthusiasts");
-    m_chatTree->AppendItem(m_groups, "Project Alpha");
-    
-    m_chatTree->AppendItem(m_channels, "Tech News");
-    m_chatTree->AppendItem(m_channels, "Telegram Tips");
-    m_chatTree->AppendItem(m_channels, "Daily Memes");
-    
-    m_chatTree->AppendItem(m_bots, "BotFather");
-    m_chatTree->AppendItem(m_bots, "GitHub Bot");
-    m_chatTree->AppendItem(m_bots, "IFTTT");
-    
-    m_chatTree->ExpandAll();
-    
     // Add sample members (for a group chat)
     long idx = 0;
     m_memberList->InsertItem(idx++, "Admin (owner)");
@@ -652,147 +538,172 @@ void MainFrame::PopulateDummyData()
     m_memberCountLabel->SetLabel(wxString::Format("%ld members", idx));
     
     // Set chat info
-    m_currentChatTitle = "Linux Enthusiasts";
+    m_currentChatTitle = "Test Chat - Media Demo";
     m_currentChatType = TelegramChatType::Supergroup;
-    m_chatInfoBar->SetValue("Linux Enthusiasts | 1,234 members | Welcome to the Linux discussion group!");
+    m_chatInfoBar->SetValue("Test Chat - Media Demo | Testing all message types");
     
-    // Add sample messages
-    m_chatDisplay->BeginSuppressUndo();
-    
-    m_messageFormatter->AppendServiceMessage("12:00:00", "You joined the group");
-    m_messageFormatter->AppendServiceMessage("12:00:00", "Group created by Admin");
-    
-    m_messageFormatter->AppendMessage("12:00:15", "Alice", "Hey everyone! Just installed Arch btw :P");
-    m_messageFormatter->AppendMessage("12:00:22", "Bob", "Hi Alice, how long did that take?");
-    m_messageFormatter->AppendMessage("12:00:35", "Alice", "About 3 hours, but I learned a lot!");
-    m_messageFormatter->AppendMessage("12:00:42", "Charlie", "Nice! I'm still on Ubuntu");
-    
-    m_messageFormatter->AppendReplyMessage("12:00:58", "David", "Alice: Just installed Arch btw", 
-                       "Congrats! The Arch wiki is your best friend now");
-    
-    // Sample media message with MediaInfo
-    MediaInfo photoInfo;
-    photoInfo.type = MediaType::Photo;
-    photoInfo.caption = "Look at my desktop!";
-    photoInfo.id = "photo123";
-    m_messageFormatter->AppendMediaMessage("12:01:10", "Eve", photoInfo, "Look at my desktop!");
-    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), photoInfo);
-    
-    m_messageFormatter->AppendMessage("12:01:25", "Frank", "That looks clean! What DE are you using?");
-    m_messageFormatter->AppendMessage("12:01:32", "Eve", "It's KDE Plasma with some custom themes");
-    
-    m_messageFormatter->AppendForwardMessage("12:01:45", "Grace", "Tech News", 
-                         "Linux kernel 6.8 released with major performance improvements");
-    
-    m_messageFormatter->AppendJoinMessage("12:01:55", "NewUser");
-    
-    m_messageFormatter->AppendMessage("12:02:05", "Admin", "Welcome NewUser! Please read the pinned messages");
-    m_messageFormatter->AppendMessage("12:02:15", "NewUser", "Thanks! Happy to be here");
-    
-    m_messageFormatter->AppendEditedMessage("12:02:30", "Henry", "Has anyone tried Wayland yet? It works great now!");
-    
-    m_messageFormatter->AppendMessage("12:02:45", "Alice", "Yes! Been using it for months, very stable");
-    m_messageFormatter->AppendMessage("12:02:58", "Bob", "Still having some issues with screen sharing in Discord");
-    
-    // Sample file message
-    MediaInfo fileInfo;
-    fileInfo.type = MediaType::File;
-    fileInfo.fileName = "linux-guide.pdf";
-    fileInfo.fileSize = "2.4 MB";
-    m_messageFormatter->AppendMediaMessage("12:03:10", "Charlie", fileInfo, "");
-    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), fileInfo);
-    
-    m_messageFormatter->AppendLeaveMessage("12:03:20", "OldUser");
-    
-    m_messageFormatter->AppendMessage("12:03:30", "David", "Check out this link: https://kernel.org");
-    
-    // Sample sticker
-    MediaInfo stickerInfo;
-    stickerInfo.type = MediaType::Sticker;
-    stickerInfo.emoji = "😎";
-    m_messageFormatter->AppendMediaMessage("12:03:45", "Eve", stickerInfo, "");
-    AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), stickerInfo);
-    
-    m_chatDisplay->EndSuppressUndo();
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
-}
-
-
-
-// Mouse event handlers for hover detection
-
-void MainFrame::OnChatDisplayMouseMove(wxMouseEvent& event)
-{
-    event.Skip();
-    
-    wxPoint pos = event.GetPosition();
-    long textPos;
-    
-    // Hit test to find text position
-    wxTextCtrlHitTestResult result = m_chatDisplay->HitTest(pos, &textPos);
-    
-    if (result == wxTE_HT_ON_TEXT) {
-        MediaSpan* span = GetMediaSpanAtPosition(textPos);
-        
-        if (span) {
-            // We're over a media span - show popup instantly
-            wxPoint screenPos = m_chatDisplay->ClientToScreen(pos);
-            screenPos.x += 10;  // Offset slightly
-            screenPos.y += 10;
-            m_mediaPopup->ShowMedia(span->info, screenPos);
-            
-            // Change cursor to hand
-            m_chatDisplay->SetCursor(wxCursor(wxCURSOR_HAND));
-        } else {
-            // Not over a media span - hide popup
-            if (m_mediaPopup->IsShown()) {
-                m_mediaPopup->Hide();
+    // Add sample messages via ChatViewWidget
+    if (m_chatViewWidget) {
+        MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
+        if (formatter) {
+            wxRichTextCtrl* display = m_chatViewWidget->GetDisplayCtrl();
+            if (display) {
+                display->BeginSuppressUndo();
             }
-            m_chatDisplay->SetCursor(wxCursor(wxCURSOR_IBEAM));
+            
+            // Service messages
+            formatter->AppendServiceMessage("12:00", "Welcome to the Test Chat!");
+            formatter->AppendServiceMessage("12:00", "This chat demonstrates all message types");
+            
+            // Regular messages
+            formatter->AppendMessage("12:01", "Alice", "Hey everyone! Let's test some messages");
+            formatter->AppendMessage("12:01", "Bob", "Sure! I'll send some media");
+            
+            // Photo message
+            MediaInfo photoInfo;
+            photoInfo.type = MediaType::Photo;
+            photoInfo.id = "test_photo_1";
+            photoInfo.caption = "Beautiful sunset";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:02", "Alice", photoInfo, "Beautiful sunset I captured yesterday");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, photoInfo);
+            }
+            
+            // Video message
+            MediaInfo videoInfo;
+            videoInfo.type = MediaType::Video;
+            videoInfo.id = "test_video_1";
+            videoInfo.fileName = "funny_cat.mp4";
+            videoInfo.fileSize = "12.5 MB";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:03", "Bob", videoInfo, "Check out this funny cat video!");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoInfo);
+            }
+            
+            // Document/File message
+            MediaInfo fileInfo;
+            fileInfo.type = MediaType::File;
+            fileInfo.id = "test_file_1";
+            fileInfo.fileName = "linux_guide.pdf";
+            fileInfo.fileSize = "2.3 MB";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:04", "Charlie", fileInfo, "Here's that PDF you asked for");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, fileInfo);
+            }
+            
+            // Voice message
+            MediaInfo voiceInfo;
+            voiceInfo.type = MediaType::Voice;
+            voiceInfo.id = "test_voice_1";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:05", "David", voiceInfo, "");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, voiceInfo);
+            }
+            
+            // Video note (round video)
+            MediaInfo videoNoteInfo;
+            videoNoteInfo.type = MediaType::VideoNote;
+            videoNoteInfo.id = "test_videonote_1";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:06", "Eve", videoNoteInfo, "");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoNoteInfo);
+            }
+            
+            // Sticker
+            MediaInfo stickerInfo;
+            stickerInfo.type = MediaType::Sticker;
+            stickerInfo.id = "test_sticker_1";
+            stickerInfo.emoji = "😄";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:07", "Frank", stickerInfo, "");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, stickerInfo);
+            }
+            
+            // GIF/Animation
+            MediaInfo gifInfo;
+            gifInfo.type = MediaType::GIF;
+            gifInfo.id = "test_gif_1";
+            gifInfo.fileName = "dancing.gif";
+            {
+                long startPos = display->GetLastPosition();
+                formatter->AppendMediaMessage("12:08", "Grace", gifInfo, "This is hilarious!");
+                long endPos = display->GetLastPosition();
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, gifInfo);
+            }
+            
+            // Action message (/me)
+            formatter->AppendActionMessage("12:09", "Henry", "is laughing at the GIF");
+            
+            // Reply message
+            formatter->AppendReplyMessage("12:10", "Alice", "Bob: Check out this funny cat video!", 
+                               "Haha that's so cute! 😂");
+            
+            // Forward message
+            formatter->AppendForwardMessage("12:11", "Bob", "Tech News Channel", 
+                             "Breaking: New wxWidgets 3.3 released with improved dark mode support!");
+            
+            // Edited message
+            formatter->AppendEditedMessage("12:12", "Charlie", "I made a typo but fixed it now (edited)");
+            
+            // Notice message
+            formatter->AppendNoticeMessage("12:13", "Teleliter", "This is a system notice");
+            
+            // Join/Leave messages
+            formatter->AppendJoinMessage("12:14", "NewMember");
+            formatter->AppendLeaveMessage("12:14", "OldMember");
+            
+            // More regular messages
+            formatter->AppendMessage("12:15", "Admin", "Welcome NewMember! Feel free to test the upload button");
+            formatter->AppendMessage("12:15", "NewMember", "Thanks! Testing the chat now");
+            
+            // Link in message
+            formatter->AppendMessage("12:16", "David", "Check out https://github.com for more projects");
+            
+            // Long message
+            formatter->AppendMessage("12:17", "Eve", 
+                "This is a longer message to test how the chat handles multi-line content. "
+                "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor "
+                "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud "
+                "exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.");
+            
+            // Final service message
+            formatter->AppendServiceMessage("12:18", "End of test messages - try the Upload button!");
+            
+            if (display) {
+                display->EndSuppressUndo();
+                display->ShowPosition(display->GetLastPosition());
+            }
         }
-    } else {
-        if (m_mediaPopup->IsShown()) {
-            m_mediaPopup->Hide();
-        }
-        m_chatDisplay->SetCursor(wxCursor(wxCURSOR_IBEAM));
+    }
+    
+    // Enable upload button for testing
+    if (m_inputBoxWidget) {
+        m_inputBoxWidget->EnableUploadButtons(true);
     }
 }
 
-void MainFrame::OnChatDisplayMouseLeave(wxMouseEvent& event)
-{
-    event.Skip();
-    
-    // Hide popup when mouse leaves chat display
-    if (m_mediaPopup && m_mediaPopup->IsShown()) {
-        m_mediaPopup->Hide();
-    }
-}
 
-void MainFrame::OnChatDisplayLeftDown(wxMouseEvent& event)
-{
-    event.Skip();
-    
-    wxPoint pos = event.GetPosition();
-    long textPos;
-    
-    wxTextCtrlHitTestResult result = m_chatDisplay->HitTest(pos, &textPos);
-    
-    if (result == wxTE_HT_ON_TEXT) {
-        MediaSpan* span = GetMediaSpanAtPosition(textPos);
-        
-        if (span) {
-            // Clicked on media - open it
-            OpenMedia(span->info);
-        }
-    }
-}
 
 // File drop handler
 
 void MainFrame::OnFilesDropped(const wxArrayString& files)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
+    
+    MessageFormatter* formatter = m_chatViewWidget ? m_chatViewWidget->GetMessageFormatter() : nullptr;
     
     for (const auto& file : files) {
         wxFileName fn(file);
@@ -827,15 +738,22 @@ void MainFrame::OnFilesDropped(const wxArrayString& files)
         
         // TODO: Actually upload via TDLib
         // For now, simulate progress and complete
-        m_messageFormatter->AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
-                          media, "");
-        AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), media);
+        if (formatter) {
+            formatter->AppendMediaMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, 
+                              media, "");
+            if (m_chatViewWidget) {
+                m_chatViewWidget->AddMediaSpan(formatter->GetLastMediaSpanStart(), 
+                    formatter->GetLastMediaSpanEnd(), media);
+            }
+        }
         
         // Simulate completion (will be replaced by TDLib callbacks)
         m_transferManager.CompleteTransfer(transferId, file);
     }
     
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    if (m_chatViewWidget) {
+        m_chatViewWidget->ScrollToBottom();
+    }
 }
 
 void MainFrame::OnUploadFile(wxCommandEvent& event)
@@ -854,38 +772,6 @@ void MainFrame::OnUploadFile(wxCommandEvent& event)
     }
 }
 
-void MainFrame::OnInputKeyDown(wxKeyEvent& event)
-{
-    // Check for Ctrl+V (paste)
-    if (event.ControlDown() && event.GetKeyCode() == 'V') {
-        HandleClipboardPaste();
-    }
-    event.Skip();
-}
-
-void MainFrame::HandleClipboardPaste()
-{
-    if (wxTheClipboard->Open()) {
-        // Check if clipboard has an image
-        if (wxTheClipboard->IsSupported(wxDF_BITMAP)) {
-            wxBitmapDataObject bitmapData;
-            if (wxTheClipboard->GetData(bitmapData)) {
-                wxBitmap bitmap = bitmapData.GetBitmap();
-                if (bitmap.IsOk()) {
-                    // Save to temp file and "upload"
-                    wxString tempPath = wxFileName::GetTempDir() + "/teleliter_paste.png";
-                    bitmap.SaveFile(tempPath, wxBITMAP_TYPE_PNG);
-                    
-                    wxArrayString files;
-                    files.Add(tempPath);
-                    OnFilesDropped(files);
-                }
-            }
-        }
-        wxTheClipboard->Close();
-    }
-}
-
 // Menu event handlers
 
 void MainFrame::OnExit(wxCommandEvent& event)
@@ -895,15 +781,23 @@ void MainFrame::OnExit(wxCommandEvent& event)
 
 void MainFrame::OnAbout(wxCommandEvent& event)
 {
-    wxMessageBox("Teleliter\n\n"
-                 "Telegram client with HexChat-style interface\n"
-                 "Built with TDLib\n\n"
-                 "Version 0.1.0\n\n"
-                 "Features:\n"
-                 "- Hover over [Photo], [Video], [Sticker] to preview\n"
-                 "- Click to open the file\n"
-                 "- Drag & drop files to upload\n"
-                 "- Ctrl+V to paste images",
+    wxMessageBox("Teleliter 0.1.0\n\n"
+                 "A Telegram client with HexChat-style interface\n\n"
+                 "Built with TDLib and wxWidgets\n\n"
+                 "Commands:\n"
+                 "  /me <action>     - Send an action\n"
+                 "  /clear           - Clear chat window\n"
+                 "  /query <user>    - Open private chat\n"
+                 "  /whois <user>    - View user info\n"
+                 "  /away [message]  - Set away status\n"
+                 "  /help            - Show all commands\n\n"
+                 "Keyboard:\n"
+                 "  Tab              - Nick completion\n"
+                 "  Up/Down          - Input history\n"
+                 "  Page Up/Down     - Scroll chat\n"
+                 "  Ctrl+V           - Paste image\n\n"
+                 "Drag & drop files to upload\n"
+                 "Hover over [Photo], [Video] to preview",
                  "About Teleliter",
                  wxOK | wxICON_INFORMATION, this);
 }
@@ -911,7 +805,9 @@ void MainFrame::OnAbout(wxCommandEvent& event)
 void MainFrame::OnLogin(wxCommandEvent& event)
 {
     // Switch to Teleliter welcome chat and start login
-    m_chatTree->SelectItem(m_teleliterItem);
+    if (m_chatListWidget) {
+        m_chatListWidget->SelectTeleliter();
+    }
     
     if (m_welcomeChat) {
         m_welcomeChat->StartLogin();
@@ -930,8 +826,10 @@ void MainFrame::OnNewChat(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter username or phone number:", "New Private Chat");
     if (dlg.ShowModal() == wxID_OK) {
         wxString contact = dlg.GetValue();
-        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
-                            "Starting chat with " + contact);
+        if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+                                "Starting chat with " + contact);
+        }
     }
 }
 
@@ -940,8 +838,10 @@ void MainFrame::OnNewGroup(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter group name:", "New Group");
     if (dlg.ShowModal() == wxID_OK) {
         wxString groupName = dlg.GetValue();
-        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
-                            "Creating group: " + groupName);
+        if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+                                "Creating group: " + groupName);
+        }
     }
 }
 
@@ -950,8 +850,10 @@ void MainFrame::OnNewChannel(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Enter channel name:", "New Channel");
     if (dlg.ShowModal() == wxID_OK) {
         wxString channelName = dlg.GetValue();
-        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
-                            "Creating channel: " + channelName);
+        if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+                                "Creating channel: " + channelName);
+        }
     }
 }
 
@@ -965,8 +867,10 @@ void MainFrame::OnSearch(wxCommandEvent& event)
     wxTextEntryDialog dlg(this, "Search messages, chats, and users:", "Search");
     if (dlg.ShowModal() == wxID_OK) {
         wxString query = dlg.GetValue();
-        m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
-                            "Searching for: " + query);
+        if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+            m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+                                "Searching for: " + query);
+        }
     }
 }
 
@@ -985,8 +889,9 @@ void MainFrame::OnPreferences(wxCommandEvent& event)
 
 void MainFrame::OnClearWindow(wxCommandEvent& event)
 {
-    m_chatDisplay->Clear();
-    ClearMediaSpans();
+    if (m_chatViewWidget) {
+        m_chatViewWidget->ClearMessages();
+    }
 }
 
 void MainFrame::OnToggleChatList(wxCommandEvent& event)
@@ -1016,48 +921,67 @@ void MainFrame::OnToggleChatInfo(wxCommandEvent& event)
     m_chatPanel->Layout();
 }
 
+void MainFrame::OnToggleUnreadFirst(wxCommandEvent& event)
+{
+    m_showUnreadFirst = !m_showUnreadFirst;
+    RefreshChatList();
+}
+
 void MainFrame::OnFullscreen(wxCommandEvent& event)
 {
-    ShowFullScreen(!IsFullScreen());
+    ShowFullScreen(!IsFullScreen(), wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR | wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION);
 }
 
 void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
 {
+    DBGLOG("OnChatTreeSelectionChanged called");
+    
     // Guard against events during initialization when UI elements aren't created yet
-    if (!m_chatInfoBar || !m_welcomeChat || !m_chatDisplay || !m_chatPanel) {
+    if (!m_chatInfoBar || !m_welcomeChat || !m_chatViewWidget || !m_chatPanel || !m_chatListWidget) {
+        DBGLOG("Guard check failed - UI elements not ready");
         return;
     }
     
     wxTreeItemId item = event.GetItem();
     if (item.IsOk()) {
-        wxString chatName = m_chatTree->GetItemText(item);
+        wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
+        if (!chatTree) return;
+        
+        wxString chatName = chatTree->GetItemText(item);
         
         // Check if Teleliter (welcome) is selected
-        if (item == m_teleliterItem) {
+        if (m_chatListWidget->IsTeleliterSelected()) {
             m_currentChatId = 0;
             m_chatInfoBar->SetValue("Teleliter");
             // Use sizer Show/Hide to properly manage layout
             wxSizer* sizer = m_chatPanel->GetSizer();
             if (sizer) {
                 sizer->Show(m_welcomeChat, true);
-                sizer->Show(m_chatDisplay, false);
+                sizer->Show(m_chatViewWidget, false);
             }
             m_chatPanel->Layout();
             SetStatusText("Teleliter", 0);
+            
+            // Disable upload buttons when no chat selected
+            if (m_inputBoxWidget) {
+                m_inputBoxWidget->EnableUploadButtons(false);
+            }
             return;
         }
         
         // Check if this is a category item
-        if (item == m_pinnedChats || item == m_privateChats || item == m_groups ||
-            item == m_channels || item == m_bots) {
+        if (item == m_chatListWidget->GetPinnedChats() || 
+            item == m_chatListWidget->GetPrivateChats() || 
+            item == m_chatListWidget->GetGroups() ||
+            item == m_chatListWidget->GetChannels() || 
+            item == m_chatListWidget->GetBots()) {
             return;  // Don't select categories
         }
         
         // Look up chat ID from tree item
-        auto it = m_treeItemToChatId.find(item);
-        if (it != m_treeItemToChatId.end()) {
-            int64_t chatId = it->second;
-            
+        int64_t chatId = m_chatListWidget->GetChatIdFromTreeItem(item);
+        DBGLOG("Chat ID from tree item: " << chatId);
+        if (chatId != 0) {
             // Update current chat
             m_currentChatId = chatId;
             m_currentChatTitle = chatName;
@@ -1073,20 +997,50 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             wxSizer* sizer = m_chatPanel->GetSizer();
             if (sizer) {
                 sizer->Show(m_welcomeChat, false);
-                sizer->Show(m_chatDisplay, true);
+                sizer->Show(m_chatViewWidget, true);
             }
             m_chatPanel->Layout();
             SetStatusText(m_currentChatTitle, 0);
             
-            // Remove bold (unread indicator)
-            m_chatTree->SetItemBold(item, false);
+            // Remove bold and unread indicator (HexChat style)
+            chatTree->SetItemBold(item, false);
+            chatTree->SetItemTextColour(item, m_treeFgColor);
             
-            // Load messages for this chat
-            if (m_telegramClient) {
-                m_chatDisplay->Clear();
-                ClearMediaSpans();
-                m_telegramClient->LoadMessages(chatId);
+            // Update title to remove unread count
+            if (chatId != -1 && m_telegramClient) {
+                bool found = false;
+                ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+                if (found) {
+                    chatTree->SetItemText(item, chat.title);
+                }
+            }
+            
+            // Mark chat as read
+            m_chatsWithUnread.erase(chatId);
+            
+            // Update member list for this chat
+            UpdateMemberList(chatId);
+            
+            // Check if this is the Test Chat (ID -1)
+            if (chatId == -1) {
+                DBGLOG("Test chat selected, loading dummy data");
+                // Load dummy data for testing
+                m_chatViewWidget->ClearMessages();
+                PopulateDummyData();
+            } else if (m_telegramClient) {
+                DBGLOG("Loading messages from TDLib for chatId=" << chatId);
+                // Clear the view and load messages (OpenChatAndLoadMessages handles opening first)
+                m_chatViewWidget->ClearMessages();
+                m_telegramClient->OpenChatAndLoadMessages(chatId);
                 m_telegramClient->MarkChatAsRead(chatId);
+            } else {
+                DBGLOG("ERROR: m_telegramClient is null!");
+            }
+            
+            // Set focus to input box and enable upload buttons (always enable for test chat)
+            if (m_inputBoxWidget) {
+                m_inputBoxWidget->SetFocus();
+                m_inputBoxWidget->EnableUploadButtons(m_isLoggedIn || chatId == -1);
             }
         } else {
             // Fallback for items without chat ID (shouldn't happen with TDLib)
@@ -1095,10 +1049,16 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             wxSizer* sizer = m_chatPanel->GetSizer();
             if (sizer) {
                 sizer->Show(m_welcomeChat, false);
-                sizer->Show(m_chatDisplay, true);
+                sizer->Show(m_chatViewWidget, true);
             }
             m_chatPanel->Layout();
             SetStatusText(chatName, 0);
+            
+            // Set focus to input box and enable upload buttons
+            if (m_inputBoxWidget) {
+                m_inputBoxWidget->SetFocus();
+                m_inputBoxWidget->EnableUploadButtons(m_isLoggedIn);
+            }
         }
     }
 }
@@ -1119,8 +1079,10 @@ void MainFrame::OnMemberListItemActivated(wxListEvent& event)
         username = username.Left(parenPos);
     }
     
-    m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"), 
-                        "Opening profile: " + username);
+    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"), 
+                            "Opening profile: " + username);
+    }
 }
 
 void MainFrame::OnMemberListRightClick(wxListEvent& event)
@@ -1139,37 +1101,6 @@ void MainFrame::OnMemberListRightClick(wxListEvent& event)
     menu.Append(wxID_ANY, "Remove from Group");
     
     PopupMenu(&menu);
-}
-
-void MainFrame::OnInputEnter(wxCommandEvent& event)
-{
-    wxString message = m_inputBox->GetValue();
-    if (message.IsEmpty()) {
-        return;
-    }
-    
-    // Check if welcome chat is active - forward input there
-    if (IsWelcomeChatActive()) {
-        ForwardInputToWelcomeChat(message);
-        m_inputBox->Clear();
-        return;
-    }
-    
-    // Send via TDLib if logged in and have a chat selected
-    if (m_telegramClient && m_telegramClient->IsLoggedIn() && m_currentChatId != 0) {
-        m_telegramClient->SendMessage(m_currentChatId, message);
-        m_inputBox->Clear();
-        // Message will appear via OnNewMessage callback
-        return;
-    }
-    
-    // Fallback: display locally
-    wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
-    m_messageFormatter->AppendMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, message);
-    
-    m_inputBox->Clear();
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
 }
 
 bool MainFrame::IsWelcomeChatActive() const
@@ -1191,12 +1122,12 @@ void MainFrame::ForwardInputToWelcomeChat(const wxString& input)
 wxString MainFrame::FormatTimestamp(int64_t unixTime)
 {
     if (unixTime <= 0) {
-        return wxDateTime::Now().Format("%H:%M:%S");
+        return wxDateTime::Now().Format("%H:%M");
     }
     
     time_t t = static_cast<time_t>(unixTime);
     wxDateTime dt(t);
-    return dt.Format("%H:%M:%S");
+    return dt.Format("%H:%M");
 }
 
 void MainFrame::OnConnected()
@@ -1208,6 +1139,11 @@ void MainFrame::OnLoginSuccess(const wxString& userName)
 {
     m_isLoggedIn = true;
     m_currentUser = userName;
+    
+    // Update InputBoxWidget with current user
+    if (m_inputBoxWidget) {
+        m_inputBoxWidget->SetCurrentUser(userName);
+    }
     
     SetStatusText("Logged in as " + userName, 0);
     SetStatusText("Online", 3);
@@ -1226,25 +1162,27 @@ void MainFrame::OnLoggedOut()
     m_currentUser.Clear();
     m_currentChatId = 0;
     
-    // Clear chat list mappings
-    m_treeItemToChatId.clear();
-    m_chatIdToTreeItem.clear();
+    // Clear current user from InputBoxWidget and disable upload buttons
+    if (m_inputBoxWidget) {
+        m_inputBoxWidget->SetCurrentUser("");
+        m_inputBoxWidget->EnableUploadButtons(false);
+    }
     
-    // Clear tree (keep categories)
-    m_chatTree->DeleteChildren(m_pinnedChats);
-    m_chatTree->DeleteChildren(m_privateChats);
-    m_chatTree->DeleteChildren(m_groups);
-    m_chatTree->DeleteChildren(m_channels);
-    m_chatTree->DeleteChildren(m_bots);
+    // Clear chat list
+    if (m_chatListWidget) {
+        m_chatListWidget->ClearAllChats();
+    }
     
     // Show welcome chat
     wxSizer* sizer = m_chatPanel->GetSizer();
     if (sizer) {
         sizer->Show(m_welcomeChat, true);
-        sizer->Show(m_chatDisplay, false);
+        sizer->Show(m_chatViewWidget, false);
     }
     m_chatPanel->Layout();
-    m_chatTree->SelectItem(m_teleliterItem);
+    if (m_chatListWidget) {
+        m_chatListWidget->SelectTeleliter();
+    }
     
     SetStatusText("Logged out", 0);
     SetStatusText("Offline", 3);
@@ -1259,174 +1197,220 @@ void MainFrame::OnLoggedOut()
 
 void MainFrame::RefreshChatList()
 {
-    if (!m_telegramClient) return;
-    
-    // Clear existing items (keep categories)
-    m_chatTree->DeleteChildren(m_pinnedChats);
-    m_chatTree->DeleteChildren(m_privateChats);
-    m_chatTree->DeleteChildren(m_groups);
-    m_chatTree->DeleteChildren(m_channels);
-    m_chatTree->DeleteChildren(m_bots);
-    m_treeItemToChatId.clear();
-    m_chatIdToTreeItem.clear();
+    if (!m_telegramClient || !m_chatListWidget) return;
     
     // Get chats from TelegramClient
     const auto& chats = m_telegramClient->GetChats();
     
-    // Sort chats by order (descending)
-    std::vector<const ChatInfo*> sortedChats;
+    // Sort chats: unread first (within each category), then by order (descending)
+    // This ensures unread chats appear at the top of their respective category
+    std::vector<ChatInfo> sortedChats;
     for (const auto& [id, chat] : chats) {
-        sortedChats.push_back(&chat);
+        sortedChats.push_back(chat);
     }
+    bool unreadFirst = m_showUnreadFirst;
     std::sort(sortedChats.begin(), sortedChats.end(), 
-              [](const ChatInfo* a, const ChatInfo* b) {
-                  return a->order > b->order;
+              [unreadFirst](const ChatInfo& a, const ChatInfo& b) {
+                  // Helper to get category priority (for grouping)
+                  auto getCategoryPriority = [](const ChatInfo& c) -> int {
+                      if (c.isPinned) return 0;
+                      if (c.isBot) return 4;
+                      if (c.isChannel) return 3;
+                      if (c.isGroup || c.isSupergroup) return 2;
+                      return 1; // Private chats
+                  };
+                  
+                  int catA = getCategoryPriority(a);
+                  int catB = getCategoryPriority(b);
+                  
+                  // First sort by category
+                  if (catA != catB) {
+                      return catA < catB;
+                  }
+                  
+                  // Within same category: unread chats first (if setting enabled)
+                  if (unreadFirst) {
+                      bool aHasUnread = a.unreadCount > 0;
+                      bool bHasUnread = b.unreadCount > 0;
+                      if (aHasUnread != bHasUnread) {
+                          return aHasUnread; // Unread comes first
+                      }
+                  }
+                  
+                  // Then by order (descending - higher order first)
+                  return a.order > b.order;
               });
     
-    // Add chats to appropriate categories
-    for (const ChatInfo* chat : sortedChats) {
-        wxTreeItemId parent;
-        wxString displayTitle = chat->title;
-        
-        // Add unread count to title if present
-        if (chat->unreadCount > 0) {
-            displayTitle += wxString::Format(" (%d)", chat->unreadCount);
-        }
-        
-        // Determine category
-        if (chat->isPinned) {
-            parent = m_pinnedChats;
-        } else if (chat->isChannel) {
-            parent = m_channels;
-        } else if (chat->isGroup || chat->isSupergroup) {
-            parent = m_groups;
-        } else if (chat->isBot) {
-            parent = m_bots;
-        } else {
-            parent = m_privateChats;
-        }
-        
-        wxTreeItemId item = m_chatTree->AppendItem(parent, displayTitle);
-        m_treeItemToChatId[item] = chat->id;
-        m_chatIdToTreeItem[chat->id] = item;
-        
-        // Make bold if unread
-        if (chat->unreadCount > 0) {
-            m_chatTree->SetItemBold(item, true);
-        }
-    }
+    // Refresh chat list widget with sorted chats
+    m_chatListWidget->RefreshChatList(sortedChats);
     
     // Expand categories that have items
-    if (m_chatTree->GetChildrenCount(m_pinnedChats) > 0) {
-        m_chatTree->Expand(m_pinnedChats);
-    }
-    if (m_chatTree->GetChildrenCount(m_privateChats) > 0) {
-        m_chatTree->Expand(m_privateChats);
-    }
-    if (m_chatTree->GetChildrenCount(m_groups) > 0) {
-        m_chatTree->Expand(m_groups);
-    }
-    if (m_chatTree->GetChildrenCount(m_channels) > 0) {
-        m_chatTree->Expand(m_channels);
-    }
-    if (m_chatTree->GetChildrenCount(m_bots) > 0) {
-        m_chatTree->Expand(m_bots);
+    wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
+    if (chatTree) {
+        if (chatTree->GetChildrenCount(m_chatListWidget->GetPinnedChats()) > 0) {
+            chatTree->Expand(m_chatListWidget->GetPinnedChats());
+        }
+        if (chatTree->GetChildrenCount(m_chatListWidget->GetPrivateChats()) > 0) {
+            chatTree->Expand(m_chatListWidget->GetPrivateChats());
+        }
+        if (chatTree->GetChildrenCount(m_chatListWidget->GetGroups()) > 0) {
+            chatTree->Expand(m_chatListWidget->GetGroups());
+        }
+        if (chatTree->GetChildrenCount(m_chatListWidget->GetChannels()) > 0) {
+            chatTree->Expand(m_chatListWidget->GetChannels());
+        }
+        if (chatTree->GetChildrenCount(m_chatListWidget->GetBots()) > 0) {
+            chatTree->Expand(m_chatListWidget->GetBots());
+        }
     }
 }
 
 void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>& messages)
 {
+    DBGLOG("OnMessagesLoaded called: chatId=" << chatId << " m_currentChatId=" << m_currentChatId << " messages.size()=" << messages.size());
+    
     if (chatId != m_currentChatId) {
+        DBGLOG("Ignoring messages - chatId mismatch");
         return;  // Not the current chat, ignore
     }
     
-    m_chatDisplay->BeginSuppressUndo();
-    m_chatDisplay->Clear();
-    ClearMediaSpans();
+    if (!m_chatViewWidget) {
+        DBGLOG("ERROR: m_chatViewWidget is null!");
+        return;
+    }
     
-    // Messages are in reverse order (newest first), so display from end
-    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+    wxRichTextCtrl* display = m_chatViewWidget->GetDisplayCtrl();
+    if (display) {
+        display->BeginSuppressUndo();
+    }
+    m_chatViewWidget->ClearMessages();
+    
+    // Sort messages by date (oldest first) to ensure correct display order
+    std::vector<MessageInfo> sortedMessages = messages;
+    std::sort(sortedMessages.begin(), sortedMessages.end(),
+              [](const MessageInfo& a, const MessageInfo& b) {
+                  return a.date < b.date;
+              });
+    
+    // Get last read message ID for this chat
+    int64_t lastReadId = GetLastReadMessageId(chatId);
+    bool unreadMarkerInserted = false;
+    
+    // Get unread count from chat info
+    int32_t unreadCount = 0;
+    if (m_telegramClient) {
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+        if (found) {
+            unreadCount = chat.unreadCount;
+        }
+    }
+    
+    DBGLOG("Displaying " << sortedMessages.size() << " messages (unreadCount=" << unreadCount << ")");
+    
+    // Display messages in chronological order (oldest first)
+    for (auto it = sortedMessages.begin(); it != sortedMessages.end(); ++it) {
+        // Insert unread marker before first unread message (HexChat style)
+        if (!unreadMarkerInserted && unreadCount > 0) {
+            // Check if this message is after the last read one (it's unread)
+            if (lastReadId > 0 && it->id > lastReadId) {
+                // This is the first unread message, insert marker before it
+                MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
+                if (formatter) {
+                    formatter->AppendUnreadMarker();
+                }
+                unreadMarkerInserted = true;
+            }
+        }
+        
+        // If no lastReadId but has unread, insert marker based on unread count
+        if (!unreadMarkerInserted && unreadCount > 0 && lastReadId == 0) {
+            // Calculate position: marker goes before the last N unread messages
+            size_t currentIndex = std::distance(sortedMessages.begin(), it);
+            size_t totalMessages = sortedMessages.size();
+            size_t unreadStartIndex = totalMessages - unreadCount;
+            if (currentIndex == unreadStartIndex) {
+                MessageFormatter* formatter = m_chatViewWidget->GetMessageFormatter();
+                if (formatter) {
+                    formatter->AppendUnreadMarker();
+                }
+                unreadMarkerInserted = true;
+            }
+        }
+        
         DisplayMessage(*it);
     }
     
-    m_chatDisplay->EndSuppressUndo();
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    if (display) {
+        display->EndSuppressUndo();
+        display->LayoutContent();
+        display->Refresh();
+        display->Update();
+    }
+    m_chatViewWidget->ScrollToBottom();
+    
+    DBGLOG("Finished displaying messages, scrolled to bottom");
 }
 
 void MainFrame::OnNewMessage(const MessageInfo& message)
 {
     if (message.chatId != m_currentChatId) {
-        // Update unread count in tree
-        auto treeIt = m_chatIdToTreeItem.find(message.chatId);
-        if (treeIt != m_chatIdToTreeItem.end()) {
-            m_chatTree->SetItemBold(treeIt->second, true);
+        // Update unread count in tree - HexChat style
+        m_chatsWithUnread.insert(message.chatId);
+        
+        if (m_chatListWidget) {
+            wxTreeItemId item = m_chatListWidget->GetTreeItemFromChatId(message.chatId);
+            if (item.IsOk()) {
+                wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
+                if (chatTree) {
+                    // Make bold and change color for unread
+                    chatTree->SetItemBold(item, true);
+                    chatTree->SetItemTextColour(item, wxColour(0xFF, 0x80, 0x00)); // Orange
+                    
+                    // Update title with incremented unread count
+                    wxString title = chatTree->GetItemText(item);
+                    int parenPos = title.Find(" (");
+                    int currentCount = 1;
+                    if (parenPos != wxNOT_FOUND) {
+                        wxString countStr = title.Mid(parenPos + 2);
+                        countStr = countStr.BeforeFirst(')');
+                        long count = 0;
+                        if (countStr.ToLong(&count)) {
+                            currentCount = count + 1;
+                        }
+                        title = title.Left(parenPos);
+                    }
+                    chatTree->SetItemText(item, title + wxString::Format(" (%d)", currentCount));
+                }
+            }
+        }
+        
+        // Flash the window title to notify user (HexChat style)
+        if (!HasFocus()) {
+            RequestUserAttention(wxUSER_ATTENTION_INFO);
         }
         return;
     }
     
     // Display the new message
     DisplayMessage(message);
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    if (m_chatViewWidget) {
+        m_chatViewWidget->ScrollToBottom();
+    }
+    
+    // Mark as read since we're viewing this chat
+    if (m_telegramClient) {
+        m_telegramClient->MarkChatAsRead(message.chatId);
+    }
+    MarkMessageAsRead(message.chatId, message.id);
 }
 
 void MainFrame::DisplayMessage(const MessageInfo& msg)
 {
-    wxString timestamp = FormatTimestamp(msg.date);
-    wxString sender = msg.senderName.IsEmpty() ? 
-        wxString::Format("User %lld", msg.senderId) : msg.senderName;
+    if (!m_chatViewWidget) return;
     
-    // Handle forwarded messages
-    if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
-        m_messageFormatter->AppendForwardMessage(timestamp, sender, msg.forwardedFrom, msg.text);
-        return;
-    }
-    
-    // Handle edited messages
-    if (msg.isEdited) {
-        m_messageFormatter->AppendEditedMessage(timestamp, sender, msg.text);
-        return;
-    }
-    
-    // Handle media messages
-    if (msg.hasPhoto || msg.hasVideo || msg.hasDocument || msg.hasVoice || 
-        msg.hasVideoNote || msg.hasSticker || msg.hasAnimation) {
-        
-        MediaInfo mediaInfo;
-        mediaInfo.id = wxString::Format("%d", msg.mediaFileId);
-        mediaInfo.caption = msg.mediaCaption;
-        mediaInfo.fileName = msg.mediaFileName;
-        mediaInfo.localPath = msg.mediaLocalPath;
-        
-        if (msg.hasPhoto) {
-            mediaInfo.type = MediaType::Photo;
-        } else if (msg.hasVideo) {
-            mediaInfo.type = MediaType::Video;
-        } else if (msg.hasDocument) {
-            mediaInfo.type = MediaType::File;
-            mediaInfo.fileSize = wxString::Format("%lld bytes", msg.mediaFileSize);
-        } else if (msg.hasVoice) {
-            mediaInfo.type = MediaType::Voice;
-        } else if (msg.hasVideoNote) {
-            mediaInfo.type = MediaType::VideoNote;
-        } else if (msg.hasSticker) {
-            mediaInfo.type = MediaType::Sticker;
-            mediaInfo.emoji = msg.mediaCaption;
-        } else if (msg.hasAnimation) {
-            mediaInfo.type = MediaType::GIF;
-        }
-        
-        m_messageFormatter->AppendMediaMessage(timestamp, sender, mediaInfo, msg.mediaCaption);
-        AddMediaSpan(m_messageFormatter->GetLastMediaSpanStart(), m_messageFormatter->GetLastMediaSpanEnd(), mediaInfo);
-        
-        // If there's also text, display it
-        if (!msg.text.IsEmpty() && !msg.text.StartsWith("[")) {
-            m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
-        }
-        return;
-    }
-    
-    // Regular text message
-    m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
+    // Delegate to ChatViewWidget which handles all message formatting
+    m_chatViewWidget->DisplayMessage(msg);
 }
 
 void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText)
@@ -1437,29 +1421,29 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
     
     // For now, just add a service message noting the edit
     // A more sophisticated implementation would find and update the original message
-    m_messageFormatter->AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"),
-                        wxString::Format("Message %lld was edited: %s", messageId, newText));
-    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"),
+                            wxString::Format("Message %lld was edited: %s", messageId, newText));
+        m_chatViewWidget->ScrollToBottom();
+    }
 }
 
 void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
 {
-    // Check if this is a pending download for media preview
-    auto it = m_pendingDownloads.find(fileId);
-    if (it != m_pendingDownloads.end()) {
-        MediaInfo& info = it->second;
-        info.localPath = localPath;
+    // Check if this is a pending download for media preview in ChatViewWidget
+    if (m_chatViewWidget) {
+        // Update media popup if it's showing this file
+        m_chatViewWidget->UpdateMediaPopup(fileId, localPath);
         
-        // Update media popup if showing this file
-        if (m_mediaPopup && m_mediaPopup->IsShown()) {
-            const MediaInfo& popupInfo = m_mediaPopup->GetMediaInfo();
-            if (popupInfo.id == info.id) {
-                m_mediaPopup->SetImage(localPath);
-            }
+        if (m_chatViewWidget->HasPendingDownload(fileId)) {
+            MediaInfo info = m_chatViewWidget->GetPendingDownload(fileId);
+            info.localPath = localPath;
+            m_chatViewWidget->RemovePendingDownload(fileId);
         }
-        
-        m_pendingDownloads.erase(it);
     }
+    
+    // Don't reload all messages just for a download - it's disruptive
+    // The media popup will update automatically
     
     // Update transfer manager
     // Find transfer by checking pending transfers (simplified - in real impl would track by file ID)
@@ -1474,7 +1458,7 @@ void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t t
             m_progressGauge->SetValue(percent);
         }
         if (m_progressLabel) {
-            m_progressLabel->SetLabel(wxString::Format("⬇ %d%%", percent));
+            m_progressLabel->SetLabel(wxString::Format(wxT("DL: %d%%"), percent));
         }
     }
 }
@@ -1482,4 +1466,161 @@ void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t t
 void MainFrame::ShowStatusError(const wxString& error)
 {
     SetStatusText("Error: " + error, 1);
+}
+
+void MainFrame::UpdateMemberList(int64_t chatId)
+{
+    if (!m_memberList || !m_memberCountLabel) return;
+    
+    // Clear existing members
+    m_memberList->DeleteAllItems();
+    
+    // Handle test chat
+    if (chatId == -1) {
+        // Populate with dummy members for test chat
+        long idx = 0;
+        m_memberList->InsertItem(idx++, "Admin (owner)");
+        m_memberList->InsertItem(idx++, "Alice");
+        m_memberList->InsertItem(idx++, "Bob");
+        m_memberList->InsertItem(idx++, "Charlie");
+        m_memberList->InsertItem(idx++, "David");
+        m_memberList->InsertItem(idx++, "Eve");
+        m_memberList->InsertItem(idx++, "Frank");
+        m_memberList->InsertItem(idx++, "Grace");
+        m_memberList->InsertItem(idx++, "Henry");
+        m_memberCountLabel->SetLabel(wxString::Format("%ld members", idx));
+        return;
+    }
+    
+    if (!m_telegramClient) return;
+    
+    // Get chat info
+    bool found = false;
+    ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+    if (!found) return;
+    
+    // For private chats (1-1), show just the two participants
+    if (chat.isPrivate) {
+        long idx = 0;
+        
+        // Add current user (you)
+        if (!m_currentUser.IsEmpty()) {
+            m_memberList->InsertItem(idx++, m_currentUser + " (you)");
+        } else {
+            m_memberList->InsertItem(idx++, "You");
+        }
+        
+        // Add the other user (the chat title is usually their name)
+        m_memberList->InsertItem(idx++, chat.title);
+        
+        m_memberCountLabel->SetLabel("2 members");
+        return;
+    }
+    
+    // For bot chats, show just you and the bot
+    if (chat.isBot) {
+        long idx = 0;
+        
+        if (!m_currentUser.IsEmpty()) {
+            m_memberList->InsertItem(idx++, m_currentUser + " (you)");
+        } else {
+            m_memberList->InsertItem(idx++, "You");
+        }
+        
+        m_memberList->InsertItem(idx++, chat.title + " [bot]");
+        
+        m_memberCountLabel->SetLabel("2 members");
+        return;
+    }
+    
+    // For groups and channels, we would need to fetch member list from TDLib
+    // For now, show placeholder with current user
+    // TODO: Implement TDLib getChatMembers / getSupergroupMembers
+    long idx = 0;
+    
+    if (!m_currentUser.IsEmpty()) {
+        m_memberList->InsertItem(idx++, m_currentUser + " (you)");
+    }
+    
+    // Show placeholder message
+    m_memberCountLabel->SetLabel("Loading members...");
+    
+    // TODO: Add actual member loading via TDLib
+    // For groups: use getBasicGroupFullInfo
+    // For supergroups/channels: use getSupergroupMembers
+}
+
+void MainFrame::OnRefreshTimer(wxTimerEvent& event)
+{
+    // Periodic refresh - reload chats to get updated unread counts
+    if (m_telegramClient && m_telegramClient->IsLoggedIn()) {
+        m_telegramClient->LoadChats();
+    }
+}
+
+void MainFrame::MarkMessageAsRead(int64_t chatId, int64_t messageId)
+{
+    m_lastReadMessages[chatId] = messageId;
+    m_chatsWithUnread.erase(chatId);
+    
+    // Update chat list to remove unread indicator
+    if (m_chatListWidget) {
+        wxTreeItemId item = m_chatListWidget->GetTreeItemFromChatId(chatId);
+        if (item.IsOk()) {
+            wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
+            if (chatTree) {
+                chatTree->SetItemBold(item, false);
+            }
+        }
+    }
+}
+
+void MainFrame::UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount)
+{
+    if (!m_chatListWidget) return;
+    
+    wxTreeItemId item = m_chatListWidget->GetTreeItemFromChatId(chatId);
+    if (!item.IsOk()) return;
+    
+    wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
+    if (!chatTree) return;
+    
+    // Get chat info for title
+    wxString title;
+    if (m_telegramClient) {
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+        title = found ? chat.title : chatTree->GetItemText(item);
+    } else {
+        title = chatTree->GetItemText(item);
+    }
+    
+    // Remove old unread count from title if present
+    int parenPos = title.Find(" (");
+    if (parenPos != wxNOT_FOUND) {
+        title = title.Left(parenPos);
+    }
+    
+    // Add new unread count
+    if (unreadCount > 0) {
+        title += wxString::Format(" (%d)", unreadCount);
+        chatTree->SetItemBold(item, true);
+        chatTree->SetItemTextColour(item, wxColour(0xFF, 0x80, 0x00)); // Orange for unread
+        m_chatsWithUnread.insert(chatId);
+    } else {
+        chatTree->SetItemBold(item, false);
+        chatTree->SetItemTextColour(item, m_treeFgColor);
+        m_chatsWithUnread.erase(chatId);
+    }
+    
+    chatTree->SetItemText(item, title);
+}
+
+int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const
+{
+    auto it = m_lastReadMessages.find(chatId);
+    if (it != m_lastReadMessages.end()) {
+        return it->second;
+    }
+    return 0;
 }

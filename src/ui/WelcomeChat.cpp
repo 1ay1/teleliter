@@ -83,7 +83,7 @@ void WelcomeChat::AppendWelcome()
     AppendAsciiArt();
     
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     // Welcome messages
     m_chatDisplay->BeginTextColour(m_timestampColor);
@@ -171,7 +171,7 @@ void WelcomeChat::AppendWelcome()
 void WelcomeChat::AppendInfo(const wxString& message)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
@@ -187,7 +187,7 @@ void WelcomeChat::AppendInfo(const wxString& message)
 void WelcomeChat::AppendError(const wxString& message)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
@@ -203,7 +203,7 @@ void WelcomeChat::AppendError(const wxString& message)
 void WelcomeChat::AppendSuccess(const wxString& message)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
@@ -219,7 +219,7 @@ void WelcomeChat::AppendSuccess(const wxString& message)
 void WelcomeChat::AppendPrompt(const wxString& prompt)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
@@ -235,7 +235,7 @@ void WelcomeChat::AppendPrompt(const wxString& prompt)
 void WelcomeChat::AppendUserInput(const wxString& input)
 {
     wxDateTime now = wxDateTime::Now();
-    wxString timestamp = now.Format("%H:%M:%S");
+    wxString timestamp = now.Format("%H:%M");
     
     m_chatDisplay->BeginTextColour(m_timestampColor);
     m_chatDisplay->WriteText("[" + timestamp + "] ");
@@ -306,47 +306,59 @@ void WelcomeChat::CancelLogin()
     AppendInfo("Login cancelled.");
 }
 
-void WelcomeChat::ProcessInput(const wxString& input)
+bool WelcomeChat::IsWelcomeChatCommand(const wxString& command) const
+{
+    wxString cmd = command.Lower();
+    return cmd == "/login" || cmd == "/cancel" || cmd == "/quit" || cmd == "/exit";
+}
+
+bool WelcomeChat::ProcessInput(const wxString& input)
 {
     wxString trimmed = input;
     trimmed.Trim(true).Trim(false);
     
     if (trimmed.IsEmpty()) {
-        return;
+        return true; // Handled (nothing to do)
     }
     
     // Handle commands
     if (trimmed.StartsWith("/")) {
-        wxString command = trimmed.Lower();
+        wxString command = trimmed.BeforeFirst(' ').Lower();
         
         if (command == "/login") {
             AppendUserInput(trimmed);
             StartLogin();
-            return;
+            return true;
         } else if (command == "/cancel") {
             AppendUserInput(trimmed);
             CancelLogin();
-            return;
-        } else if (command == "/help") {
+            return true;
+        } else if (command == "/help" && m_state == LoginState::NotStarted) {
+            // In NotStarted state, show WelcomeChat help but also let regular help through
             AppendUserInput(trimmed);
-            AppendInfo("Available commands:");
+            AppendInfo("WelcomeChat commands:");
             AppendInfo("  /login  - Start Telegram login");
             AppendInfo("  /cancel - Cancel current login");
             AppendInfo("  /quit   - Exit Teleliter");
-            AppendInfo("  /help   - Show this help");
-            return;
+            AppendInfo("");
+            AppendInfo("Other commands like /me, /clear, /whois work after selecting a chat.");
+            return true;
         } else if (command == "/quit" || command == "/exit") {
             AppendUserInput(trimmed);
             AppendInfo("Goodbye!");
             if (m_mainFrame) {
                 m_mainFrame->Close();
             }
-            return;
+            return true;
+        } else if (m_state == LoginState::NotStarted || m_state == LoginState::LoggedIn) {
+            // Not in a login flow - pass command to regular handler
+            return false;
         } else {
+            // In login flow - unknown commands are errors
             AppendUserInput(trimmed);
             AppendError("Unknown command: " + trimmed);
             AppendInfo("Type /help for available commands");
-            return;
+            return true;
         }
     }
     
@@ -370,14 +382,12 @@ void WelcomeChat::ProcessInput(const wxString& input)
             break;
             
         case LoginState::NotStarted:
-            AppendUserInput(trimmed);
-            AppendInfo("Type /login to connect to Telegram");
-            break;
+            // Not in login flow - pass to regular handler
+            return false;
             
         case LoginState::LoggedIn:
-            AppendUserInput(trimmed);
-            AppendInfo("You are logged in. Switch to a chat to send messages.");
-            break;
+            // Logged in - pass to regular handler
+            return false;
             
         case LoginState::LoggingIn:
             AppendUserInput(trimmed);
@@ -387,8 +397,10 @@ void WelcomeChat::ProcessInput(const wxString& input)
         case LoginState::Error:
             AppendUserInput(trimmed);
             AppendInfo("Type /login to try again");
-            break;
+            return true;
     }
+    
+    return true; // Default: handled
 }
 
 bool WelcomeChat::ValidatePhoneNumber(const wxString& phone)
@@ -581,10 +593,16 @@ void WelcomeChat::On2FARequested()
 
 void WelcomeChat::OnLoginSuccess(const wxString& userName, const wxString& phoneNumber)
 {
+    bool wasAutoLogin = (m_state == LoginState::NotStarted);
     m_state = LoginState::LoggedIn;
     
-    AppendSuccess("Successfully logged in!");
-    AppendInfo("Welcome, " + userName + " (" + phoneNumber + ")");
+    if (wasAutoLogin) {
+        AppendSuccess("Session restored!");
+        AppendInfo("Welcome back, " + userName + " (" + phoneNumber + ")");
+    } else {
+        AppendSuccess("Successfully logged in!");
+        AppendInfo("Welcome, " + userName + " (" + phoneNumber + ")");
+    }
     AppendInfo("");
     AppendInfo("Your chats will appear in the left panel.");
     AppendInfo("Select a chat to start messaging.");

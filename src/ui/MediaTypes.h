@@ -43,4 +43,28 @@ struct MediaSpan {
     }
 };
 
+// Tracks edited message spans for showing edit history
+struct EditSpan {
+    long startPos;            // Start position of "[edited]" text
+    long endPos;              // End position of "[edited]" text
+    int64_t messageId;        // Message ID
+    wxString originalText;    // Original text before edit
+    int64_t editDate;         // When it was edited
+    
+    bool Contains(long pos) const {
+        return pos >= startPos && pos <= endPos;
+    }
+};
+
+// Tracks clickable URL links in chat display
+struct LinkSpan {
+    long startPos;            // Start position of link text
+    long endPos;              // End position of link text
+    wxString url;             // The URL to open
+    
+    bool Contains(long pos) const {
+        return pos >= startPos && pos <= endPos;
+    }
+};
+
 #endif // MEDIATYPES_H

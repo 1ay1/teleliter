@@ -7,8 +7,9 @@
 #include <ctime>
 
 // Debug logging - disabled for release
-// #define TDLOG(msg) std::cerr << "[TDLib] " << msg << std::endl
 #define TDLOG(msg) do {} while(0)
+// Enable debug logging for troubleshooting:
+// #define TDLOG(msg) std::cerr << "[TDLib] " << msg << std::endl
 
 wxDEFINE_EVENT(wxEVT_TDLIB_UPDATE, wxThreadEvent);
 
@@ -157,12 +158,15 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
         } else if constexpr (std::is_same_v<T, td_api::updateNewChat>) {
             OnChatUpdate(u.chat_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatTitle>) {
-            if (auto it = m_chats.find(u.chat_id_); it != m_chats.end()) {
-                it->second.title = wxString::FromUTF8(u.title_);
-                PostToMainThread([this]() {
-                    if (m_mainFrame) m_mainFrame->RefreshChatList();
-                });
+            {
+                std::lock_guard<std::mutex> lock(m_dataMutex);
+                if (auto it = m_chats.find(u.chat_id_); it != m_chats.end()) {
+                    it->second.title = wxString::FromUTF8(u.title_);
+                }
             }
+            PostToMainThread([this]() {
+                if (m_mainFrame) m_mainFrame->RefreshChatList();
+            });
         } else if constexpr (std::is_same_v<T, td_api::updateChatLastMessage>) {
             OnChatLastMessage(u.chat_id_, u.last_message_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatReadInbox>) {
@@ -174,6 +178,7 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
         } else if constexpr (std::is_same_v<T, td_api::updateFile>) {
             OnFileUpdate(u.file_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatNotificationSettings>) {
+            std::lock_guard<std::mutex> lock(m_dataMutex);
             if (auto it = m_chats.find(u.chat_id_); it != m_chats.end()) {
                 it->second.isMuted = u.notification_settings_->mute_for_ > 0;
             }
@@ -315,7 +320,10 @@ void TelegramClient::HandleAuthReady()
             m_currentUser.isSelf = true;
             
             // Store in users map too
-            m_users[user->id_] = m_currentUser;
+            {
+                std::lock_guard<std::mutex> lock(m_dataMutex);
+                m_users[user->id_] = m_currentUser;
+            }
             
             PostToMainThread([this]() {
                 if (m_welcomeChat) {
@@ -441,44 +449,230 @@ void TelegramClient::LoadChats(int limit)
     });
 }
 
-ChatInfo* TelegramClient::GetChat(int64_t chatId)
+std::map<int64_t, ChatInfo> TelegramClient::GetChats() const
 {
-    auto it = m_chats.find(chatId);
-    if (it != m_chats.end()) {
-        return &it->second;
-    }
-    return nullptr;
+    std::lock_guard<std::mutex> lock(m_dataMutex);
+    return m_chats;
 }
 
-void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int limit)
+ChatInfo TelegramClient::GetChat(int64_t chatId, bool* found) const
 {
+    std::lock_guard<std::mutex> lock(m_dataMutex);
+    auto it = m_chats.find(chatId);
+    if (it != m_chats.end()) {
+        if (found) *found = true;
+        return it->second;
+    }
+    if (found) *found = false;
+    return ChatInfo();
+}
+
+void TelegramClient::OpenChat(int64_t chatId)
+{
+    TDLOG("OpenChat called for chatId=" << chatId);
+    auto request = td_api::make_object<td_api::openChat>();
+    request->chat_id_ = chatId;
+    Send(std::move(request), nullptr);
+}
+
+void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
+{
+    TDLOG("OpenChatAndLoadMessages called for chatId=" << chatId << " limit=" << limit);
+    
+    // Step 1: Open the chat - this tells TDLib we're viewing this chat
+    // and triggers background sync of messages from server
+    auto openRequest = td_api::make_object<td_api::openChat>();
+    openRequest->chat_id_ = chatId;
+    
+    Send(std::move(openRequest), [this, chatId, limit](td_api::object_ptr<td_api::Object> openResult) {
+        TDLOG("openChat completed for chatId=" << chatId);
+        
+        // Step 2: Get chat info to find the last message ID
+        // This helps us know where to start fetching history
+        auto getChatRequest = td_api::make_object<td_api::getChat>();
+        getChatRequest->chat_id_ = chatId;
+        
+        Send(std::move(getChatRequest), [this, chatId, limit](td_api::object_ptr<td_api::Object> chatResult) {
+            if (chatResult->get_id() == td_api::chat::ID) {
+                auto chat = td_api::move_object_as<td_api::chat>(chatResult);
+                if (chat->last_message_) {
+                    TDLOG("Chat has last_message_id=" << chat->last_message_->id_);
+                }
+            }
+            
+            // Step 3: Fetch messages starting from the last message
+            // Using offset=0 and from_message_id=lastMessageId+1 to include the last message
+            auto historyRequest = td_api::make_object<td_api::getChatHistory>();
+            historyRequest->chat_id_ = chatId;
+            // Use 0 to get from the newest, TDLib will figure out the rest
+            historyRequest->from_message_id_ = 0;
+            historyRequest->offset_ = 0;
+            historyRequest->limit_ = limit > 0 ? limit : 100;
+            historyRequest->only_local_ = false;
+            
+            Send(std::move(historyRequest), [this, chatId, limit](td_api::object_ptr<td_api::Object> result) {
+                TDLOG("getChatHistory response for chatId=" << chatId);
+                
+                if (result->get_id() == td_api::messages::ID) {
+                    auto messages = td_api::move_object_as<td_api::messages>(result);
+                    size_t count = messages->messages_.size();
+                    TDLOG("Got " << messages->total_count_ << " total, " << count << " in batch");
+                    
+                    std::vector<MessageInfo> msgList;
+                    for (auto& msg : messages->messages_) {
+                        if (msg) {
+                            msgList.push_back(ConvertMessage(msg.get()));
+                        }
+                    }
+                    
+                    // Store and display what we have
+                    {
+                        std::lock_guard<std::mutex> lock(m_dataMutex);
+                        m_messages[chatId] = msgList;
+                    }
+                    
+                    PostToMainThread([this, chatId, msgList]() {
+                        if (m_mainFrame) {
+                            m_mainFrame->OnMessagesLoaded(chatId, msgList);
+                        }
+                    });
+                    
+                    // If we got fewer messages than requested, TDLib may still be syncing
+                    // Try to load more after a brief moment
+                    if (count < (size_t)limit && count > 0) {
+                        // Get the oldest message ID from what we received
+                        int64_t oldestMsgId = 0;
+                        if (!messages->messages_.empty() && messages->messages_.back()) {
+                            oldestMsgId = messages->messages_.back()->id_;
+                        }
+                        
+                        TDLOG("Got partial history, will try to load more from message " << oldestMsgId);
+                        
+                        // Schedule another fetch for older messages
+                        LoadMoreMessages(chatId, oldestMsgId, limit);
+                    }
+                } else if (result->get_id() == td_api::error::ID) {
+                    auto error = td_api::move_object_as<td_api::error>(result);
+                    TDLOG("getChatHistory ERROR: " << error->code_ << " - " << error->message_);
+                }
+            });
+        });
+    });
+}
+
+void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit)
+{
+    TDLOG("LoadMoreMessages for chatId=" << chatId << " from=" << fromMessageId);
+    
     auto request = td_api::make_object<td_api::getChatHistory>();
     request->chat_id_ = chatId;
     request->from_message_id_ = fromMessageId;
     request->offset_ = 0;
-    request->limit_ = limit;
+    request->limit_ = limit > 0 ? limit : 100;
     request->only_local_ = false;
     
     Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
         if (result->get_id() == td_api::messages::ID) {
             auto messages = td_api::move_object_as<td_api::messages>(result);
             
+            if (messages->messages_.empty()) {
+                TDLOG("No more messages to load for chatId=" << chatId);
+                return;
+            }
+            
+            TDLOG("LoadMoreMessages got " << messages->messages_.size() << " additional messages");
+            
+            std::vector<MessageInfo> newMessages;
+            for (auto& msg : messages->messages_) {
+                if (msg) {
+                    newMessages.push_back(ConvertMessage(msg.get()));
+                }
+            }
+            
+            // Append to existing messages and get a copy for the UI
+            std::vector<MessageInfo> allMessages;
+            {
+                std::lock_guard<std::mutex> lock(m_dataMutex);
+                auto& existing = m_messages[chatId];
+                existing.insert(existing.end(), newMessages.begin(), newMessages.end());
+                allMessages = existing;  // Copy for thread-safe access
+            }
+            
+            TDLOG("Total messages after LoadMore: " << allMessages.size());
+            
+            // Notify UI to refresh with all messages
+            PostToMainThread([this, chatId, allMessages]() {
+                if (m_mainFrame) {
+                    m_mainFrame->OnMessagesLoaded(chatId, allMessages);
+                }
+            });
+        }
+    });
+}
+
+void TelegramClient::LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount)
+{
+    // This function is kept for compatibility but redirects to the main loader
+    OpenChatAndLoadMessages(chatId, limit);
+}
+
+void TelegramClient::CloseChat(int64_t chatId)
+{
+    TDLOG("CloseChat called for chatId=" << chatId);
+    auto request = td_api::make_object<td_api::closeChat>();
+    request->chat_id_ = chatId;
+    Send(std::move(request), nullptr);
+}
+
+void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int limit)
+{
+    TDLOG("LoadMessages called for chatId=" << chatId << " fromMessageId=" << fromMessageId << " limit=" << limit);
+    
+    // Request chat history from TDLib
+    // from_message_id=0 means start from the newest message
+    // only_local=false ensures we fetch from server if needed
+    auto request = td_api::make_object<td_api::getChatHistory>();
+    request->chat_id_ = chatId;
+    request->from_message_id_ = fromMessageId;
+    request->offset_ = 0;
+    request->limit_ = limit > 0 ? limit : 100;
+    request->only_local_ = false;
+    
+    Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+        TDLOG("LoadMessages response received for chatId=" << chatId << " result_id=" << result->get_id());
+        
+        if (result->get_id() == td_api::messages::ID) {
+            auto messages = td_api::move_object_as<td_api::messages>(result);
+            
+            TDLOG("Got " << messages->total_count_ << " total messages, " << messages->messages_.size() << " in this batch");
+            
             std::vector<MessageInfo> msgList;
             for (auto& msg : messages->messages_) {
                 if (msg) {
                     msgList.push_back(ConvertMessage(msg.get()));
+                    TDLOG("  Message " << msg->id_ << ": " << msgList.back().text.ToStdString().substr(0, 50));
                 }
             }
             
-            // Store messages (prepend for history loading)
-            auto& chatMessages = m_messages[chatId];
-            chatMessages.insert(chatMessages.begin(), msgList.begin(), msgList.end());
+            TDLOG("Converted " << msgList.size() << " messages for chatId=" << chatId);
+            
+            // Store messages (replace to avoid duplicates)
+            {
+                std::lock_guard<std::mutex> lock(m_dataMutex);
+                m_messages[chatId] = msgList;
+            }
             
             PostToMainThread([this, chatId, msgList]() {
+                TDLOG("PostToMainThread: OnMessagesLoaded for chatId=" << chatId << " with " << msgList.size() << " messages");
                 if (m_mainFrame) {
                     m_mainFrame->OnMessagesLoaded(chatId, msgList);
+                } else {
+                    TDLOG("ERROR: m_mainFrame is null!");
                 }
             });
+        } else if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            TDLOG("LoadMessages ERROR: " << error->code_ << " - " << error->message_);
         }
     });
 }
@@ -575,45 +769,44 @@ void TelegramClient::CancelDownload(int32_t fileId)
     Send(std::move(request), nullptr);
 }
 
-UserInfo* TelegramClient::GetUser(int64_t userId)
+UserInfo TelegramClient::GetUser(int64_t userId, bool* found) const
 {
+    std::lock_guard<std::mutex> lock(m_dataMutex);
     auto it = m_users.find(userId);
     if (it != m_users.end()) {
-        return &it->second;
+        if (found) *found = true;
+        return it->second;
     }
-    
-    // Request user info if not cached
-    Send(td_api::make_object<td_api::getUser>(userId),
-         [this](td_api::object_ptr<td_api::Object> result) {
-        if (result->get_id() == td_api::user::ID) {
-            auto user = td_api::move_object_as<td_api::user>(result);
-            OnUserUpdate(user);
-        }
-    });
-    
-    return nullptr;
+    if (found) *found = false;
+    return UserInfo();
 }
 
-wxString TelegramClient::GetUserDisplayName(int64_t userId)
+wxString TelegramClient::GetUserDisplayName(int64_t userId) const
 {
-    if (auto user = GetUser(userId)) {
-        return user->GetDisplayName();
+    bool found = false;
+    UserInfo user = GetUser(userId, &found);
+    if (found) {
+        return user.GetDisplayName();
     }
     return wxString::Format("User %lld", userId);
 }
 
 void TelegramClient::MarkChatAsRead(int64_t chatId)
 {
-    auto chat = GetChat(chatId);
-    if (!chat || chat->unreadCount == 0) {
+    bool found = false;
+    ChatInfo chat = GetChat(chatId, &found);
+    if (!found || chat.unreadCount == 0) {
         return;
     }
     
     // Get the last message ID
-    auto& messages = m_messages[chatId];
     int64_t lastMessageId = 0;
-    if (!messages.empty()) {
-        lastMessageId = messages.back().id;
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto& messages = m_messages[chatId];
+        if (!messages.empty()) {
+            lastMessageId = messages.back().id;
+        }
     }
     
     if (lastMessageId > 0) {
@@ -633,7 +826,10 @@ void TelegramClient::OnNewMessage(td_api::object_ptr<td_api::message>& message)
     MessageInfo msgInfo = ConvertMessage(message.get());
     
     // Add to messages cache
-    m_messages[msgInfo.chatId].push_back(msgInfo);
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        m_messages[msgInfo.chatId].push_back(msgInfo);
+    }
     
     PostToMainThread([this, msgInfo]() {
         if (m_mainFrame) {
@@ -648,12 +844,15 @@ void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
     wxString newText = ExtractMessageText(content.get());
     
     // Update in cache
-    auto& messages = m_messages[chatId];
-    for (auto& msg : messages) {
-        if (msg.id == messageId) {
-            msg.text = newText;
-            msg.isEdited = true;
-            break;
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto& messages = m_messages[chatId];
+        for (auto& msg : messages) {
+            if (msg.id == messageId) {
+                msg.text = newText;
+                msg.isEdited = true;
+                break;
+            }
         }
     }
     
@@ -717,7 +916,10 @@ void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
         }
     }
     
-    m_chats[info.id] = info;
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        m_chats[info.id] = info;
+    }
     
     PostToMainThread([this]() {
         if (m_mainFrame) {
@@ -758,13 +960,16 @@ void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user>& user)
         });
     }
     
-    m_users[info.id] = info;
-    
-    // Update chat info if this user has a private chat
-    for (auto& [chatId, chat] : m_chats) {
-        if (chat.isPrivate && chat.userId == info.id) {
-            chat.isBot = info.isBot;
-            chat.title = info.GetDisplayName();
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        m_users[info.id] = info;
+        
+        // Update chat info if this user has a private chat
+        for (auto& [chatId, chat] : m_chats) {
+            if (chat.isPrivate && chat.userId == info.id) {
+                chat.isBot = info.isBot;
+                chat.title = info.GetDisplayName();
+            }
         }
     }
 }
@@ -793,6 +998,7 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
 
 void TelegramClient::OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message)
 {
+    std::lock_guard<std::mutex> lock(m_dataMutex);
     auto it = m_chats.find(chatId);
     if (it == m_chats.end()) return;
     
@@ -807,20 +1013,26 @@ void TelegramClient::OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api
 
 void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessageId, int32_t unreadCount)
 {
-    auto it = m_chats.find(chatId);
-    if (it != m_chats.end()) {
-        it->second.unreadCount = unreadCount;
-        
-        PostToMainThread([this]() {
-            if (m_mainFrame) {
-                m_mainFrame->RefreshChatList();
-            }
-        });
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto it = m_chats.find(chatId);
+        if (it != m_chats.end()) {
+            it->second.unreadCount = unreadCount;
+        } else {
+            return;  // Chat not found
+        }
     }
+    
+    PostToMainThread([this]() {
+        if (m_mainFrame) {
+            m_mainFrame->RefreshChatList();
+        }
+    });
 }
 
 void TelegramClient::OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position)
 {
+    std::lock_guard<std::mutex> lock(m_dataMutex);
     auto it = m_chats.find(chatId);
     if (it == m_chats.end()) return;
     
@@ -838,6 +1050,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
     info.id = msg->id_;
     info.chatId = msg->chat_id_;
     info.date = msg->date_;
+    info.editDate = msg->edit_date_;
     info.isOutgoing = msg->is_outgoing_;
     info.isEdited = msg->edit_date_ > 0;
     
@@ -857,13 +1070,17 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, td_api::messageSenderUser>) {
                 info.senderId = s.user_id_;
-                if (auto user = GetUser(s.user_id_)) {
-                    info.senderName = user->GetDisplayName();
+                bool found = false;
+                UserInfo user = GetUser(s.user_id_, &found);
+                if (found) {
+                    info.senderName = user.GetDisplayName();
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageSenderChat>) {
                 info.senderId = s.chat_id_;
-                if (auto chat = GetChat(s.chat_id_)) {
-                    info.senderName = chat->title;
+                bool found = false;
+                ChatInfo chat = GetChat(s.chat_id_, &found);
+                if (found) {
+                    info.senderName = chat.title;
                 }
             }
         });
@@ -875,18 +1092,24 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
         td_api::downcast_call(*msg->forward_info_->origin_, [this, &info](auto& o) {
             using T = std::decay_t<decltype(o)>;
             if constexpr (std::is_same_v<T, td_api::messageOriginUser>) {
-                if (auto user = GetUser(o.sender_user_id_)) {
-                    info.forwardedFrom = user->GetDisplayName();
+                bool found = false;
+                UserInfo user = GetUser(o.sender_user_id_, &found);
+                if (found) {
+                    info.forwardedFrom = user.GetDisplayName();
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageOriginHiddenUser>) {
                 info.forwardedFrom = wxString::FromUTF8(o.sender_name_);
             } else if constexpr (std::is_same_v<T, td_api::messageOriginChat>) {
-                if (auto chat = GetChat(o.sender_chat_id_)) {
-                    info.forwardedFrom = chat->title;
+                bool found = false;
+                ChatInfo chat = GetChat(o.sender_chat_id_, &found);
+                if (found) {
+                    info.forwardedFrom = chat.title;
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageOriginChannel>) {
-                if (auto chat = GetChat(o.chat_id_)) {
-                    info.forwardedFrom = chat->title;
+                bool found = false;
+                ChatInfo chat = GetChat(o.chat_id_, &found);
+                if (found) {
+                    info.forwardedFrom = chat.title;
                 }
             }
         });
@@ -896,7 +1119,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
     if (msg->content_) {
         info.text = ExtractMessageText(msg->content_.get());
         
-        td_api::downcast_call(*msg->content_, [&info](auto& c) {
+        td_api::downcast_call(*msg->content_, [this, &info](auto& c) {
             using T = std::decay_t<decltype(c)>;
             
             if constexpr (std::is_same_v<T, td_api::messagePhoto>) {
@@ -904,14 +1127,24 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 if (c.caption_) {
                     info.mediaCaption = wxString::FromUTF8(c.caption_->text_);
                 }
-                // Get largest photo size
+                // Get smallest photo size for thumbnail (first), largest for full (last)
                 if (c.photo_ && !c.photo_->sizes_.empty()) {
-                    auto& size = c.photo_->sizes_.back();
-                    if (size->photo_) {
-                        info.mediaFileId = size->photo_->id_;
-                        info.mediaFileSize = size->photo_->size_;
-                        if (size->photo_->local_->is_downloading_completed_) {
-                            info.mediaLocalPath = wxString::FromUTF8(size->photo_->local_->path_);
+                    // Use smallest size for quick thumbnail preview
+                    auto& thumbSize = c.photo_->sizes_.front();
+                    auto& fullSize = c.photo_->sizes_.back();
+                    
+                    if (fullSize->photo_) {
+                        info.mediaFileId = fullSize->photo_->id_;
+                        info.mediaFileSize = fullSize->photo_->size_;
+                        
+                        if (fullSize->photo_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
+                        } else if (thumbSize->photo_ && thumbSize->photo_->local_->is_downloading_completed_) {
+                            // Use thumbnail if full not downloaded
+                            info.mediaLocalPath = wxString::FromUTF8(thumbSize->photo_->local_->path_);
+                        } else if (thumbSize->photo_ && !thumbSize->photo_->local_->is_downloading_active_) {
+                            // Auto-download thumbnail
+                            this->DownloadFile(thumbSize->photo_->id_, 5);
                         }
                     }
                 }
@@ -920,10 +1153,27 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 if (c.caption_) {
                     info.mediaCaption = wxString::FromUTF8(c.caption_->text_);
                 }
-                if (c.video_ && c.video_->video_) {
-                    info.mediaFileId = c.video_->video_->id_;
-                    info.mediaFileName = wxString::FromUTF8(c.video_->file_name_);
-                    info.mediaFileSize = c.video_->video_->size_;
+                if (c.video_) {
+                    if (c.video_->video_) {
+                        info.mediaFileId = c.video_->video_->id_;
+                        info.mediaFileName = wxString::FromUTF8(c.video_->file_name_);
+                        info.mediaFileSize = c.video_->video_->size_;
+                        
+                        // Check if actual video file is downloaded
+                        if (c.video_->video_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.video_->video_->local_->path_);
+                        }
+                    }
+                    
+                    // If video not downloaded, use thumbnail for preview
+                    if (info.mediaLocalPath.IsEmpty() && c.video_->thumbnail_ && c.video_->thumbnail_->file_) {
+                        if (c.video_->thumbnail_->file_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.video_->thumbnail_->file_->local_->path_);
+                        } else if (!c.video_->thumbnail_->file_->local_->is_downloading_active_) {
+                            // Auto-download video thumbnail
+                            this->DownloadFile(c.video_->thumbnail_->file_->id_, 5);
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageDocument>) {
                 info.hasDocument = true;
@@ -946,9 +1196,26 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVideoNote>) {
                 info.hasVideoNote = true;
-                if (c.video_note_ && c.video_note_->video_) {
-                    info.mediaFileId = c.video_note_->video_->id_;
-                    info.mediaFileSize = c.video_note_->video_->size_;
+                if (c.video_note_) {
+                    if (c.video_note_->video_) {
+                        info.mediaFileId = c.video_note_->video_->id_;
+                        info.mediaFileSize = c.video_note_->video_->size_;
+                        
+                        // Check if video note is downloaded
+                        if (c.video_note_->video_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.video_note_->video_->local_->path_);
+                        }
+                    }
+                    
+                    // If video note not downloaded, use thumbnail for preview
+                    if (info.mediaLocalPath.IsEmpty() && c.video_note_->thumbnail_ && c.video_note_->thumbnail_->file_) {
+                        if (c.video_note_->thumbnail_->file_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.video_note_->thumbnail_->file_->local_->path_);
+                        } else if (!c.video_note_->thumbnail_->file_->local_->is_downloading_active_) {
+                            // Auto-download video note thumbnail
+                            this->DownloadFile(c.video_note_->thumbnail_->file_->id_, 5);
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageSticker>) {
                 info.hasSticker = true;
@@ -956,6 +1223,25 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     info.mediaCaption = wxString::FromUTF8(c.sticker_->emoji_);
                     if (c.sticker_->sticker_) {
                         info.mediaFileId = c.sticker_->sticker_->id_;
+                        
+                        if (c.sticker_->sticker_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.sticker_->sticker_->local_->path_);
+                        } else if (!c.sticker_->sticker_->local_->is_downloading_active_) {
+                            // Auto-download sticker
+                            this->DownloadFile(c.sticker_->sticker_->id_, 5);
+                        }
+                    }
+                    
+                    // Also try thumbnail for sticker
+                    if (c.sticker_->thumbnail_ && c.sticker_->thumbnail_->file_) {
+                        if (c.sticker_->thumbnail_->file_->local_->is_downloading_completed_) {
+                            if (info.mediaLocalPath.IsEmpty()) {
+                                info.mediaLocalPath = wxString::FromUTF8(c.sticker_->thumbnail_->file_->local_->path_);
+                            }
+                        } else if (!c.sticker_->thumbnail_->file_->local_->is_downloading_active_) {
+                            // Auto-download sticker thumbnail
+                            this->DownloadFile(c.sticker_->thumbnail_->file_->id_, 5);
+                        }
                     }
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageAnimation>) {
@@ -963,10 +1249,28 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 if (c.caption_) {
                     info.mediaCaption = wxString::FromUTF8(c.caption_->text_);
                 }
-                if (c.animation_ && c.animation_->animation_) {
-                    info.mediaFileId = c.animation_->animation_->id_;
-                    info.mediaFileName = wxString::FromUTF8(c.animation_->file_name_);
-                    info.mediaFileSize = c.animation_->animation_->size_;
+                if (c.animation_) {
+                    if (c.animation_->animation_) {
+                        info.mediaFileId = c.animation_->animation_->id_;
+                        info.mediaFileName = wxString::FromUTF8(c.animation_->file_name_);
+                        info.mediaFileSize = c.animation_->animation_->size_;
+                        
+                        if (c.animation_->animation_->local_->is_downloading_completed_) {
+                            info.mediaLocalPath = wxString::FromUTF8(c.animation_->animation_->local_->path_);
+                        }
+                    }
+                    
+                    // Auto-download GIF thumbnail
+                    if (c.animation_->thumbnail_ && c.animation_->thumbnail_->file_) {
+                        if (c.animation_->thumbnail_->file_->local_->is_downloading_completed_) {
+                            if (info.mediaLocalPath.IsEmpty()) {
+                                info.mediaLocalPath = wxString::FromUTF8(c.animation_->thumbnail_->file_->local_->path_);
+                            }
+                        } else if (!c.animation_->thumbnail_->file_->local_->is_downloading_active_) {
+                            // Auto-download GIF thumbnail
+                            this->DownloadFile(c.animation_->thumbnail_->file_->id_, 5);
+                        }
+                    }
                 }
             }
         });
@@ -1026,6 +1330,64 @@ wxString TelegramClient::ExtractMessageText(td_api::MessageContent* content)
             text = "[Photo changed]";
         } else if constexpr (std::is_same_v<T, td_api::messagePinMessage>) {
             text = "[Message pinned]";
+        } else if constexpr (std::is_same_v<T, td_api::messageCall>) {
+            // Handle call messages
+            bool isVideo = c.is_video_;
+            int duration = c.duration_;
+            wxString callType = isVideo ? "Video call" : "Call";
+            
+            if (c.discard_reason_) {
+                td_api::downcast_call(*c.discard_reason_, [&text, &callType, duration](auto& reason) {
+                    using R = std::decay_t<decltype(reason)>;
+                    if constexpr (std::is_same_v<R, td_api::callDiscardReasonMissed>) {
+                        text = "[Missed " + callType + "]";
+                    } else if constexpr (std::is_same_v<R, td_api::callDiscardReasonDeclined>) {
+                        text = "[Declined " + callType + "]";
+                    } else if constexpr (std::is_same_v<R, td_api::callDiscardReasonDisconnected>) {
+                        text = "[" + callType + " disconnected]";
+                    } else if constexpr (std::is_same_v<R, td_api::callDiscardReasonHungUp>) {
+                        if (duration > 0) {
+                            int mins = duration / 60;
+                            int secs = duration % 60;
+                            text = wxString::Format("[%s - %d:%02d]", callType, mins, secs);
+                        } else {
+                            text = "[" + callType + "]";
+                        }
+                    } else {
+                        text = "[" + callType + "]";
+                    }
+                });
+            } else {
+                if (duration > 0) {
+                    int mins = duration / 60;
+                    int secs = duration % 60;
+                    text = wxString::Format("[%s - %d:%02d]", callType, mins, secs);
+                } else {
+                    text = "[" + callType + "]";
+                }
+            }
+        } else if constexpr (std::is_same_v<T, td_api::messageScreenshotTaken>) {
+            text = "[Screenshot taken]";
+        } else if constexpr (std::is_same_v<T, td_api::messageGame>) {
+            text = "[Game: " + wxString::FromUTF8(c.game_ ? c.game_->title_ : "Unknown") + "]";
+        } else if constexpr (std::is_same_v<T, td_api::messageInvoice>) {
+            text = "[Invoice: " + wxString::FromUTF8(c.product_info_ ? c.product_info_->title_ : "Payment") + "]";
+        } else if constexpr (std::is_same_v<T, td_api::messageContactRegistered>) {
+            text = "[Contact joined Telegram]";
+        } else if constexpr (std::is_same_v<T, td_api::messageSupergroupChatCreate>) {
+            text = "[Group created]";
+        } else if constexpr (std::is_same_v<T, td_api::messageBasicGroupChatCreate>) {
+            text = "[Group created]";
+        } else if constexpr (std::is_same_v<T, td_api::messageChatSetMessageAutoDeleteTime>) {
+            text = "[Auto-delete timer changed]";
+        } else if constexpr (std::is_same_v<T, td_api::messageExpiredPhoto>) {
+            text = "[Photo expired]";
+        } else if constexpr (std::is_same_v<T, td_api::messageExpiredVideo>) {
+            text = "[Video expired]";
+        } else if constexpr (std::is_same_v<T, td_api::messageCustomServiceAction>) {
+            text = "[" + wxString::FromUTF8(c.text_) + "]";
+        } else if constexpr (std::is_same_v<T, td_api::messageUnsupported>) {
+            text = "[Unsupported message]";
         } else {
             text = "[Message]";
         }
