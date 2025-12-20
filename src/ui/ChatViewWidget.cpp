@@ -800,6 +800,9 @@ void ChatViewWidget::OnHideTimer(wxTimerEvent& event)
 
 void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
 {
+    // First, check if this was a user-initiated download to open
+    OnMediaDownloadComplete(fileId, localPath);
+    
     if (!m_mediaPopup || !m_mediaPopup->IsShown()) {
         return;
     }
@@ -834,11 +837,36 @@ void ChatViewWidget::OpenMedia(const MediaInfo& info)
         // Open with default application
         wxLaunchDefaultApplication(info.localPath);
     } else if (info.fileId != 0 && m_mainFrame) {
-        // Need to download first
+        // Need to download first, then open
         TelegramClient* client = m_mainFrame->GetTelegramClient();
         if (client) {
-            AddPendingDownload(info.fileId, info);
-            client->DownloadFile(info.fileId);
+            // Mark this as a pending open (not just preview)
+            MediaInfo infoWithOpenFlag = info;
+            infoWithOpenFlag.isDownloading = true;  // Use this to track pending open
+            AddPendingDownload(info.fileId, infoWithOpenFlag);
+            client->DownloadFile(info.fileId, 10);  // High priority for user-initiated download
+            
+            // Show a status message
+            if (m_messageFormatter) {
+                m_messageFormatter->AppendServiceMessage(
+                    wxDateTime::Now().Format("%H:%M"),
+                    "Downloading media...");
+                ScrollToBottomIfAtBottom();
+            }
+        }
+    }
+}
+
+void ChatViewWidget::OnMediaDownloadComplete(int32_t fileId, const wxString& localPath)
+{
+    // Check if this was a user-initiated download (click to open)
+    if (HasPendingDownload(fileId)) {
+        MediaInfo info = GetPendingDownload(fileId);
+        RemovePendingDownload(fileId);
+        
+        // If isDownloading flag was set, user clicked to open - so open it now
+        if (info.isDownloading && !localPath.IsEmpty() && wxFileExists(localPath)) {
+            wxLaunchDefaultApplication(localPath);
         }
     }
 }
@@ -1115,10 +1143,10 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
     if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE || hit == wxTE_HT_BELOW) {
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
-            // Change cursor to hand
+            // Change cursor to hand for ALL media types (clickable)
             ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
             
-            // Show preview for all visual media types
+            // Show preview for visual media types
             if (span->info.type == MediaType::Photo || 
                 span->info.type == MediaType::Sticker ||
                 span->info.type == MediaType::GIF ||
@@ -1147,7 +1175,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
                     m_hoverTimer.StartOnce(HOVER_DELAY_MS);
                 }
             } else {
-                // Non-visual media type
+                // Non-visual media type (Voice, File) - still clickable but no popup preview
                 m_isOverMediaSpan = false;
                 m_hoverTimer.Stop();
                 m_pendingHoverMedia = MediaInfo();

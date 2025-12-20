@@ -87,6 +87,9 @@ public:
     // Open media (external viewer or download)
     void OpenMedia(const MediaInfo& info);
     
+    // Called when a media download completes
+    void OnMediaDownloadComplete(int32_t fileId, const wxString& localPath);
+    
     // Loading state
     void SetLoading(bool loading);
     bool IsLoading() const { return m_isLoading; }
