@@ -1398,7 +1398,8 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
     // Display the new message
     DisplayMessage(message);
     if (m_chatViewWidget) {
-        m_chatViewWidget->ScrollToBottom();
+        // Use smart scrolling - only scroll if user was already at bottom
+        m_chatViewWidget->ScrollToBottomIfAtBottom();
     }
     
     // Mark as read since we're viewing this chat
@@ -1427,7 +1428,7 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxStrin
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(wxDateTime::Now().Format("%H:%M"),
                             wxString::Format("Message %lld was edited: %s", messageId, newText));
-        m_chatViewWidget->ScrollToBottom();
+        m_chatViewWidget->ScrollToBottomIfAtBottom();
     }
 }
 
