@@ -99,15 +99,15 @@ void StatusBarManager::UpdateStatusBar()
             if (m_currentChatId != 0) {
                 chatInfo = m_currentChatTitle;
                 if (m_currentChatMemberCount > 0) {
-                    chatInfo += wxString::Format(" • %d members", m_currentChatMemberCount);
+                    chatInfo += wxString::Format(" - %d members", m_currentChatMemberCount);
                 }
             } else {
                 chatInfo = wxString::Format("%d chats", m_totalChats);
                 if (m_unreadChats > 0) {
-                    chatInfo += wxString::Format(" • %d unread", m_unreadChats);
+                    chatInfo += wxString::Format(" - %d unread", m_unreadChats);
                 }
             }
-            chatInfo += wxString::Format(" • @%s", m_currentUser);
+            chatInfo += " - @" + m_currentUser;
         } else {
             chatInfo = "Not logged in";
         }

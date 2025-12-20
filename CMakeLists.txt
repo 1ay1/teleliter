@@ -13,6 +13,9 @@ set(LOCAL_TDLIB_PATH "$ENV{HOME}/.local")
 if(EXISTS "${LOCAL_TDLIB_PATH}/include/td/telegram/Client.h")
     set(TDLIB_ROOT "${LOCAL_TDLIB_PATH}")
     message(STATUS "Found TDLib in ~/.local: ${TDLIB_ROOT}")
+elseif(EXISTS "/usr/include/td/telegram/Client.h")
+    set(TDLIB_ROOT "/usr")
+    message(STATUS "Found TDLib in /usr: ${TDLIB_ROOT}")
 elseif(APPLE)
     # Fall back to Homebrew on macOS
     execute_process(
@@ -181,7 +184,7 @@ endif()
 
 if(NOT WEBM_FOUND)
     find_path(WEBM_INCLUDE_DIRS mkvparser/mkvparser.h
-        PATHS /usr/include /usr/local/include /opt/homebrew/include
+        PATHS /usr/include/webm /usr/include /usr/local/include /opt/homebrew/include
     )
     find_library(WEBM_LIBRARY webm
         PATHS /usr/lib /usr/local/lib /opt/homebrew/lib
