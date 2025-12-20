@@ -448,18 +448,18 @@ void MessageFormatter::AppendUnreadMarker()
     // Ensure we start on a new line
     m_chatArea->WriteText("\n");
     
-    // HexChat-style red line to mark unread messages
-    m_chatArea->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
+    // Visual marker showing where messages have been read up to
+    m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
     m_chatArea->WriteText("─────────────────────── ");
     m_chatArea->EndTextColour();
     
-    m_chatArea->BeginTextColour(wxColour(0xFF, 0x40, 0x40)); // Lighter red for text
+    m_chatArea->BeginTextColour(wxColour(0x6E, 0xE9, 0x6E)); // Lighter green for text
     m_chatArea->BeginBold();
-    m_chatArea->WriteText("New Messages");
+    m_chatArea->WriteText("← read up to here");
     m_chatArea->EndBold();
     m_chatArea->EndTextColour();
     
-    m_chatArea->BeginTextColour(wxColour(0xCC, 0x00, 0x00)); // Red
+    m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
     m_chatArea->WriteText(" ───────────────────────\n");
     m_chatArea->EndTextColour();
 }
