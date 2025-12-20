@@ -28,9 +28,9 @@ void ChatArea::SetupColors()
     // Monospace font - exactly like WelcomeChat
     // macOS renders fonts smaller, so use larger size on Mac
 #ifdef __WXOSX__
-    int fontSize = 13;
+    int fontSize = 12;
 #else
-    int fontSize = 10;
+    int fontSize = 9;
 #endif
     m_chatFont = wxFont(fontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 

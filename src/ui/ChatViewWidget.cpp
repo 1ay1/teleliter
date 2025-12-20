@@ -29,12 +29,8 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_downloadLabel(nullptr),
       m_downloadGauge(nullptr),
       m_downloadHideTimer(this),
-      m_hoverTimer(this),
-      m_hideTimer(this),
       m_refreshTimer(this),
       m_refreshPending(false),
-      m_lastHoveredTextPos(-1),
-      m_isOverMediaSpan(false),
       m_wasAtBottom(true),
       m_newMessageCount(0),
       m_isLoading(false),
@@ -45,8 +41,6 @@ ChatViewWidget::ChatViewWidget(wxWindow* parent, MainFrame* mainFrame)
       m_contextMenuPos(-1)
 {
     // Bind timer events
-    Bind(wxEVT_TIMER, &ChatViewWidget::OnHoverTimer, this, m_hoverTimer.GetId());
-    Bind(wxEVT_TIMER, &ChatViewWidget::OnHideTimer, this, m_hideTimer.GetId());
     Bind(wxEVT_TIMER, [this](wxTimerEvent&) { HideDownloadProgress(); }, m_downloadHideTimer.GetId());
     Bind(wxEVT_TIMER, &ChatViewWidget::OnRefreshTimer, this, m_refreshTimer.GetId());
 
@@ -167,7 +161,7 @@ void ChatViewWidget::SetupDisplayControl()
     wxRichTextCtrl* display = m_chatArea->GetDisplay();
     if (!display) return;
 
-    // Bind mouse events for hover detection and context menu
+    // Bind mouse events for cursor updates and click handling
     display->Bind(wxEVT_MOTION, &ChatViewWidget::OnMouseMove, this);
     display->Bind(wxEVT_LEAVE_WINDOW, &ChatViewWidget::OnMouseLeave, this);
     display->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnLeftDown, this);
@@ -224,14 +218,15 @@ void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo& info)
 
 void ChatViewWidget::SortMessages()
 {
-    // Sort messages by ID (primary) and date (secondary)
-    // Telegram message IDs are monotonically increasing within a chat
+    // Sort messages by timestamp (date) primary, message ID secondary
+    // Timestamps are more reliable for display order than message IDs
+    // which can arrive out of order from the server
     std::sort(m_messages.begin(), m_messages.end(),
               [](const MessageInfo& a, const MessageInfo& b) {
-                  if (a.id != b.id) {
-                      return a.id < b.id;
+                  if (a.date != b.date) {
+                      return a.date < b.date;
                   }
-                  return a.date < b.date;
+                  return a.id < b.id;
               });
 }
 
@@ -291,8 +286,9 @@ void ChatViewWidget::RefreshDisplay()
     
     CVWLOG("RefreshDisplay: rendering " << m_messages.size() << " messages");
     
-    // Remember scroll position
-    bool wasAtBottom = IsAtBottom();
+    // Use member variable for scroll state - it's updated by user actions
+    // and explicitly set when user sends a message
+    bool shouldScrollToBottom = m_wasAtBottom;
     
     // Clear display but keep message storage
     m_chatArea->Clear();
@@ -335,12 +331,35 @@ void ChatViewWidget::RefreshDisplay()
         }
     }
     
+    // Remove trailing newline after the last message to avoid extra blank line
+    if (m_chatArea && m_chatArea->GetDisplay()) {
+        wxRichTextCtrl* display = m_chatArea->GetDisplay();
+        long lastPos = display->GetLastPosition();
+        if (lastPos > 0) {
+            wxString lastChar = display->GetRange(lastPos - 1, lastPos);
+            if (lastChar == "\n") {
+                display->Remove(lastPos - 1, lastPos);
+            }
+        }
+    }
+    
     EndBatchUpdate();
     
-    // Restore scroll position
-    if (wasAtBottom) {
-        ScrollToBottom();
+    // Restore scroll position - use CallAfter to ensure layout is complete
+    if (shouldScrollToBottom) {
+        CallAfter([this]() {
+            if (m_chatArea) {
+                m_chatArea->ScrollToBottom();
+            }
+        });
     }
+}
+
+void ChatViewWidget::ForceScrollToBottom()
+{
+    // Set the flag so next refresh will scroll, then scroll immediately
+    m_wasAtBottom = true;
+    ScrollToBottom();
 }
 
 void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
@@ -731,7 +750,17 @@ void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& i
     span.startPos = startPos;
     span.endPos = endPos;
     span.info = info;
+    
+    size_t index = m_mediaSpans.size();
     m_mediaSpans.push_back(span);
+    
+    // Update fast lookup index for O(1) updates on download complete
+    if (info.fileId != 0) {
+        m_fileIdToSpanIndex[info.fileId].push_back(index);
+    }
+    if (info.thumbnailFileId != 0) {
+        m_fileIdToSpanIndex[info.thumbnailFileId].push_back(index);
+    }
 }
 
 MediaSpan* ChatViewWidget::GetMediaSpanAtPosition(long pos)
@@ -747,36 +776,40 @@ MediaSpan* ChatViewWidget::GetMediaSpanAtPosition(long pos)
 void ChatViewWidget::ClearMediaSpans()
 {
     m_mediaSpans.clear();
+    m_fileIdToSpanIndex.clear();
 }
 
 void ChatViewWidget::UpdateMediaSpanPath(int32_t fileId, const wxString& localPath, bool isThumbnail)
 {
     if (fileId == 0 || localPath.IsEmpty()) return;
     
-    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " path=" << localPath.ToStdString() 
-           << " isThumbnailHint=" << isThumbnail << " totalSpans=" << m_mediaSpans.size());
+    // Use fast O(1) lookup instead of O(n) linear scan
+    auto it = m_fileIdToSpanIndex.find(fileId);
+    if (it == m_fileIdToSpanIndex.end()) {
+        // No spans reference this fileId
+        return;
+    }
     
     int updatedCount = 0;
-    
-    // Update all media spans that reference this fileId
-    // Check both main file and thumbnail - a fileId could match either
-    for (auto& span : m_mediaSpans) {
+    for (size_t index : it->second) {
+        if (index >= m_mediaSpans.size()) continue;  // Stale index check
+        
+        MediaSpan& span = m_mediaSpans[index];
+        
         // Check if this is the main file
         if (span.info.fileId == fileId) {
-            CVWLOG("UpdateMediaSpanPath: updating localPath for span with fileId=" << fileId);
             span.info.localPath = localPath;
             span.info.isDownloading = false;
             updatedCount++;
         }
-        // Also check if this is a thumbnail (same fileId could be thumbnail for another media)
+        // Also check if this is a thumbnail
         if (span.info.thumbnailFileId == fileId) {
-            CVWLOG("UpdateMediaSpanPath: updating thumbnailPath for span with thumbnailFileId=" << fileId);
             span.info.thumbnailPath = localPath;
             updatedCount++;
         }
     }
     
-    CVWLOG("UpdateMediaSpanPath: updated " << updatedCount << " spans");
+    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " updated " << updatedCount << " spans (fast path)");
 }
 
 void ChatViewWidget::AddEditSpan(long startPos, long endPos, int64_t messageId,
@@ -988,9 +1021,6 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         return;
     }
 
-    // Cancel any pending hide
-    m_hideTimer.Stop();
-
     // Don't re-show if already showing the same media (prevents flickering and video restart)
     // Check both if popup is shown AND if we're tracking the same media
     bool alreadyShowingSame = IsSameMedia(m_currentlyShowingMedia, info);
@@ -1035,7 +1065,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
                     AddPendingDownload(info.thumbnailFileId, info);
                 } else if (client && client->IsDownloading(info.thumbnailFileId)) {
-                    // Already downloading - boost priority since user is hovering
+                    // Already downloading - boost priority since user clicked
                     client->BoostDownloadPriority(info.thumbnailFileId);
                 }
             }
@@ -1089,7 +1119,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     // Track this as a pending download so we can update popup when complete
                     AddPendingDownload(info.fileId, info);
                 } else if (client->IsDownloading(info.fileId)) {
-                    // Already downloading - boost priority since user is hovering
+                    // Already downloading - boost priority since user clicked
                     CVWLOG("ShowMediaPopup: boosting download priority for fileId=" << info.fileId);
                     client->BoostDownloadPriority(info.fileId);
                 }
@@ -1126,7 +1156,6 @@ void ChatViewWidget::HideMediaPopup()
 {
     // Clear tracking state
     m_currentlyShowingMedia = MediaInfo();
-    m_isOverMediaSpan = false;
 
     if (m_mediaPopup) {
         try {
@@ -1142,22 +1171,6 @@ void ChatViewWidget::HideMediaPopup()
         } catch (...) {
             CVWLOG("HideMediaPopup: unknown exception");
         }
-    }
-}
-
-void ChatViewWidget::ScheduleHideMediaPopup()
-{
-    // Only schedule hide if not already scheduled and popup is visible
-    if (!m_hideTimer.IsRunning() && m_mediaPopup && m_mediaPopup->IsShown()) {
-        m_hideTimer.StartOnce(HIDE_DELAY_MS);
-    }
-}
-
-void ChatViewWidget::OnHideTimer(wxTimerEvent& event)
-{
-    // Only hide if we're not over a media span anymore
-    if (!m_isOverMediaSpan) {
-        HideMediaPopup();
     }
 }
 
@@ -1197,7 +1210,7 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
         updatedInfo.thumbnailPath = localPath;
         updatedInfo.isDownloading = false;
         wxPoint pos = m_mediaPopup->GetPosition();
-        // Update our tracking so subsequent hovers don't reset
+        // Update our tracking so subsequent clicks don't reset
         m_currentlyShowingMedia = updatedInfo;
         m_mediaPopup->ShowMedia(updatedInfo, pos);
         return;
@@ -1210,7 +1223,7 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId, const wxString& localPath)
         updatedInfo.localPath = localPath;
         updatedInfo.isDownloading = false;
         wxPoint pos = m_mediaPopup->GetPosition();
-        // Update our tracking so subsequent hovers don't reset
+        // Update our tracking so subsequent clicks don't reset
         m_currentlyShowingMedia = updatedInfo;
         // Re-show with updated info - ShowMedia will handle format detection
         m_mediaPopup->ShowMedia(updatedInfo, pos);
@@ -1550,121 +1563,44 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         return;
     }
 
-    // Get text position from screen coordinates
+    // Just update cursor - no hover popup anymore (popup is click-only now)
     wxTextCtrlHitTestResult hit = ctrl->HitTest(pos, &textPos);
 
-    if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE || hit == wxTE_HT_BELOW) {
+    if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
+        // Check for media span
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
-            // Change cursor to hand for ALL media types (clickable)
             ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
-
-            // Show preview for visual media types
-            if (span->info.type == MediaType::Photo ||
-                span->info.type == MediaType::Sticker ||
-                span->info.type == MediaType::GIF ||
-                span->info.type == MediaType::Video ||
-                span->info.type == MediaType::VideoNote) {
-
-                // We're over a media span
-                m_isOverMediaSpan = true;
-                m_hideTimer.Stop();  // Cancel any pending hide
-
-                // Check if we're already showing or about to show this exact media
-                if (IsSameMedia(m_currentlyShowingMedia, span->info) ||
-                    IsSameMedia(m_pendingHoverMedia, span->info)) {
-                    // Already showing or pending this media, do nothing
-                    event.Skip();
-                    return;
-                }
-
-                // Check if we're hovering a new/different media span
-                if (!IsSameMedia(m_pendingHoverMedia, span->info)) {
-                    // New media span - start debounce timer
-                    m_hoverTimer.Stop();
-                    m_pendingHoverMedia = span->info;
-                    m_pendingHoverPos = ctrl->ClientToScreen(pos);
-                    m_lastHoveredTextPos = textPos;
-                    m_hoverTimer.StartOnce(HOVER_DELAY_MS);
-                }
-            } else {
-                // Non-visual media type (Voice, File) - still clickable but no popup preview
-                m_isOverMediaSpan = false;
-                m_hoverTimer.Stop();
-                m_pendingHoverMedia = MediaInfo();
-                ScheduleHideMediaPopup();
-            }
-        } else {
-            // Not over a media span
-            m_isOverMediaSpan = false;
-            m_hoverTimer.Stop();
-            m_lastHoveredTextPos = -1;
-            m_pendingHoverMedia = MediaInfo();
-
-            // Check for link span
-            LinkSpan* linkSpan = GetLinkSpanAtPosition(textPos);
-            if (linkSpan) {
-                ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
-                ScheduleHideMediaPopup();
-                HideEditHistoryPopup();
-            } else {
-                // Check for edit span
-                EditSpan* editSpan = GetEditSpanAtPosition(textPos);
-                if (editSpan) {
-                    ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
-                    // Show edit history popup
-                    ShowEditHistoryPopup(*editSpan, ctrl->ClientToScreen(pos));
-                    ScheduleHideMediaPopup();
-                } else {
-                    ctrl->SetCursor(wxCursor(wxCURSOR_IBEAM));
-                    ScheduleHideMediaPopup();
-                    HideEditHistoryPopup();
-                }
-            }
+            event.Skip();
+            return;
         }
+
+        // Check for link span
+        LinkSpan* linkSpan = GetLinkSpanAtPosition(textPos);
+        if (linkSpan) {
+            ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
+            event.Skip();
+            return;
+        }
+
+        // Check for edit span
+        EditSpan* editSpan = GetEditSpanAtPosition(textPos);
+        if (editSpan) {
+            ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
+            event.Skip();
+            return;
+        }
+
+        ctrl->SetCursor(wxCursor(wxCURSOR_IBEAM));
     } else {
-        // Not over text - cancel everything
-        m_isOverMediaSpan = false;
-        m_hoverTimer.Stop();
-        m_lastHoveredTextPos = -1;
-        m_pendingHoverMedia = MediaInfo();
         ctrl->SetCursor(wxCursor(wxCURSOR_DEFAULT));
-        ScheduleHideMediaPopup();
     }
 
     event.Skip();
 }
 
-void ChatViewWidget::OnHoverTimer(wxTimerEvent& event)
-{
-    // Timer fired - show the popup if we still have pending media and still over media span
-    if (m_isOverMediaSpan &&
-        (m_pendingHoverMedia.fileId != 0 || !m_pendingHoverMedia.localPath.IsEmpty())) {
-        // Clear pending state before showing to prevent re-triggering
-        MediaInfo mediaToShow = m_pendingHoverMedia;
-        wxPoint posToShow = m_pendingHoverPos;
-        m_pendingHoverMedia = MediaInfo();
-        
-        try {
-            ShowMediaPopup(mediaToShow, posToShow);
-        } catch (const std::exception& e) {
-            CVWLOG("OnHoverTimer: exception showing popup: " << e.what());
-        } catch (...) {
-            CVWLOG("OnHoverTimer: unknown exception showing popup");
-        }
-    }
-}
-
 void ChatViewWidget::OnMouseLeave(wxMouseEvent& event)
 {
-    // Cancel any pending hover
-    m_hoverTimer.Stop();
-    m_lastHoveredTextPos = -1;
-    m_isOverMediaSpan = false;
-    m_pendingHoverMedia = MediaInfo();
-
-    // Use delayed hide for smoother UX when mouse briefly leaves
-    ScheduleHideMediaPopup();
     HideEditHistoryPopup();
     wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
     if (display) {
@@ -1689,7 +1625,26 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent& event)
     if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
-            OpenMedia(span->info);
+            // Show popup on click for visual media types
+            bool isVisualMedia = (span->info.type == MediaType::Photo ||
+                                  span->info.type == MediaType::Video ||
+                                  span->info.type == MediaType::Sticker ||
+                                  span->info.type == MediaType::GIF ||
+                                  span->info.type == MediaType::VideoNote);
+
+            if (isVisualMedia) {
+                // Toggle popup - if already showing same media, hide it; otherwise show it
+                if (m_mediaPopup && m_mediaPopup->IsShown() && 
+                    IsSameMedia(m_currentlyShowingMedia, span->info)) {
+                    HideMediaPopup();
+                } else {
+                    wxPoint screenPos = ctrl->ClientToScreen(pos);
+                    ShowMediaPopup(span->info, screenPos);
+                }
+            } else {
+                // Non-visual media (Voice, File) - open directly
+                OpenMedia(span->info);
+            }
             return; // Don't skip - we handled the click
         }
 
@@ -1701,6 +1656,9 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent& event)
             return; // Don't skip - we handled the click
         }
     }
+
+    // If clicking elsewhere, hide any open popup
+    HideMediaPopup();
 
     event.Skip();
 }

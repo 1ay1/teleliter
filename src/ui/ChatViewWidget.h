@@ -30,6 +30,7 @@ public:
     void DisplayMessages(const std::vector<MessageInfo>& messages);
     void ClearMessages();
     void ScrollToBottom();
+    void ForceScrollToBottom();  // Force scroll and set m_wasAtBottom = true
     
     // Refresh the display from the stored message vector
     // This re-renders all messages in proper sorted order
@@ -112,7 +113,6 @@ public:
     // Media popup
     void ShowMediaPopup(const MediaInfo& info, const wxPoint& position);
     void HideMediaPopup();
-    void ScheduleHideMediaPopup();
     void UpdateMediaPopup(int32_t fileId, const wxString& localPath);
     
     // Edit history popup
@@ -159,8 +159,6 @@ private:
     void OnLeftDown(wxMouseEvent& event);
     void OnRightDown(wxMouseEvent& event);
     void OnKeyDown(wxKeyEvent& event);
-    void OnHoverTimer(wxTimerEvent& event);
-    void OnHideTimer(wxTimerEvent& event);
     void OnScroll(wxScrollWinEvent& event);
     void OnNewMessageButtonClick(wxCommandEvent& event);
     void OnSize(wxSizeEvent& event);
@@ -201,6 +199,10 @@ private:
     // Media spans for clickable media
     std::vector<MediaSpan> m_mediaSpans;
     
+    // Fast lookup index: fileId -> indices in m_mediaSpans
+    // Enables O(1) updates when file downloads complete instead of O(n) scan
+    std::map<int32_t, std::vector<size_t>> m_fileIdToSpanIndex;
+    
     // Edit spans for showing original text
     std::vector<EditSpan> m_editSpans;
     
@@ -210,21 +212,13 @@ private:
     // Pending downloads (file ID -> media info)
     std::map<int32_t, MediaInfo> m_pendingDownloads;
     
-    // Hover debouncing and popup management
-    wxTimer m_hoverTimer;
-    wxTimer m_hideTimer;
-    
     // Debounced refresh timer - coalesces multiple rapid message updates
     wxTimer m_refreshTimer;
     bool m_refreshPending;
     static const int REFRESH_DEBOUNCE_MS = 50;  // 50ms debounce
-    MediaInfo m_pendingHoverMedia;
-    wxPoint m_pendingHoverPos;
+    
+    // Popup management (click-only, no hover)
     MediaInfo m_currentlyShowingMedia;
-    long m_lastHoveredTextPos;
-    bool m_isOverMediaSpan;
-    static const int HOVER_DELAY_MS = 200;
-    static const int HIDE_DELAY_MS = 300;
     
     // Smart scrolling state
     bool m_wasAtBottom;

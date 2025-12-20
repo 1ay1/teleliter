@@ -655,9 +655,12 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
                         if (m_mainFrame) {
                             m_mainFrame->OnMessagesLoaded(chatId, msgList);
                         }
-                        // Smart auto-download: preemptively download visible media
-                        AutoDownloadChatMedia(chatId, 30);
                     });
+                    
+                    // Smart auto-download in background thread - don't block UI
+                    std::thread([this, chatId]() {
+                        AutoDownloadChatMedia(chatId, 30);
+                    }).detach();
                     
                     // If we got fewer messages than requested, TDLib may still be syncing
                     // Try to load more after a brief moment
@@ -1208,8 +1211,8 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
     TDLOG("AutoDownloadChatMedia: processing %zu messages", messages.size());
     
     // Process messages from newest to oldest (reverse order)
-    // Newest messages get higher priority
-    int priority = 10;  // Start with high priority
+    // Use low priority (1-5) for background downloads to not compete with user requests
+    int priority = 5;  // Low priority for background downloads
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
         const MessageInfo& msg = *it;
         
@@ -1219,10 +1222,13 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
             DownloadMediaFromMessage(msg, priority);
         }
         
-        // Decrease priority for older messages (but keep above 1)
-        if (priority > 3) {
+        // Decrease priority for older messages (minimum 1)
+        if (priority > 1) {
             priority--;
         }
+        
+        // Small yield to prevent hogging CPU in background thread
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     
     TDLOG("AutoDownloadChatMedia: finished queuing downloads for chatId=%lld", chatId);
@@ -1787,6 +1793,25 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
     int64_t downloadedSize = file->local_->downloaded_size_;
     int64_t totalSize = file->size_ > 0 ? file->size_ : file->expected_size_;
     
+    // Throttle progress updates to max 5 per second per file to reduce UI overhead
+    // Completed updates are always sent immediately
+    static std::map<int32_t, int64_t> lastProgressTime;
+    static const int64_t PROGRESS_THROTTLE_MS = 200;  // 5 updates/sec max
+    
+    bool shouldSendProgress = false;
+    if (isDownloading && !isComplete) {
+        int64_t now = wxGetLocalTimeMillis().GetValue();
+        auto it = lastProgressTime.find(fileId);
+        if (it == lastProgressTime.end() || (now - it->second) >= PROGRESS_THROTTLE_MS) {
+            lastProgressTime[fileId] = now;
+            shouldSendProgress = true;
+        }
+    }
+    if (isComplete) {
+        // Clean up throttle tracking on completion
+        lastProgressTime.erase(fileId);
+    }
+    
     // Update our download tracking
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
@@ -1803,24 +1828,31 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
                 it->second.totalSize = totalSize;
                 // Update progress time to prevent false timeout
                 it->second.lastProgressTime = wxGetUTCTime();
-                TDLOG("OnFileUpdate: Download PROGRESS for fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
+                // Only log if we're sending to UI (throttled)
+                if (shouldSendProgress) {
+                    TDLOG("OnFileUpdate: Download PROGRESS for fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
+                }
             }
         } else {
             // File update for a file we're not tracking - could be auto-download
             if (isComplete) {
                 TDLOG("OnFileUpdate: Untracked file COMPLETED fileId=%d path=%s", fileId, localPath.ToStdString().c_str());
-            } else if (isDownloading) {
-                TDLOG("OnFileUpdate: Untracked file PROGRESS fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
             }
+            // Don't log progress for untracked files - too noisy
         }
     }
     
-    PostToMainThread([this, fileId, isDownloading, isComplete, localPath, downloadedSize, totalSize]() {
+    // Only post to main thread if we have something to report
+    if (!isComplete && !shouldSendProgress) {
+        return;  // Throttled - skip this progress update
+    }
+    
+    PostToMainThread([this, fileId, isDownloading, isComplete, localPath, downloadedSize, totalSize, shouldSendProgress]() {
         if (m_mainFrame) {
             if (isComplete && !localPath.IsEmpty()) {
                 // Only report completed if we have a valid path
                 m_mainFrame->OnFileDownloaded(fileId, localPath);
-            } else if (isDownloading) {
+            } else if (isDownloading && shouldSendProgress) {
                 m_mainFrame->OnFileProgress(fileId, downloadedSize, totalSize);
             }
         }

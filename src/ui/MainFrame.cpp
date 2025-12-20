@@ -272,21 +272,22 @@ void MainFrame::SetupFonts()
 
     // macOS renders fonts smaller, so use larger sizes on Mac
 #ifdef __WXOSX__
-    int chatFontSize = 13;
+    int chatFontSize = 12;
     int treeFontSize = 12;
     int memberFontSize = 12;
-    int inputFontSize = 11;
+    int inputFontSize = 12;  // Same as ChatArea font
 #else
-    int chatFontSize = 10;
+    int chatFontSize = 9;
     int treeFontSize = 9;
     int memberFontSize = 9;
-    int inputFontSize = 10;
+    int inputFontSize = 9;  // Same as ChatArea font
 #endif
 
     m_chatFont = wxFont(chatFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
     m_treeFont = wxFont(treeFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
     m_memberListFont = wxFont(memberFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    m_inputFont = wxFont(inputFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
+    // Input font must match ChatArea exactly - same size, same family, no explicit font name
+    m_inputFont = wxFont(inputFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 }
 
 void MainFrame::CreateMenuBar()
@@ -764,7 +765,7 @@ void MainFrame::OnAbout(wxCommandEvent& event)
                  "  Page Up/Down     - Scroll chat\n"
                  "  Ctrl+V           - Paste image\n\n"
                  "Drag & drop files to upload\n"
-                 "Hover over [Photo], [Video] to preview",
+                 "Click [Photo], [Video] to preview",
                  "About Teleliter",
                  wxOK | wxICON_INFORMATION, this);
 }

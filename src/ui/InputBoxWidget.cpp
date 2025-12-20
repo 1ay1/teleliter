@@ -362,6 +362,10 @@ void InputBoxWidget::OnTextEnter(wxCommandEvent& event)
         if (client && client->IsLoggedIn() && chatId != 0) {
             client->SendMessage(chatId, message);
             m_inputBox->Clear();
+            // Always scroll to bottom when user sends a message
+            if (m_chatView) {
+                m_chatView->ForceScrollToBottom();
+            }
             // Message will appear via OnNewMessage callback
             return;
         }
