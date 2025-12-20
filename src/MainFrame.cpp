@@ -1,7 +1,10 @@
 #include "MainFrame.h"
+#include "WelcomeChat.h"
+#include "TelegramClient.h"
 #include <wx/artprov.h>
 #include <wx/settings.h>
 #include <wx/filename.h>
+#include <ctime>
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(wxID_EXIT, MainFrame::OnExit)
@@ -30,6 +33,22 @@ wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
     : wxFrame(NULL, wxID_ANY, title, pos, size),
+      m_telegramClient(nullptr),
+      m_mainSplitter(nullptr),
+      m_rightSplitter(nullptr),
+      m_leftPanel(nullptr),
+      m_chatTree(nullptr),
+      m_chatPanel(nullptr),
+      m_welcomeChat(nullptr),
+      m_chatInfoBar(nullptr),
+      m_chatDisplay(nullptr),
+      m_inputBox(nullptr),
+      m_rightPanel(nullptr),
+      m_memberList(nullptr),
+      m_memberCountLabel(nullptr),
+      m_mediaPopup(nullptr),
+      m_progressGauge(nullptr),
+      m_progressLabel(nullptr),
       m_showChatList(true),
       m_showMembers(true),
       m_showChatInfo(true),
@@ -37,22 +56,54 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
       m_currentUser(""),
       m_currentChatId(0),
       m_currentChatTitle(""),
-      m_currentChatType(TelegramChatType::Private),
-      m_mediaPopup(nullptr)
+      m_currentChatType(TelegramChatType::Private)
 {
     SetupColors();
     SetupFonts();
     CreateMenuBar();
     CreateMainLayout();
-    CreateStatusBar();
+    SetupStatusBar();
     
     // Create media popup (hidden initially)
     m_mediaPopup = new MediaPopup(this);
     
-    PopulateDummyData();
+    // Create TelegramClient and start it immediately for faster login
+    m_telegramClient = new TelegramClient();
+    m_telegramClient->SetMainFrame(this);
+    m_telegramClient->SetWelcomeChat(m_welcomeChat);
+    
+    // Connect WelcomeChat to TelegramClient
+    if (m_welcomeChat) {
+        m_welcomeChat->SetTelegramClient(m_telegramClient);
+    }
+    
+    // Start TDLib immediately in background so it's ready when user wants to login
+    m_telegramClient->Start();
+    
+    // Update status bar to show connecting
+    SetStatusText("Connecting...", 3);
+    
+    // Ensure welcome chat is visible on startup
+    if (m_welcomeChat && m_chatDisplay && m_chatPanel) {
+        wxSizer* sizer = m_chatPanel->GetSizer();
+        if (sizer) {
+            sizer->Show(m_welcomeChat, true);
+            sizer->Show(m_chatDisplay, false);
+            m_chatPanel->Layout();
+        }
+    }
     
     SetMinSize(wxSize(800, 600));
     SetBackgroundColour(m_bgColor);
+}
+
+MainFrame::~MainFrame()
+{
+    if (m_telegramClient) {
+        m_telegramClient->Stop();
+        delete m_telegramClient;
+        m_telegramClient = nullptr;
+    }
 }
 
 void MainFrame::SetupColors()
@@ -263,6 +314,10 @@ void MainFrame::CreateChatList(wxWindow* parent)
     // Create root
     m_treeRoot = m_chatTree->AddRoot("Chats");
     
+    // Add Teleliter at the top (like HexChat's network/status)
+    m_teleliterItem = m_chatTree->AppendItem(m_treeRoot, "Teleliter");
+    m_chatTree->SetItemBold(m_teleliterItem, true);
+    
     // Create categories
     m_pinnedChats = m_chatTree->AppendItem(m_treeRoot, "Pinned");
     m_privateChats = m_chatTree->AppendItem(m_treeRoot, "Private Chats");
@@ -277,6 +332,9 @@ void MainFrame::CreateChatList(wxWindow* parent)
     m_chatTree->SetItemBold(m_channels, true);
     m_chatTree->SetItemBold(m_bots, true);
     
+    // Select Teleliter by default
+    m_chatTree->SelectItem(m_teleliterItem);
+    
     sizer->Add(m_chatTree, 1, wxEXPAND);
     parent->SetSizer(sizer);
 }
@@ -286,7 +344,7 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
     // Chat info bar (shows chat name and description)
-    m_chatInfoBar = new wxTextCtrl(parent, ID_CHAT_INFO_BAR, "",
+    m_chatInfoBar = new wxTextCtrl(parent, ID_CHAT_INFO_BAR, "Teleliter",
         wxDefaultPosition, wxSize(-1, 22),
         wxTE_READONLY | wxBORDER_NONE);
     m_chatInfoBar->SetBackgroundColour(m_chatInfoBgColor);
@@ -299,7 +357,11 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     separator->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
     sizer->Add(separator, 0, wxEXPAND);
     
-    // Chat display area
+    // Welcome chat panel (shown when "Teleliter" is selected in tree)
+    m_welcomeChat = new WelcomeChat(parent, this);
+    sizer->Add(m_welcomeChat, 1, wxEXPAND);
+    
+    // Regular chat display (hidden initially, shown when a chat is selected)
     m_chatDisplay = new wxRichTextCtrl(parent, ID_CHAT_DISPLAY,
         wxEmptyString, wxDefaultPosition, wxDefaultSize,
         wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
@@ -320,6 +382,10 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     
     sizer->Add(m_chatDisplay, 1, wxEXPAND);
     
+    // Hide chat display from sizer (not just visually) - welcome chat is shown initially
+    sizer->Show(m_chatDisplay, false);
+    sizer->Show(m_welcomeChat, true);
+    
     // Bottom separator
     wxPanel* separator2 = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
     separator2->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
@@ -338,7 +404,7 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     m_inputBox->SetBackgroundColour(m_inputBgColor);
     m_inputBox->SetForegroundColour(m_inputFgColor);
     m_inputBox->SetFont(m_inputFont);
-    m_inputBox->SetHint("Write a message... (drop files here to upload)");
+    m_inputBox->SetHint("Type a command or message...");
     
     // Bind key events for clipboard paste
     m_inputBox->Bind(wxEVT_KEY_DOWN, &MainFrame::OnInputKeyDown, this);
@@ -385,7 +451,7 @@ void MainFrame::CreateMemberList(wxWindow* parent)
     parent->SetSizer(sizer);
 }
 
-void MainFrame::CreateStatusBar()
+void MainFrame::SetupStatusBar()
 {
     wxStatusBar* statusBar = wxFrame::CreateStatusBar(4);
     statusBar->SetBackgroundColour(m_bgColor);
@@ -418,7 +484,7 @@ void MainFrame::CreateStatusBar()
     m_progressGauge->SetSize(gaugeRect.width - 4, gaugeRect.height - 4);
     
     SetStatusText("Not logged in", 0);
-    SetStatusText("Offline", 3);
+    SetStatusText("Connecting...", 3);
     
     // Setup transfer manager callbacks
     m_transferManager.SetProgressCallback([this](const TransferInfo& info) {
@@ -1013,17 +1079,19 @@ void MainFrame::OnAbout(wxCommandEvent& event)
 
 void MainFrame::OnLogin(wxCommandEvent& event)
 {
-    // TODO: Implement TDLib login flow
-    wxMessageBox("Login with Telegram will be implemented with TDLib integration.",
-                 "Login", wxOK | wxICON_INFORMATION, this);
+    // Switch to Teleliter welcome chat and start login
+    m_chatTree->SelectItem(m_teleliterItem);
+    
+    if (m_welcomeChat) {
+        m_welcomeChat->StartLogin();
+    }
 }
 
 void MainFrame::OnLogout(wxCommandEvent& event)
 {
-    // TODO: Implement TDLib logout
-    m_isLoggedIn = false;
-    SetStatusText("Not logged in", 0);
-    SetStatusText("Offline", 1);
+    if (m_telegramClient && m_telegramClient->IsLoggedIn()) {
+        m_telegramClient->LogOut();
+    }
 }
 
 void MainFrame::OnNewChat(wxCommandEvent& event)
@@ -1124,18 +1192,83 @@ void MainFrame::OnFullscreen(wxCommandEvent& event)
 
 void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
 {
+    // Guard against events during initialization when UI elements aren't created yet
+    if (!m_chatInfoBar || !m_welcomeChat || !m_chatDisplay || !m_chatPanel) {
+        return;
+    }
+    
     wxTreeItemId item = event.GetItem();
     if (item.IsOk()) {
         wxString chatName = m_chatTree->GetItemText(item);
         
-        // Skip category items
-        if (m_chatTree->IsBold(item)) {
+        // Check if Teleliter (welcome) is selected
+        if (item == m_teleliterItem) {
+            m_currentChatId = 0;
+            m_chatInfoBar->SetValue("Teleliter");
+            // Use sizer Show/Hide to properly manage layout
+            wxSizer* sizer = m_chatPanel->GetSizer();
+            if (sizer) {
+                sizer->Show(m_welcomeChat, true);
+                sizer->Show(m_chatDisplay, false);
+            }
+            m_chatPanel->Layout();
+            SetStatusText("Teleliter", 0);
             return;
         }
         
-        m_currentChatTitle = chatName;
-        m_chatInfoBar->SetValue(chatName);
-        SetStatusText(chatName, 0);
+        // Check if this is a category item
+        if (item == m_pinnedChats || item == m_privateChats || item == m_groups ||
+            item == m_channels || item == m_bots) {
+            return;  // Don't select categories
+        }
+        
+        // Look up chat ID from tree item
+        auto it = m_treeItemToChatId.find(item);
+        if (it != m_treeItemToChatId.end()) {
+            int64_t chatId = it->second;
+            
+            // Update current chat
+            m_currentChatId = chatId;
+            m_currentChatTitle = chatName;
+            
+            // Remove unread indicator from title
+            int parenPos = chatName.Find('(');
+            if (parenPos != wxNOT_FOUND) {
+                m_currentChatTitle = chatName.Left(parenPos).Trim();
+            }
+            
+            m_chatInfoBar->SetValue(m_currentChatTitle);
+            // Use sizer Show/Hide to properly manage layout
+            wxSizer* sizer = m_chatPanel->GetSizer();
+            if (sizer) {
+                sizer->Show(m_welcomeChat, false);
+                sizer->Show(m_chatDisplay, true);
+            }
+            m_chatPanel->Layout();
+            SetStatusText(m_currentChatTitle, 0);
+            
+            // Remove bold (unread indicator)
+            m_chatTree->SetItemBold(item, false);
+            
+            // Load messages for this chat
+            if (m_telegramClient) {
+                m_chatDisplay->Clear();
+                ClearMediaSpans();
+                m_telegramClient->LoadMessages(chatId);
+                m_telegramClient->MarkChatAsRead(chatId);
+            }
+        } else {
+            // Fallback for items without chat ID (shouldn't happen with TDLib)
+            m_currentChatTitle = chatName;
+            m_chatInfoBar->SetValue(chatName);
+            wxSizer* sizer = m_chatPanel->GetSizer();
+            if (sizer) {
+                sizer->Show(m_welcomeChat, false);
+                sizer->Show(m_chatDisplay, true);
+            }
+            m_chatPanel->Layout();
+            SetStatusText(chatName, 0);
+        }
     }
 }
 
@@ -1184,13 +1317,337 @@ void MainFrame::OnInputEnter(wxCommandEvent& event)
         return;
     }
     
+    // Check if welcome chat is active - forward input there
+    if (IsWelcomeChatActive()) {
+        ForwardInputToWelcomeChat(message);
+        m_inputBox->Clear();
+        return;
+    }
+    
+    // Send via TDLib if logged in and have a chat selected
+    if (m_telegramClient && m_telegramClient->IsLoggedIn() && m_currentChatId != 0) {
+        m_telegramClient->SendMessage(m_currentChatId, message);
+        m_inputBox->Clear();
+        // Message will appear via OnNewMessage callback
+        return;
+    }
+    
+    // Fallback: display locally
     wxDateTime now = wxDateTime::Now();
     wxString timestamp = now.Format("%H:%M:%S");
-    
-    // For now, just display the message locally
-    // TODO: Send via TDLib
     AppendMessage(timestamp, m_currentUser.IsEmpty() ? "You" : m_currentUser, message);
     
     m_inputBox->Clear();
     m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+}
+
+bool MainFrame::IsWelcomeChatActive() const
+{
+    return m_welcomeChat && m_welcomeChat->IsShown();
+}
+
+void MainFrame::ForwardInputToWelcomeChat(const wxString& input)
+{
+    if (m_welcomeChat) {
+        m_welcomeChat->ProcessInput(input);
+    }
+}
+
+// ============================================================================
+// TelegramClient callbacks
+// ============================================================================
+
+wxString MainFrame::FormatTimestamp(int64_t unixTime)
+{
+    if (unixTime <= 0) {
+        return wxDateTime::Now().Format("%H:%M:%S");
+    }
+    
+    time_t t = static_cast<time_t>(unixTime);
+    wxDateTime dt(t);
+    return dt.Format("%H:%M:%S");
+}
+
+void MainFrame::OnConnected()
+{
+    SetStatusText("Connected", 3);
+}
+
+void MainFrame::OnLoginSuccess(const wxString& userName)
+{
+    m_isLoggedIn = true;
+    m_currentUser = userName;
+    
+    SetStatusText("Logged in as " + userName, 0);
+    SetStatusText("Online", 3);
+    
+    // Update menu state
+    wxMenuBar* menuBar = GetMenuBar();
+    if (menuBar) {
+        menuBar->Enable(ID_LOGIN, false);
+        menuBar->Enable(ID_LOGOUT, true);
+    }
+}
+
+void MainFrame::OnLoggedOut()
+{
+    m_isLoggedIn = false;
+    m_currentUser.Clear();
+    m_currentChatId = 0;
+    
+    // Clear chat list mappings
+    m_treeItemToChatId.clear();
+    m_chatIdToTreeItem.clear();
+    
+    // Clear tree (keep categories)
+    m_chatTree->DeleteChildren(m_pinnedChats);
+    m_chatTree->DeleteChildren(m_privateChats);
+    m_chatTree->DeleteChildren(m_groups);
+    m_chatTree->DeleteChildren(m_channels);
+    m_chatTree->DeleteChildren(m_bots);
+    
+    // Show welcome chat
+    wxSizer* sizer = m_chatPanel->GetSizer();
+    if (sizer) {
+        sizer->Show(m_welcomeChat, true);
+        sizer->Show(m_chatDisplay, false);
+    }
+    m_chatPanel->Layout();
+    m_chatTree->SelectItem(m_teleliterItem);
+    
+    SetStatusText("Logged out", 0);
+    SetStatusText("Offline", 3);
+    
+    // Update menu state
+    wxMenuBar* menuBar = GetMenuBar();
+    if (menuBar) {
+        menuBar->Enable(ID_LOGIN, true);
+        menuBar->Enable(ID_LOGOUT, false);
+    }
+}
+
+void MainFrame::RefreshChatList()
+{
+    if (!m_telegramClient) return;
+    
+    // Clear existing items (keep categories)
+    m_chatTree->DeleteChildren(m_pinnedChats);
+    m_chatTree->DeleteChildren(m_privateChats);
+    m_chatTree->DeleteChildren(m_groups);
+    m_chatTree->DeleteChildren(m_channels);
+    m_chatTree->DeleteChildren(m_bots);
+    m_treeItemToChatId.clear();
+    m_chatIdToTreeItem.clear();
+    
+    // Get chats from TelegramClient
+    const auto& chats = m_telegramClient->GetChats();
+    
+    // Sort chats by order (descending)
+    std::vector<const ChatInfo*> sortedChats;
+    for (const auto& [id, chat] : chats) {
+        sortedChats.push_back(&chat);
+    }
+    std::sort(sortedChats.begin(), sortedChats.end(), 
+              [](const ChatInfo* a, const ChatInfo* b) {
+                  return a->order > b->order;
+              });
+    
+    // Add chats to appropriate categories
+    for (const ChatInfo* chat : sortedChats) {
+        wxTreeItemId parent;
+        wxString displayTitle = chat->title;
+        
+        // Add unread count to title if present
+        if (chat->unreadCount > 0) {
+            displayTitle += wxString::Format(" (%d)", chat->unreadCount);
+        }
+        
+        // Determine category
+        if (chat->isPinned) {
+            parent = m_pinnedChats;
+        } else if (chat->isChannel) {
+            parent = m_channels;
+        } else if (chat->isGroup || chat->isSupergroup) {
+            parent = m_groups;
+        } else if (chat->isBot) {
+            parent = m_bots;
+        } else {
+            parent = m_privateChats;
+        }
+        
+        wxTreeItemId item = m_chatTree->AppendItem(parent, displayTitle);
+        m_treeItemToChatId[item] = chat->id;
+        m_chatIdToTreeItem[chat->id] = item;
+        
+        // Make bold if unread
+        if (chat->unreadCount > 0) {
+            m_chatTree->SetItemBold(item, true);
+        }
+    }
+    
+    // Expand categories that have items
+    if (m_chatTree->GetChildrenCount(m_pinnedChats) > 0) {
+        m_chatTree->Expand(m_pinnedChats);
+    }
+    if (m_chatTree->GetChildrenCount(m_privateChats) > 0) {
+        m_chatTree->Expand(m_privateChats);
+    }
+    if (m_chatTree->GetChildrenCount(m_groups) > 0) {
+        m_chatTree->Expand(m_groups);
+    }
+    if (m_chatTree->GetChildrenCount(m_channels) > 0) {
+        m_chatTree->Expand(m_channels);
+    }
+    if (m_chatTree->GetChildrenCount(m_bots) > 0) {
+        m_chatTree->Expand(m_bots);
+    }
+}
+
+void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>& messages)
+{
+    if (chatId != m_currentChatId) {
+        return;  // Not the current chat, ignore
+    }
+    
+    m_chatDisplay->BeginSuppressUndo();
+    m_chatDisplay->Clear();
+    ClearMediaSpans();
+    
+    // Messages are in reverse order (newest first), so display from end
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        DisplayMessage(*it);
+    }
+    
+    m_chatDisplay->EndSuppressUndo();
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+}
+
+void MainFrame::OnNewMessage(const MessageInfo& message)
+{
+    if (message.chatId != m_currentChatId) {
+        // Update unread count in tree
+        auto treeIt = m_chatIdToTreeItem.find(message.chatId);
+        if (treeIt != m_chatIdToTreeItem.end()) {
+            m_chatTree->SetItemBold(treeIt->second, true);
+        }
+        return;
+    }
+    
+    // Display the new message
+    DisplayMessage(message);
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+}
+
+void MainFrame::DisplayMessage(const MessageInfo& msg)
+{
+    wxString timestamp = FormatTimestamp(msg.date);
+    wxString sender = msg.senderName.IsEmpty() ? 
+        wxString::Format("User %lld", msg.senderId) : msg.senderName;
+    
+    // Handle forwarded messages
+    if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
+        AppendForwardMessage(timestamp, sender, msg.forwardedFrom, msg.text);
+        return;
+    }
+    
+    // Handle edited messages
+    if (msg.isEdited) {
+        AppendEditedMessage(timestamp, sender, msg.text);
+        return;
+    }
+    
+    // Handle media messages
+    if (msg.hasPhoto || msg.hasVideo || msg.hasDocument || msg.hasVoice || 
+        msg.hasVideoNote || msg.hasSticker || msg.hasAnimation) {
+        
+        MediaInfo mediaInfo;
+        mediaInfo.id = wxString::Format("%d", msg.mediaFileId);
+        mediaInfo.caption = msg.mediaCaption;
+        mediaInfo.fileName = msg.mediaFileName;
+        mediaInfo.localPath = msg.mediaLocalPath;
+        
+        if (msg.hasPhoto) {
+            mediaInfo.type = MediaType::Photo;
+        } else if (msg.hasVideo) {
+            mediaInfo.type = MediaType::Video;
+        } else if (msg.hasDocument) {
+            mediaInfo.type = MediaType::File;
+            mediaInfo.fileSize = wxString::Format("%lld bytes", msg.mediaFileSize);
+        } else if (msg.hasVoice) {
+            mediaInfo.type = MediaType::Voice;
+        } else if (msg.hasVideoNote) {
+            mediaInfo.type = MediaType::VideoNote;
+        } else if (msg.hasSticker) {
+            mediaInfo.type = MediaType::Sticker;
+            mediaInfo.emoji = msg.mediaCaption;
+        } else if (msg.hasAnimation) {
+            mediaInfo.type = MediaType::GIF;
+        }
+        
+        AppendMediaMessage(timestamp, sender, mediaInfo, msg.mediaCaption);
+        
+        // If there's also text, display it
+        if (!msg.text.IsEmpty() && !msg.text.StartsWith("[")) {
+            AppendMessage(timestamp, sender, msg.text);
+        }
+        return;
+    }
+    
+    // Regular text message
+    AppendMessage(timestamp, sender, msg.text);
+}
+
+void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText)
+{
+    if (chatId != m_currentChatId) {
+        return;
+    }
+    
+    // For now, just add a service message noting the edit
+    // A more sophisticated implementation would find and update the original message
+    AppendServiceMessage(wxDateTime::Now().Format("%H:%M:%S"),
+                        wxString::Format("Message %lld was edited: %s", messageId, newText));
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+}
+
+void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
+{
+    // Check if this is a pending download for media preview
+    auto it = m_pendingDownloads.find(fileId);
+    if (it != m_pendingDownloads.end()) {
+        MediaInfo& info = it->second;
+        info.localPath = localPath;
+        
+        // Update media popup if showing this file
+        if (m_mediaPopup && m_mediaPopup->IsShown()) {
+            const MediaInfo& popupInfo = m_mediaPopup->GetMediaInfo();
+            if (popupInfo.id == info.id) {
+                m_mediaPopup->SetImage(localPath);
+            }
+        }
+        
+        m_pendingDownloads.erase(it);
+    }
+    
+    // Update transfer manager
+    // Find transfer by checking pending transfers (simplified - in real impl would track by file ID)
+    SetStatusText("Download complete: " + localPath.AfterLast('/'), 1);
+}
+
+void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize)
+{
+    if (totalSize > 0) {
+        int percent = static_cast<int>((downloadedSize * 100) / totalSize);
+        if (m_progressGauge) {
+            m_progressGauge->SetValue(percent);
+        }
+        if (m_progressLabel) {
+            m_progressLabel->SetLabel(wxString::Format("⬇ %d%%", percent));
+        }
+    }
+}
+
+void MainFrame::ShowStatusError(const wxString& error)
+{
+    SetStatusText("Error: " + error, 1);
 }

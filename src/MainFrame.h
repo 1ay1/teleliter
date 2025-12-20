@@ -10,10 +10,17 @@
 #include <wx/clipbrd.h>
 #include <wx/gauge.h>
 #include <vector>
+#include <map>
 
 #include "MediaPopup.h"
 #include "FileDropTarget.h"
 #include "TransferManager.h"
+
+// Forward declarations
+class WelcomeChat;
+class TelegramClient;
+struct MessageInfo;
+struct ChatInfo;
 
 // Menu IDs - Telegram client menu structure
 enum {
@@ -59,36 +66,32 @@ enum class TelegramChatType {
     SavedMessages
 };
 
-// Simple struct for chat info (will be replaced by TDLib types later)
-struct TelegramChat {
-    int64_t id;
-    wxString title;
-    TelegramChatType type;
-    wxString lastMessage;
-    int unreadCount;
-    bool isMuted;
-    bool isPinned;
-};
-
-// Simple struct for user info
-struct TelegramUser {
-    int64_t id;
-    wxString firstName;
-    wxString lastName;
-    wxString username;
-    wxString status;  // online, last seen, etc.
-    bool isAdmin;
-    bool isOwner;
-    bool isBot;
-};
-
 class MainFrame : public wxFrame
 {
 public:
     MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size);
+    virtual ~MainFrame();
     
     // Called when files are dropped onto the chat
     void OnFilesDropped(const wxArrayString& files);
+    
+    // TelegramClient callbacks - called from TDLib thread via PostToMainThread
+    void OnConnected();  // Called when TDLib is ready (connected to Telegram servers)
+    void OnLoginSuccess(const wxString& userName);
+    void OnLoggedOut();
+    void RefreshChatList();
+    void OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>& messages);
+    void OnNewMessage(const MessageInfo& message);
+    void OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText);
+    void OnFileDownloaded(int32_t fileId, const wxString& localPath);
+    void OnFileProgress(int32_t fileId, int64_t downloadedSize, int64_t totalSize);
+    void ShowStatusError(const wxString& error);
+    
+    // Get TelegramClient for use by WelcomeChat
+    TelegramClient* GetTelegramClient() { return m_telegramClient; }
+    
+    // Get current chat ID
+    int64_t GetCurrentChatId() const { return m_currentChatId; }
     
 private:
     // UI Setup methods
@@ -97,7 +100,7 @@ private:
     void CreateChatList(wxWindow* parent);
     void CreateChatPanel(wxWindow* parent);
     void CreateMemberList(wxWindow* parent);
-    void CreateStatusBar();
+    void SetupStatusBar();
     void UpdateTransferProgress(const TransferInfo& info);
     void OnTransferComplete(const TransferInfo& info);
     void OnTransferError(const TransferInfo& info);
@@ -121,6 +124,9 @@ private:
                               const wxString& forwardFrom, const wxString& message);
     void AppendEditedMessage(const wxString& timestamp, const wxString& sender,
                              const wxString& message);
+    
+    // Display a MessageInfo from TDLib
+    void DisplayMessage(const MessageInfo& msg);
     
     wxColour GetUserColor(const wxString& username);
     
@@ -167,6 +173,12 @@ private:
     // Clipboard paste handler
     void HandleClipboardPaste();
     
+    // Helper to format timestamp from Unix time
+    wxString FormatTimestamp(int64_t unixTime);
+    
+    // TelegramClient instance
+    TelegramClient* m_telegramClient;
+    
     // Main splitter windows
     wxSplitterWindow* m_mainSplitter;      // Splits chat list from rest
     wxSplitterWindow* m_rightSplitter;     // Splits chat area from member list
@@ -180,9 +192,15 @@ private:
     wxTreeItemId m_groups;
     wxTreeItemId m_channels;
     wxTreeItemId m_bots;
+    wxTreeItemId m_teleliterItem;
+    
+    // Map tree items to chat IDs
+    std::map<wxTreeItemId, int64_t> m_treeItemToChatId;
+    std::map<int64_t, wxTreeItemId> m_chatIdToTreeItem;
     
     // Center panel - Chat area
     wxPanel* m_chatPanel;
+    WelcomeChat* m_welcomeChat;
     wxTextCtrl* m_chatInfoBar;       // Shows chat name/description
     wxRichTextCtrl* m_chatDisplay;
     wxTextCtrl* m_inputBox;
@@ -195,6 +213,9 @@ private:
     // Media popup for hover previews
     MediaPopup* m_mediaPopup;
     std::vector<MediaSpan> m_mediaSpans;
+    
+    // Map file IDs to media info for download tracking
+    std::map<int32_t, MediaInfo> m_pendingDownloads;
     
     // Transfer progress
     TransferManager m_transferManager;
@@ -244,6 +265,10 @@ private:
     wxString m_currentChatTitle;
     TelegramChatType m_currentChatType;
     
+    // Forward input to welcome chat when active
+    void ForwardInputToWelcomeChat(const wxString& input);
+    bool IsWelcomeChatActive() const;
+
     wxDECLARE_EVENT_TABLE();
 };
 
