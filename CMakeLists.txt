@@ -254,7 +254,6 @@ set(SOURCES
     src/ui/ChatListWidget.cpp
     src/ui/ChatViewWidget.cpp
     src/ui/InputBoxWidget.cpp
-    src/ui/StatusBarManager.cpp
     src/ui/LottiePlayer.cpp
     src/ui/WebmPlayer.cpp
     src/telegram/TransferManager.cpp

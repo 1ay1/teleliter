@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/popupwin.h>
 #include <wx/timer.h>
+#include <wx/gauge.h>
 #include <vector>
 #include <map>
 
@@ -101,6 +102,11 @@ public:
     void SetLoading(bool loading);
     bool IsLoading() const { return m_isLoading; }
     
+    // Download progress bar
+    void ShowDownloadProgress(const wxString& fileName, int percent);
+    void HideDownloadProgress();
+    void UpdateDownloadProgress(int percent);
+    
 private:
     void CreateLayout();
     void SetupDisplayControl();
@@ -146,6 +152,13 @@ private:
     // Topic bar (HexChat-style)
     wxPanel* m_topicBar;
     wxStaticText* m_topicText;
+    
+    // Download progress bar
+    wxPanel* m_downloadBar;
+    wxStaticText* m_downloadLabel;
+    wxGauge* m_downloadGauge;
+    wxTimer m_downloadHideTimer;
+    int m_activeDownloads;
     
     // Media spans for clickable media
     std::vector<MediaSpan> m_mediaSpans;
