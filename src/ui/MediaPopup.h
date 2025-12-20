@@ -46,6 +46,9 @@ public:
     void StopWebmSticker();
     bool IsPlayingWebmSticker() const { return m_isPlayingWebm; }
     
+    // Stop all playback (video, lottie, webm) - call before switching media or hiding
+    void StopAllPlayback();
+    
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
     
 protected:
@@ -67,6 +70,8 @@ private:
     void CreateMediaCtrl();
     void DestroyMediaCtrl();
     void FallbackToThumbnail();
+    void DrawMediaLabel(wxDC& dc, const wxSize& size);
+    bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
     
     wxColour m_bgColor;
     wxColour m_borderColor;

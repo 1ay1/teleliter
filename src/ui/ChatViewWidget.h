@@ -67,6 +67,7 @@ public:
     // Media popup
     void ShowMediaPopup(const MediaInfo& info, const wxPoint& position);
     void HideMediaPopup();
+    void ScheduleHideMediaPopup();
     void UpdateMediaPopup(int32_t fileId, const wxString& localPath);
     
     // Edit history popup
@@ -86,6 +87,7 @@ private:
     void OnMouseLeave(wxMouseEvent& event);
     void OnLeftDown(wxMouseEvent& event);
     void OnHoverTimer(wxTimerEvent& event);
+    void OnHideTimer(wxTimerEvent& event);
     
     MainFrame* m_mainFrame;
     wxRichTextCtrl* m_chatDisplay;
@@ -105,13 +107,19 @@ private:
     // Pending downloads (file ID -> media info)
     std::map<int32_t, MediaInfo> m_pendingDownloads;
     
-    // Hover debouncing
+    // Hover debouncing and popup management
     wxTimer m_hoverTimer;
+    wxTimer m_hideTimer;  // Delayed hide for smoother UX
     MediaInfo m_pendingHoverMedia;
     wxPoint m_pendingHoverPos;
-    int32_t m_lastShownMediaId;
+    MediaInfo m_currentlyShowingMedia;  // Track what's currently displayed
     long m_lastHoveredTextPos;
-    static const int HOVER_DELAY_MS = 150;  // Delay before showing popup
+    bool m_isOverMediaSpan;  // Track if mouse is currently over any media span
+    static const int HOVER_DELAY_MS = 200;  // Delay before showing popup
+    static const int HIDE_DELAY_MS = 300;   // Delay before hiding popup
+    
+    // Helper to check if two MediaInfo refer to the same media
+    bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
     
     // Colors
     wxColour m_bgColor;

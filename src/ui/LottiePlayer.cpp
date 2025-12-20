@@ -225,7 +225,6 @@ void LottiePlayer::Play()
 
 void LottiePlayer::Stop()
 {
-    std::cerr << "[LottiePlayer] Stop() called" << std::endl;
     m_timer.Stop();
     m_isPlaying = false;
     m_currentFrame = 0;
