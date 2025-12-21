@@ -45,7 +45,7 @@ void StatusBarManager::Setup()
     m_statusBar->SetBackgroundColour(m_bgColor);
     
     // Field widths: main area (flexible), session time (fixed), connection (fixed)
-    int widths[] = {-1, 80, 120};
+    int widths[] = {-1, 130, 120};
     m_statusBar->SetStatusWidths(3, widths);
     
     // Bind size event to reposition widgets when status bar resizes
@@ -119,7 +119,7 @@ void StatusBarManager::UpdateStatusBar()
     int hours = elapsed / 3600;
     int minutes = (elapsed % 3600) / 60;
     int seconds = elapsed % 60;
-    wxString sessionTime = wxString::Format("%02d:%02d:%02d", hours, minutes, seconds);
+    wxString sessionTime = wxString::Format("Uptime: %02d:%02d:%02d", hours, minutes, seconds);
     m_parent->SetStatusText(sessionTime, 1);
     
     // Field 2: Connection status with colors
