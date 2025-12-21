@@ -2119,6 +2119,33 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         }
                     }
                 }
+            } else if constexpr (std::is_same_v<T, td_api::messageAnimatedEmoji>) {
+                // Animated emoji - treat like a sticker for popup display
+                info.hasSticker = true;
+                info.mediaCaption = wxString::FromUTF8(c.emoji_);
+                
+                if (c.animated_emoji_ && c.animated_emoji_->sticker_) {
+                    auto& sticker = c.animated_emoji_->sticker_;
+                    if (sticker->sticker_) {
+                        info.mediaFileId = sticker->sticker_->id_;
+                        
+                        if (IsFileAvailableLocally(sticker->sticker_.get())) {
+                            info.mediaLocalPath = wxString::FromUTF8(sticker->sticker_->local_->path_);
+                        } else if (ShouldDownloadFile(sticker->sticker_.get())) {
+                            this->DownloadFile(sticker->sticker_->id_, 10, "Animated Emoji", 0);
+                        }
+                    }
+                    
+                    if (sticker->thumbnail_ && sticker->thumbnail_->file_) {
+                        info.mediaThumbnailFileId = sticker->thumbnail_->file_->id_;
+                        
+                        if (IsFileAvailableLocally(sticker->thumbnail_->file_.get())) {
+                            info.mediaThumbnailPath = wxString::FromUTF8(sticker->thumbnail_->file_->local_->path_);
+                        } else if (ShouldDownloadFile(sticker->thumbnail_->file_.get())) {
+                            this->DownloadFile(sticker->thumbnail_->file_->id_, 10, "Animated Emoji Thumbnail", 0);
+                        }
+                    }
+                }
             } else if constexpr (std::is_same_v<T, td_api::messageAnimation>) {
                 info.hasAnimation = true;
                 if (c.caption_) {
