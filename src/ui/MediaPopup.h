@@ -14,10 +14,12 @@
 // Forward declarations
 class LottiePlayer;
 class WebmPlayer;
+class FFmpegPlayer;
 
 // Timer IDs
 static const int LOADING_TIMER_ID = 10001;
 static const int LOTTIE_ANIM_TIMER_ID = 10002;
+static const int FFMPEG_ANIM_TIMER_ID = 10006;
 static const int WEBM_ANIM_TIMER_ID = 10003;
 static const int VIDEO_LOAD_TIMER_ID = 10004;
 static const int ASYNC_LOAD_TIMER_ID = 10005;
@@ -77,6 +79,8 @@ protected:
     void OnLottieFrame(const wxBitmap& frame);
     void OnWebmAnimTimer(wxTimerEvent& event);
     void OnWebmFrame(const wxBitmap& frame);
+    void OnFFmpegAnimTimer(wxTimerEvent& event);
+    void OnFFmpegFrame(const wxBitmap& frame);
     
 private:
     void UpdateSize();
@@ -86,6 +90,7 @@ private:
     void CreateMediaCtrl();
     void DestroyMediaCtrl();
     void FallbackToThumbnail();
+    void PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted);
     void DrawMediaLabel(wxDC& dc, const wxSize& size);
     bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
     
@@ -132,6 +137,11 @@ private:
     std::unique_ptr<WebmPlayer> m_webmPlayer;
     bool m_isPlayingWebm;
     wxTimer m_webmAnimTimer;
+    
+    // FFmpeg video playback (Linux)
+    std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
+    bool m_isPlayingFFmpeg;
+    wxTimer m_ffmpegAnimTimer;
     
     // Click callback
     std::function<void(const MediaInfo&)> m_clickCallback;

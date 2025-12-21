@@ -244,6 +244,49 @@ else()
     message(WARNING "rlottie not found - Animated stickers (.tgs) will show static thumbnails. Build rlottie from: https://github.com/Samsung/rlottie")
 endif()
 
+# Find FFmpeg libraries for video playback on Linux
+set(FFMPEG_FOUND FALSE)
+if(UNIX AND NOT APPLE)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(FFMPEG libavformat libavcodec libswscale libavutil)
+        if(FFMPEG_FOUND)
+            message(STATUS "Found FFmpeg: ${FFMPEG_LIBRARIES}")
+            add_definitions(-DHAVE_FFMPEG)
+        endif()
+    endif()
+
+    if(NOT FFMPEG_FOUND)
+        # Try to find manually
+        find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h
+            PATHS /usr/include /usr/local/include
+        )
+        find_library(AVFORMAT_LIBRARY avformat
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+        find_library(AVCODEC_LIBRARY avcodec
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+        find_library(SWSCALE_LIBRARY swscale
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+        find_library(AVUTIL_LIBRARY avutil
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+
+        if(AVFORMAT_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND AVUTIL_LIBRARY)
+            set(FFMPEG_FOUND TRUE)
+            set(FFMPEG_INCLUDE_DIRS ${AVFORMAT_INCLUDE_DIR})
+            set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${AVUTIL_LIBRARY})
+            message(STATUS "Found FFmpeg (manual): ${FFMPEG_LIBRARIES}")
+            add_definitions(-DHAVE_FFMPEG)
+        endif()
+    endif()
+
+    if(NOT FFMPEG_FOUND)
+        message(WARNING "FFmpeg not found - Video preview popups will show thumbnails on Linux. Install with: apt install libavformat-dev libavcodec-dev libswscale-dev libavutil-dev")
+    endif()
+endif()
+
 # Source files
 set(SOURCES
     src/ui/App.cpp
@@ -260,6 +303,7 @@ set(SOURCES
     src/ui/InputBoxWidget.cpp
     src/ui/LottiePlayer.cpp
     src/ui/WebmPlayer.cpp
+    src/ui/FFmpegPlayer.cpp
     src/telegram/TransferManager.cpp
     src/telegram/TelegramClient.cpp
     src/main.cpp
@@ -276,6 +320,7 @@ target_include_directories(teleliter PRIVATE
     ${RLOTTIE_INCLUDE_DIRS}
     ${VPX_INCLUDE_DIRS}
     ${WEBM_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
 )
 
 # Link libraries - order matters for static linking
@@ -289,6 +334,7 @@ target_link_libraries(teleliter
     ${RLOTTIE_LIBRARIES}
     ${VPX_LIBRARIES}
     ${WEBM_LIBRARIES}
+    ${FFMPEG_LIBRARIES}
     m
 )
 

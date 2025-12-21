@@ -2,6 +2,7 @@
 #include "FileUtils.h"
 #include "LottiePlayer.h"
 #include "WebmPlayer.h"
+#include "FFmpegPlayer.h"
 #include <wx/filename.h>
 #include <iostream>
 
@@ -64,6 +65,8 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID),
       m_isPlayingWebm(false),
       m_webmAnimTimer(this, WEBM_ANIM_TIMER_ID),
+      m_isPlayingFFmpeg(false),
+      m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID),
       m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID),
       m_asyncLoadPending(false),
       m_videoLoadStartTime(0)
@@ -83,6 +86,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
     // Bind webm animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnWebmAnimTimer, this, WEBM_ANIM_TIMER_ID);
     
+    // Bind ffmpeg animation timer event
+    Bind(wxEVT_TIMER, &MediaPopup::OnFFmpegAnimTimer, this, FFMPEG_ANIM_TIMER_ID);
+    
     // Bind async load timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
     
@@ -95,6 +101,8 @@ MediaPopup::~MediaPopup()
     StopAllPlayback();
     m_loadingTimer.Stop();
     m_asyncLoadTimer.Stop();
+    m_ffmpegAnimTimer.Stop();
+    m_ffmpegPlayer.reset();
     DestroyMediaCtrl();
     ClearFailedLoads();
 }
@@ -104,6 +112,7 @@ void MediaPopup::StopAllPlayback()
     // Stop all timers first
     m_lottieAnimTimer.Stop();
     m_webmAnimTimer.Stop();
+    m_ffmpegAnimTimer.Stop();
     m_loadingTimer.Stop();
     m_asyncLoadTimer.Stop();
     
@@ -125,6 +134,12 @@ void MediaPopup::StopAllPlayback()
         m_webmPlayer->Stop();
     }
     m_isPlayingWebm = false;
+    
+    // Stop FFmpeg playback
+    if (m_ffmpegPlayer) {
+        m_ffmpegPlayer->Stop();
+    }
+    m_isPlayingFFmpeg = false;
     
     // Reset loading state
     m_isLoading = false;
@@ -607,11 +622,13 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 {
     MPLOG("PlayVideo called: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
 
-#ifdef __WXGTK__
-    // On Linux, wxMediaCtrl with GStreamer is unreliable and can crash the app.
-    // Skip video playback entirely and fall back to thumbnail display.
-    // Users can click to open videos with their default player.
-    MPLOG("PlayVideo: disabled on Linux due to GStreamer instability, falling back to thumbnail");
+#if defined(__WXGTK__) && defined(HAVE_FFMPEG)
+    // On Linux, use FFmpegPlayer instead of wxMediaCtrl to avoid GStreamer crashes
+    PlayVideoWithFFmpeg(path, loop, muted);
+    return;
+#elif defined(__WXGTK__)
+    // No FFmpeg available on Linux, fall back to thumbnail
+    MPLOG("PlayVideo: FFmpeg not available on Linux, falling back to thumbnail");
     FallbackToThumbnail();
     return;
 #endif
@@ -629,16 +646,6 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     //   - wxMediaCtrl renders video directly inside its parent window
     //   - The popup window and video are properly composited together
     //   - Both Show() on popup and wxMediaCtrl work as expected
-    //
-    // Linux/Wayland (GStreamer backend):
-    //   - GStreamer creates its OWN separate top-level window for video output
-    //   - This window is independent of the wxMediaCtrl's parent (our popup)
-    //   - If we call Show() on the popup, we get TWO windows:
-    //     1. The MediaPopup (shows as a black square - just the background)
-    //     2. GStreamer's video window (shows the actual video playing)
-    //   - Solution: Don't show the popup at all, let GStreamer's window be the only visible one
-    //
-    // This is why we DON'T call Show() on the popup for video playback on Linux.
 
     // Stop all other playback first
     StopAllPlayback();
@@ -656,8 +663,6 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
 
     // Show the popup window - required on macOS for video to be visible
-    // On Linux/GStreamer, this may create a duplicate window, but that's better
-    // than not seeing the video at all on macOS
     Show();
     Raise();  // Bring popup to front
 
@@ -703,6 +708,122 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
         FallbackToThumbnail();
     }
 
+    Refresh();
+}
+
+void MediaPopup::PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted)
+{
+#ifdef HAVE_FFMPEG
+    MPLOG("PlayVideoWithFFmpeg: " << path.ToStdString());
+    
+    // Check if this video has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("PlayVideoWithFFmpeg: skipping recently failed video");
+        FallbackToThumbnail();
+        return;
+    }
+    
+    // Stop all other playback first
+    StopAllPlayback();
+    
+    m_videoPath = path;
+    m_loopVideo = loop;
+    m_videoMuted = muted;
+    m_hasImage = false;
+    
+    // Calculate video display size
+    int videoWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
+    int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
+    
+    // Create FFmpeg player if needed
+    if (!m_ffmpegPlayer) {
+        m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
+    }
+    
+    // Set render size before loading
+    m_ffmpegPlayer->SetRenderSize(videoWidth, videoHeight);
+    m_ffmpegPlayer->SetLoop(loop);
+    m_ffmpegPlayer->SetMuted(muted);
+    
+    // Set up frame callback
+    m_ffmpegPlayer->SetFrameCallback([this](const wxBitmap& frame) {
+        OnFFmpegFrame(frame);
+    });
+    
+    // Load the video
+    if (!m_ffmpegPlayer->LoadFile(path)) {
+        MPLOG("PlayVideoWithFFmpeg: failed to load video");
+        MarkLoadFailed(path);
+        m_ffmpegPlayer.reset();
+        FallbackToThumbnail();
+        return;
+    }
+    
+    // Get actual video dimensions and calculate scaled size
+    int vidWidth = m_ffmpegPlayer->GetWidth();
+    int vidHeight = m_ffmpegPlayer->GetHeight();
+    
+    if (vidWidth > 0 && vidHeight > 0) {
+        // Scale to fit within max dimensions while preserving aspect ratio
+        double scaleX = (double)videoWidth / vidWidth;
+        double scaleY = (double)videoHeight / vidHeight;
+        double scale = std::min(scaleX, scaleY);
+        
+        int scaledWidth = (int)(vidWidth * scale);
+        int scaledHeight = (int)(vidHeight * scale);
+        
+        // Update render size
+        m_ffmpegPlayer->SetRenderSize(scaledWidth, scaledHeight);
+        
+        // Set popup size
+        SetSize(scaledWidth + PADDING * 2 + BORDER_WIDTH * 2,
+                scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24);
+    } else {
+        SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    }
+    
+    // Start playback
+    m_ffmpegPlayer->Play();
+    m_isPlayingFFmpeg = true;
+    
+    // Start timer for frame updates
+    int interval = m_ffmpegPlayer->GetTimerIntervalMs();
+    m_ffmpegAnimTimer.Start(interval);
+    
+    Show();
+    Raise();
+    Refresh();
+    
+    MPLOG("PlayVideoWithFFmpeg: playback started, interval=" << interval << "ms");
+#else
+    // FFmpeg not available, fall back to thumbnail
+    FallbackToThumbnail();
+#endif
+}
+
+void MediaPopup::OnFFmpegAnimTimer(wxTimerEvent& event)
+{
+#ifdef HAVE_FFMPEG
+    if (!m_ffmpegPlayer || !m_isPlayingFFmpeg) {
+        m_ffmpegAnimTimer.Stop();
+        return;
+    }
+    
+    if (!m_ffmpegPlayer->AdvanceFrame()) {
+        // Video ended (and not looping)
+        m_ffmpegAnimTimer.Stop();
+        m_isPlayingFFmpeg = false;
+        MPLOG("OnFFmpegAnimTimer: video ended");
+    }
+#endif
+}
+
+void MediaPopup::OnFFmpegFrame(const wxBitmap& frame)
+{
+    if (!frame.IsOk()) return;
+    
+    m_bitmap = frame;
+    m_hasImage = true;
     Refresh();
 }
 
