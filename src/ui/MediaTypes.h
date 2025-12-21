@@ -41,11 +41,16 @@ struct MediaInfo {
 struct MediaSpan {
     long startPos;            // Start position in text
     long endPos;              // End position in text
-    MediaInfo info;           // Media information
+    int64_t messageId;        // Reference to source message (single source of truth)
+    int32_t fileId;           // File ID for quick lookup
+    int32_t thumbnailFileId;  // Thumbnail file ID
+    MediaType type;           // Media type
     
     bool Contains(long pos) const {
         return pos >= startPos && pos <= endPos;
     }
+    
+    MediaSpan() : startPos(0), endPos(0), messageId(0), fileId(0), thumbnailFileId(0), type(MediaType::Photo) {}
 };
 
 // Tracks edited message spans for showing edit history

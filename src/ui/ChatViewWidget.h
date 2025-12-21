@@ -71,10 +71,16 @@ public:
     void ClearTopicText();
     
     // Media span tracking
-    void AddMediaSpan(long startPos, long endPos, const MediaInfo& info);
+    void AddMediaSpan(long startPos, long endPos, const MediaInfo& info, int64_t messageId);
     MediaSpan* GetMediaSpanAtPosition(long pos);
     void ClearMediaSpans();
-    void UpdateMediaSpanPath(int32_t fileId, const wxString& localPath, bool isThumbnail = false);
+    void UpdateMediaPath(int32_t fileId, const wxString& localPath);
+    
+    // Message lookup - single source of truth
+    MessageInfo* GetMessageById(int64_t messageId);
+    const MessageInfo* GetMessageById(int64_t messageId) const;
+    MessageInfo* GetMessageByFileId(int32_t fileId);
+    MediaInfo GetMediaInfoForSpan(const MediaSpan& span) const;
     
     // Edit span tracking (for showing original text on hover)
     void AddEditSpan(long startPos, long endPos, int64_t messageId, 
@@ -104,11 +110,15 @@ public:
     }
     wxString GetCurrentUsername() const { return m_currentUsername; }
     
-    // Pending downloads
-    void AddPendingDownload(int32_t fileId, const MediaInfo& info);
+    // Pending downloads - tracks fileIds currently being downloaded
+    void AddPendingDownload(int32_t fileId);
     bool HasPendingDownload(int32_t fileId) const;
-    MediaInfo GetPendingDownload(int32_t fileId) const;
     void RemovePendingDownload(int32_t fileId);
+    
+    // Pending opens - tracks fileIds that should be opened when download completes
+    void AddPendingOpen(int32_t fileId);
+    bool HasPendingOpen(int32_t fileId) const;
+    void RemovePendingOpen(int32_t fileId);
     
     // Media popup
     void ShowMediaPopup(const MediaInfo& info, const wxPoint& position);
@@ -209,8 +219,11 @@ private:
     // Link spans for clickable URLs
     std::vector<LinkSpan> m_linkSpans;
     
-    // Pending downloads (file ID -> media info)
-    std::map<int32_t, MediaInfo> m_pendingDownloads;
+    // Pending downloads - just tracks which fileIds are being downloaded
+    std::set<int32_t> m_pendingDownloads;
+    
+    // Pending opens - fileIds that should be opened when download completes
+    std::set<int32_t> m_pendingOpens;
     
     // Debounced refresh timer - coalesces multiple rapid message updates
     wxTimer m_refreshTimer;

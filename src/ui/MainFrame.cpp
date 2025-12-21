@@ -557,7 +557,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:02", "Alice", photoInfo, "Beautiful sunset I captured yesterday");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, photoInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, photoInfo, 0);
             }
 
             // Video message
@@ -570,7 +570,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:03", "Bob", videoInfo, "Check out this funny cat video!");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoInfo, 0);
             }
 
             // Document/File message
@@ -583,7 +583,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:04", "Charlie", fileInfo, "Here's that PDF you asked for");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, fileInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, fileInfo, 0);
             }
 
             // Voice message
@@ -594,7 +594,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:05", "David", voiceInfo, "");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, voiceInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, voiceInfo, 0);
             }
 
             // Video note (round video)
@@ -605,7 +605,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:06", "Eve", videoNoteInfo, "");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoNoteInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, videoNoteInfo, 0);
             }
 
             // Sticker
@@ -617,7 +617,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:07", "Frank", stickerInfo, "");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, stickerInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, stickerInfo, 0);
             }
 
             // GIF/Animation
@@ -629,7 +629,7 @@ void MainFrame::PopulateDummyData()
                 long startPos = display->GetLastPosition();
                 formatter->AppendMediaMessage("12:08", "Grace", gifInfo, "This is hilarious!");
                 long endPos = display->GetLastPosition();
-                m_chatViewWidget->AddMediaSpan(startPos, endPos, gifInfo);
+                m_chatViewWidget->AddMediaSpan(startPos, endPos, gifInfo, 0);
             }
 
             // Action message (/me)
@@ -1505,8 +1505,8 @@ void MainFrame::OnFileDownloaded(int32_t fileId, const wxString& localPath)
 
     // Check if this is a pending download for media preview in ChatViewWidget
     if (m_chatViewWidget) {
-        // Update all media spans that reference this fileId (handles both main files and thumbnails)
-        m_chatViewWidget->UpdateMediaSpanPath(fileId, localPath);
+        // Update m_messages (single source of truth) with the downloaded file path
+        m_chatViewWidget->UpdateMediaPath(fileId, localPath);
 
         // Update media popup if it's showing this file
         m_chatViewWidget->UpdateMediaPopup(fileId, localPath);

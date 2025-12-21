@@ -211,7 +211,7 @@ void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo& info)
                 
                 wxString displayName = info.fileName.IsEmpty() ? "Auto-download" : info.fileName;
                 client->DownloadFile(info.fileId, priority, displayName, 0);
-                AddPendingDownload(info.fileId, info);
+                AddPendingDownload(info.fileId);
             }
         }
     }
@@ -409,7 +409,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -427,7 +427,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -444,7 +444,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -458,7 +458,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -474,7 +474,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -491,7 +491,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -508,7 +508,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
-        AddMediaSpan(startPos, endPos, info);
+        AddMediaSpan(startPos, endPos, info, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -743,14 +743,17 @@ void ChatViewWidget::SetLoading(bool loading)
     // Could add a loading indicator here in the future
 }
 
-void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& info)
+void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& info, int64_t messageId)
 {
     CVWLOG("AddMediaSpan: fileId=" << info.fileId << " thumbId=" << info.thumbnailFileId 
-           << " pos=" << startPos << "-" << endPos);
+           << " pos=" << startPos << "-" << endPos << " msgId=" << messageId);
     MediaSpan span;
     span.startPos = startPos;
     span.endPos = endPos;
-    span.info = info;
+    span.messageId = messageId;
+    span.fileId = info.fileId;
+    span.thumbnailFileId = info.thumbnailFileId;
+    span.type = info.type;
     
     size_t index = m_mediaSpans.size();
     m_mediaSpans.push_back(span);
@@ -762,6 +765,56 @@ void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& i
     if (info.thumbnailFileId != 0) {
         m_fileIdToSpanIndex[info.thumbnailFileId].push_back(index);
     }
+}
+
+MessageInfo* ChatViewWidget::GetMessageById(int64_t messageId)
+{
+    for (auto& msg : m_messages) {
+        if (msg.id == messageId) {
+            return &msg;
+        }
+    }
+    return nullptr;
+}
+
+const MessageInfo* ChatViewWidget::GetMessageById(int64_t messageId) const
+{
+    for (const auto& msg : m_messages) {
+        if (msg.id == messageId) {
+            return &msg;
+        }
+    }
+    return nullptr;
+}
+
+MessageInfo* ChatViewWidget::GetMessageByFileId(int32_t fileId)
+{
+    for (auto& msg : m_messages) {
+        if (msg.mediaFileId == fileId || msg.mediaThumbnailFileId == fileId) {
+            return &msg;
+        }
+    }
+    return nullptr;
+}
+
+MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan& span) const
+{
+    MediaInfo info;
+    info.type = span.type;
+    info.fileId = span.fileId;
+    info.thumbnailFileId = span.thumbnailFileId;
+    
+    // Look up the message to get current paths (single source of truth)
+    const MessageInfo* msg = GetMessageById(span.messageId);
+    if (msg) {
+        info.localPath = msg->mediaLocalPath;
+        info.thumbnailPath = msg->mediaThumbnailPath;
+        info.fileName = msg->mediaFileName;
+        info.caption = msg->mediaCaption;
+        info.isDownloading = false;  // Will be set by caller if needed
+    }
+    
+    return info;
 }
 
 MediaSpan* ChatViewWidget::GetMediaSpanAtPosition(long pos)
@@ -780,37 +833,27 @@ void ChatViewWidget::ClearMediaSpans()
     m_fileIdToSpanIndex.clear();
 }
 
-void ChatViewWidget::UpdateMediaSpanPath(int32_t fileId, const wxString& localPath, bool isThumbnail)
+void ChatViewWidget::UpdateMediaPath(int32_t fileId, const wxString& localPath)
 {
     if (fileId == 0 || localPath.IsEmpty()) return;
     
-    // Use fast O(1) lookup instead of O(n) linear scan
-    auto it = m_fileIdToSpanIndex.find(fileId);
-    if (it == m_fileIdToSpanIndex.end()) {
-        // No spans reference this fileId
-        return;
-    }
-    
     int updatedCount = 0;
-    for (size_t index : it->second) {
-        if (index >= m_mediaSpans.size()) continue;  // Stale index check
-        
-        MediaSpan& span = m_mediaSpans[index];
-        
-        // Check if this is the main file
-        if (span.info.fileId == fileId) {
-            span.info.localPath = localPath;
-            span.info.isDownloading = false;
+    
+    // Update m_messages - the SINGLE SOURCE OF TRUTH
+    for (auto& msg : m_messages) {
+        if (msg.mediaFileId == fileId) {
+            msg.mediaLocalPath = localPath;
             updatedCount++;
+            CVWLOG("UpdateMediaPath: updated message id=" << msg.id << " mediaLocalPath=" << localPath.ToStdString());
         }
-        // Also check if this is a thumbnail
-        if (span.info.thumbnailFileId == fileId) {
-            span.info.thumbnailPath = localPath;
+        if (msg.mediaThumbnailFileId == fileId) {
+            msg.mediaThumbnailPath = localPath;
             updatedCount++;
+            CVWLOG("UpdateMediaPath: updated message id=" << msg.id << " mediaThumbnailPath=" << localPath.ToStdString());
         }
     }
     
-    CVWLOG("UpdateMediaSpanPath: fileId=" << fileId << " updated " << updatedCount << " spans (fast path)");
+    CVWLOG("UpdateMediaPath: fileId=" << fileId << " updated " << updatedCount << " messages");
 }
 
 void ChatViewWidget::AddEditSpan(long startPos, long endPos, int64_t messageId,
@@ -947,28 +990,34 @@ void ChatViewWidget::SetUserColors(const wxColour* colors)
     }
 }
 
-void ChatViewWidget::AddPendingDownload(int32_t fileId, const MediaInfo& info)
+void ChatViewWidget::AddPendingDownload(int32_t fileId)
 {
-    m_pendingDownloads[fileId] = info;
+    m_pendingDownloads.insert(fileId);
 }
 
 bool ChatViewWidget::HasPendingDownload(int32_t fileId) const
 {
-    return m_pendingDownloads.find(fileId) != m_pendingDownloads.end();
-}
-
-MediaInfo ChatViewWidget::GetPendingDownload(int32_t fileId) const
-{
-    auto it = m_pendingDownloads.find(fileId);
-    if (it != m_pendingDownloads.end()) {
-        return it->second;
-    }
-    return MediaInfo();
+    return m_pendingDownloads.count(fileId) > 0;
 }
 
 void ChatViewWidget::RemovePendingDownload(int32_t fileId)
 {
     m_pendingDownloads.erase(fileId);
+}
+
+void ChatViewWidget::AddPendingOpen(int32_t fileId)
+{
+    m_pendingOpens.insert(fileId);
+}
+
+bool ChatViewWidget::HasPendingOpen(int32_t fileId) const
+{
+    return m_pendingOpens.count(fileId) > 0;
+}
+
+void ChatViewWidget::RemovePendingOpen(int32_t fileId)
+{
+    m_pendingOpens.erase(fileId);
 }
 
 void ChatViewWidget::ShowDownloadProgress(const wxString& fileName, int percent)
@@ -1064,7 +1113,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
                     wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
                     client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
-                    AddPendingDownload(info.thumbnailFileId, info);
+                    AddPendingDownload(info.thumbnailFileId);
                 } else if (client && client->IsDownloading(info.thumbnailFileId)) {
                     // Already downloading - boost priority since user clicked
                     client->BoostDownloadPriority(info.thumbnailFileId);
@@ -1118,7 +1167,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     CVWLOG("ShowMediaPopup: downloading media file, fileId=" << info.fileId << " name=" << displayName.ToStdString());
                     client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
                     // Track this as a pending download so we can update popup when complete
-                    AddPendingDownload(info.fileId, info);
+                    AddPendingDownload(info.fileId);
                 } else if (client->IsDownloading(info.fileId)) {
                     // Already downloading - boost priority since user clicked
                     CVWLOG("ShowMediaPopup: boosting download priority for fileId=" << info.fileId);
@@ -1260,10 +1309,9 @@ void ChatViewWidget::OpenMedia(const MediaInfo& info)
         // Need to download first, then open
         TelegramClient* client = m_mainFrame->GetTelegramClient();
         if (client) {
-            // Mark this as a pending open (not just preview)
-            MediaInfo infoWithOpenFlag = info;
-            infoWithOpenFlag.isDownloading = true;  // Use this to track pending open
-            AddPendingDownload(info.fileId, infoWithOpenFlag);
+            // Mark this as a pending open (will open when download completes)
+            AddPendingDownload(info.fileId);
+            AddPendingOpen(info.fileId);
             
             // Get display name for download indicator
             wxString displayName = info.fileName;
@@ -1283,13 +1331,15 @@ void ChatViewWidget::OpenMedia(const MediaInfo& info)
 
 void ChatViewWidget::OnMediaDownloadComplete(int32_t fileId, const wxString& localPath)
 {
-    // Check if this was a user-initiated download (click to open)
-    if (HasPendingDownload(fileId)) {
-        MediaInfo info = GetPendingDownload(fileId);
-        RemovePendingDownload(fileId);
-
-        // If isDownloading flag was set, user clicked to open - so open it now
-        if (info.isDownloading && !localPath.IsEmpty() && wxFileExists(localPath)) {
+    // Clean up pending download tracking
+    RemovePendingDownload(fileId);
+    
+    // Check if this was a user-initiated "open" request
+    if (HasPendingOpen(fileId)) {
+        RemovePendingOpen(fileId);
+        
+        // Open the file now that it's downloaded
+        if (!localPath.IsEmpty() && wxFileExists(localPath)) {
             wxLaunchDefaultApplication(localPath);
         }
     }
@@ -1453,7 +1503,8 @@ void ChatViewWidget::OnRightDown(wxMouseEvent& event)
 
         MediaSpan* mediaSpan = GetMediaSpanAtPosition(textPos);
         if (mediaSpan) {
-            m_contextMenuMedia = mediaSpan->info;
+            // Get fresh MediaInfo from m_messages (single source of truth)
+            m_contextMenuMedia = GetMediaInfoForSpan(*mediaSpan);
         } else {
             m_contextMenuMedia = MediaInfo();
         }
@@ -1648,25 +1699,28 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent& event)
     if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
+            // Get fresh MediaInfo from m_messages (single source of truth)
+            MediaInfo info = GetMediaInfoForSpan(*span);
+            
             // Show popup on click for visual media types
-            bool isVisualMedia = (span->info.type == MediaType::Photo ||
-                                  span->info.type == MediaType::Video ||
-                                  span->info.type == MediaType::Sticker ||
-                                  span->info.type == MediaType::GIF ||
-                                  span->info.type == MediaType::VideoNote);
+            bool isVisualMedia = (info.type == MediaType::Photo ||
+                                  info.type == MediaType::Video ||
+                                  info.type == MediaType::Sticker ||
+                                  info.type == MediaType::GIF ||
+                                  info.type == MediaType::VideoNote);
 
             if (isVisualMedia) {
                 // Toggle popup - if already showing same media, hide it; otherwise show it
                 if (m_mediaPopup && m_mediaPopup->IsShown() && 
-                    IsSameMedia(m_currentlyShowingMedia, span->info)) {
+                    IsSameMedia(m_currentlyShowingMedia, info)) {
                     HideMediaPopup();
                 } else {
                     wxPoint screenPos = ctrl->ClientToScreen(pos);
-                    ShowMediaPopup(span->info, screenPos);
+                    ShowMediaPopup(info, screenPos);
                 }
             } else {
                 // Non-visual media (Voice, File) - open directly
-                OpenMedia(span->info);
+                OpenMedia(info);
             }
             return; // Don't skip - we handled the click
         }
