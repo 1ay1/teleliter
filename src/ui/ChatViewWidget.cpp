@@ -2,6 +2,7 @@
 #include "MainFrame.h"
 #include "MessageFormatter.h"
 #include "MediaPopup.h"
+#include "InputBoxWidget.h"
 #include <iostream>
 #include <algorithm>
 
@@ -1404,6 +1405,28 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent& event)
             break;
 
         default:
+            // Forward printable characters to input box
+            if (!event.ControlDown() && !event.AltDown() && !event.CmdDown()) {
+                int keyCode = event.GetKeyCode();
+                // Check if it's a printable character
+                if (keyCode >= 32 && keyCode < 127) {
+                    InputBoxWidget* inputBox = m_mainFrame ? m_mainFrame->GetInputBoxWidget() : nullptr;
+                    if (inputBox) {
+                        inputBox->SetFocus();
+                        // Add the character to the input box
+                        wxStyledTextCtrl* stc = inputBox->GetTextCtrl();
+                        if (stc) {
+                            wxString ch((wxChar)keyCode);
+                            if (event.ShiftDown()) {
+                                stc->AddText(ch);
+                            } else {
+                                stc->AddText(ch.Lower());
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
             event.Skip();
             break;
     }

@@ -2,6 +2,7 @@
 #define INPUTBOXWIDGET_H
 
 #include <wx/wx.h>
+#include <wx/stc/stc.h>
 #include <wx/menu.h>
 #include <deque>
 #include <vector>
@@ -44,7 +45,7 @@ public:
     void SetWelcomeChat(WelcomeChat* welcomeChat) { m_welcomeChat = welcomeChat; }
     
     // Access to underlying text control
-    wxTextCtrl* GetTextCtrl() { return m_inputBox; }
+    wxStyledTextCtrl* GetTextCtrl() { return m_inputBox; }
     
     // Current user name (for message display)
     void SetCurrentUser(const wxString& user) { m_currentUser = user; }
@@ -64,10 +65,14 @@ public:
 private:
     void CreateLayout();
     void CreateButtons();
+    void UpdatePlaceholder();
     
     // Event handlers
     void OnTextEnter(wxCommandEvent& event);
     void OnKeyDown(wxKeyEvent& event);
+    void OnTextChanged(wxStyledTextEvent& event);
+    void OnFocusGained(wxFocusEvent& event);
+    void OnFocusLost(wxFocusEvent& event);
     void OnUploadClick(wxCommandEvent& event);
     void OnUploadPhoto(wxCommandEvent& event);
     void OnUploadVideo(wxCommandEvent& event);
@@ -104,7 +109,7 @@ private:
     wxListCtrl* m_memberList;
     MessageFormatter* m_messageFormatter;
     WelcomeChat* m_welcomeChat;
-    wxTextCtrl* m_inputBox;
+    wxStyledTextCtrl* m_inputBox;
     
     // Upload button
     wxButton* m_uploadBtn;
@@ -126,6 +131,11 @@ private:
     wxColour m_bgColor;
     wxColour m_fgColor;
     wxFont m_font;
+    
+    // Placeholder
+    wxString m_placeholder;
+    bool m_showingPlaceholder;
+    wxColour m_placeholderColor;
     
     // Button and menu IDs
     static const int ID_UPLOAD_BTN = wxID_HIGHEST + 100;

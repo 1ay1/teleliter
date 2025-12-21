@@ -280,7 +280,7 @@ void MainFrame::SetupFonts()
     int chatFontSize = 9;
     int treeFontSize = 9;
     int memberFontSize = 9;
-    int inputFontSize = 9;  // Same as ChatArea font
+    int inputFontSize = 8;  // Smaller than ChatArea font
 #endif
 
     m_chatFont = wxFont(chatFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);

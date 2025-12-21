@@ -30,7 +30,7 @@ void ChatArea::SetupColors()
 #ifdef __WXOSX__
     int fontSize = 12;
 #else
-    int fontSize = 9;
+    int fontSize = 8;
 #endif
     m_chatFont = wxFont(fontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 
@@ -51,7 +51,7 @@ void ChatArea::SetupColors()
     m_userColors[13] = wxColour(0xAD, 0x7F, 0xA8);  // Pink/mauve
     m_userColors[14] = wxColour(0xFC, 0xAF, 0x3E);  // Gold
     m_userColors[15] = wxColour(0x8A, 0xE2, 0x34);  // Yellow-green
-    
+
     // Gray color for current user (not in the hash palette)
     m_selfColor = wxColour(0xAA, 0xAA, 0xAA);
 }
@@ -91,11 +91,11 @@ void ChatArea::Clear()
 void ChatArea::ResetStyles()
 {
     if (!m_chatDisplay) return;
-    
+
     // Force end any potentially open style blocks
     // This prevents style leaking (especially underline) from corrupting future text
     m_chatDisplay->EndAllStyles();
-    
+
     // Reset all text styles to prevent style corruption from leaking
     // This ensures underline, bold, italic, etc. don't persist
     wxRichTextAttr defaultStyle;
@@ -339,12 +339,12 @@ wxColour ChatArea::GetUserColor(const wxString& username) const
     if (username.IsEmpty()) {
         return m_userColors[0];
     }
-    
+
     // Current user always gets gray
     if (!m_currentUsername.IsEmpty() && username == m_currentUsername) {
         return m_selfColor;
     }
-    
+
     // Other users get a color from the palette (no grays)
     unsigned long hash = 0;
     for (size_t i = 0; i < username.length(); i++) {

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find wxWidgets
-find_package(wxWidgets REQUIRED COMPONENTS core base richtext media)
+find_package(wxWidgets REQUIRED COMPONENTS core base richtext media stc)
 include(${wxWidgets_USE_FILE})
 
 # Find TDLib - prefer locally built version in ~/.local
