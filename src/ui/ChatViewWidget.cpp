@@ -622,6 +622,38 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo>& messages)
     RefreshDisplay();
 }
 
+void ChatViewWidget::UpdateMessage(const MessageInfo& msg)
+{
+    if (msg.id == 0) return;
+    
+    CVWLOG("UpdateMessage: msgId=" << msg.id << " fileId=" << msg.mediaFileId 
+           << " thumbId=" << msg.mediaThumbnailFileId);
+    
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        for (auto& existingMsg : m_messages) {
+            if (existingMsg.id == msg.id) {
+                // Update media fields that may have changed
+                existingMsg.mediaFileId = msg.mediaFileId;
+                existingMsg.mediaThumbnailFileId = msg.mediaThumbnailFileId;
+                existingMsg.mediaLocalPath = msg.mediaLocalPath;
+                existingMsg.mediaThumbnailPath = msg.mediaThumbnailPath;
+                existingMsg.mediaFileName = msg.mediaFileName;
+                existingMsg.mediaFileSize = msg.mediaFileSize;
+                found = true;
+                CVWLOG("UpdateMessage: updated existing message");
+                break;
+            }
+        }
+    }
+    
+    if (found) {
+        // Refresh display to show updated media
+        ScheduleRefresh();
+    }
+}
+
 void ChatViewWidget::BeginBatchUpdate()
 {
     if (m_batchUpdateDepth == 0 && m_chatArea) {
@@ -801,17 +833,32 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan& span) const
 {
     MediaInfo info;
     info.type = span.type;
-    info.fileId = span.fileId;
-    info.thumbnailFileId = span.thumbnailFileId;
     
-    // Look up the message to get current paths (single source of truth)
+    // Look up the message to get current file IDs and paths (single source of truth)
+    // The message may have been updated with file IDs since the span was created
     const MessageInfo* msg = GetMessageById(span.messageId);
     if (msg) {
+        // Prefer message's file IDs over span's (message is updated, span is not)
+        info.fileId = (msg->mediaFileId != 0) ? msg->mediaFileId : span.fileId;
+        info.thumbnailFileId = (msg->mediaThumbnailFileId != 0) ? msg->mediaThumbnailFileId : span.thumbnailFileId;
         info.localPath = msg->mediaLocalPath;
         info.thumbnailPath = msg->mediaThumbnailPath;
         info.fileName = msg->mediaFileName;
         info.caption = msg->mediaCaption;
         info.isDownloading = false;  // Will be set by caller if needed
+        
+        // If still no file IDs, request a refetch from TDLib
+        if (info.fileId == 0 && info.thumbnailFileId == 0 && m_mainFrame) {
+            TelegramClient* client = m_mainFrame->GetTelegramClient();
+            if (client && msg->chatId != 0 && msg->id != 0) {
+                CVWLOG("GetMediaInfoForSpan: no file IDs, requesting refetch for msgId=" << msg->id);
+                client->RefetchMessage(msg->chatId, msg->id);
+            }
+        }
+    } else {
+        // Fallback to span's file IDs if message not found
+        info.fileId = span.fileId;
+        info.thumbnailFileId = span.thumbnailFileId;
     }
     
     return info;

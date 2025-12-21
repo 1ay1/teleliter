@@ -1466,6 +1466,20 @@ void MainFrame::DisplayMessage(const MessageInfo& msg)
     m_chatViewWidget->DisplayMessage(msg);
 }
 
+void MainFrame::OnMessageUpdated(int64_t chatId, const MessageInfo& message)
+{
+    // Only update if this is the current chat
+    if (chatId != m_currentChatId) return;
+    
+    if (!m_chatViewWidget) return;
+    
+    DBGLOG("OnMessageUpdated: chatId=" << chatId << " msgId=" << message.id 
+           << " fileId=" << message.mediaFileId << " thumbId=" << message.mediaThumbnailFileId);
+    
+    // Update the message in ChatViewWidget's storage and refresh display
+    m_chatViewWidget->UpdateMessage(message);
+}
+
 void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId, const wxString& newText, const wxString& senderName)
 {
     if (chatId != m_currentChatId) {

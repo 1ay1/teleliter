@@ -43,6 +43,9 @@ public:
     // Call RefreshDisplay() after adding messages to update the view
     void AddMessage(const MessageInfo& msg);
     
+    // Update an existing message (e.g., when media info becomes available)
+    void UpdateMessage(const MessageInfo& msg);
+    
     // Get stored messages (for debugging/inspection)
     const std::vector<MessageInfo>& GetMessages() const { return m_messages; }
     size_t GetMessageCount() const { return m_messages.size(); }

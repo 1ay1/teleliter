@@ -901,6 +901,69 @@ void TelegramClient::SendFile(int64_t chatId, const wxString& filePath, const wx
     });
 }
 
+void TelegramClient::RefetchMessage(int64_t chatId, int64_t messageId)
+{
+    if (chatId == 0 || messageId == 0) {
+        TDLOG("RefetchMessage: invalid chatId=%lld or messageId=%lld", (long long)chatId, (long long)messageId);
+        return;
+    }
+    
+    TDLOG("RefetchMessage: fetching chatId=%lld messageId=%lld", (long long)chatId, (long long)messageId);
+    
+    auto request = td_api::make_object<td_api::getMessage>();
+    request->chat_id_ = chatId;
+    request->message_id_ = messageId;
+    
+    Send(std::move(request), [this, chatId, messageId](td_api::object_ptr<td_api::Object> result) {
+        if (!result) {
+            TDLOG("RefetchMessage: no response for messageId=%lld", (long long)messageId);
+            return;
+        }
+        
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            TDLOG("RefetchMessage: error %d: %s", error->code_, error->message_.c_str());
+            (void)error;  // Suppress unused variable warning when TDLOG is disabled
+            return;
+        }
+        
+        if (result->get_id() == td_api::message::ID) {
+            auto msg = td_api::move_object_as<td_api::message>(result);
+            MessageInfo updatedInfo = ConvertMessage(msg.get());
+            
+            TDLOG("RefetchMessage: got updated message, fileId=%d thumbId=%d", 
+                  updatedInfo.mediaFileId, updatedInfo.mediaThumbnailFileId);
+            
+            // Update the cached message
+            {
+                std::lock_guard<std::mutex> lock(m_dataMutex);
+                auto it = m_messages.find(chatId);
+                if (it != m_messages.end()) {
+                    for (auto& cachedMsg : it->second) {
+                        if (cachedMsg.id == messageId) {
+                            // Update media fields
+                            cachedMsg.mediaFileId = updatedInfo.mediaFileId;
+                            cachedMsg.mediaThumbnailFileId = updatedInfo.mediaThumbnailFileId;
+                            cachedMsg.mediaLocalPath = updatedInfo.mediaLocalPath;
+                            cachedMsg.mediaThumbnailPath = updatedInfo.mediaThumbnailPath;
+                            TDLOG("RefetchMessage: updated cached message fileId=%d thumbId=%d",
+                                  cachedMsg.mediaFileId, cachedMsg.mediaThumbnailFileId);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Notify UI to refresh the message display
+            PostToMainThread([this, chatId, updatedInfo]() {
+                if (m_mainFrame) {
+                    m_mainFrame->OnMessageUpdated(chatId, updatedInfo);
+                }
+            });
+        }
+    });
+}
+
 void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& fileName, int64_t fileSize)
 {
     if (fileId == 0) {

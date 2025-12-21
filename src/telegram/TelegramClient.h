@@ -72,6 +72,9 @@ public:
     bool IsDownloading(int32_t fileId) const;
     DownloadState GetDownloadState(int32_t fileId) const;
     
+    // Re-fetch a message from TDLib to get updated file info (for incomplete stickers etc.)
+    void RefetchMessage(int64_t chatId, int64_t messageId);
+    
     // Smart auto-download for chat media
     // Call when opening a chat to preemptively download visible media
     void AutoDownloadChatMedia(int64_t chatId, int messageLimit = 50);
