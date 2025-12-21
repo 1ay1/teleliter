@@ -1065,9 +1065,11 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         return;
     }
     
-    // Validate input - must have either a fileId or a localPath
-    if (info.fileId == 0 && info.localPath.IsEmpty() && info.thumbnailPath.IsEmpty()) {
-        CVWLOG("ShowMediaPopup: no valid media reference (fileId=0, no paths)");
+    // Validate input - must have either a fileId, thumbnailFileId, or a local path
+    // Stickers may only have thumbnailFileId initially before the main sticker downloads
+    if (info.fileId == 0 && info.thumbnailFileId == 0 && 
+        info.localPath.IsEmpty() && info.thumbnailPath.IsEmpty()) {
+        CVWLOG("ShowMediaPopup: no valid media reference (fileId=0, thumbnailFileId=0, no paths)");
         return;
     }
 
@@ -1100,12 +1102,15 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
     // Also hide edit history popup
     HideEditHistoryPopup();
     
-    CVWLOG("ShowMediaPopup: fileId=" << info.fileId << " type=" << static_cast<int>(info.type)
+    CVWLOG("ShowMediaPopup: fileId=" << info.fileId << " thumbnailFileId=" << info.thumbnailFileId
+           << " type=" << static_cast<int>(info.type)
            << " localPath=" << info.localPath.ToStdString()
            << " thumbnailPath=" << info.thumbnailPath.ToStdString());
 
     // For stickers, download the thumbnail if not already available
+    // Some stickers may only have thumbnailFileId (animated emoji, etc.)
     if (info.type == MediaType::Sticker) {
+        // Try to download thumbnail first (for preview)
         if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
             if (m_mainFrame) {
                 TelegramClient* client = m_mainFrame->GetTelegramClient();
@@ -1122,8 +1127,8 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     
                     if (!clientDownloading && !hasPending) {
                         CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
-                        wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
-                        client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
+                        wxString displayName = info.fileName.IsEmpty() ? "Sticker Thumbnail" : info.fileName;
+                        client->DownloadFile(info.thumbnailFileId, 12, displayName, 0);  // Higher priority for thumbnails
                         AddPendingDownload(info.thumbnailFileId);
                     } else if (clientDownloading) {
                         // Already downloading - boost priority since user clicked
@@ -1131,6 +1136,13 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     }
                 }
             }
+        }
+        
+        // If fileId is 0 but we have thumbnailFileId, use thumbnail as main display
+        // This handles animated emoji and other stickers where main file isn't available
+        if (info.fileId == 0 && info.thumbnailFileId != 0) {
+            CVWLOG("ShowMediaPopup: sticker has no main fileId, using thumbnail only");
+            // The popup will show the thumbnail when it becomes available
         }
     }
 
