@@ -1109,14 +1109,26 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
             if (m_mainFrame) {
                 TelegramClient* client = m_mainFrame->GetTelegramClient();
-                if (client && !client->IsDownloading(info.thumbnailFileId) && !HasPendingDownload(info.thumbnailFileId)) {
-                    CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
-                    wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
-                    client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
-                    AddPendingDownload(info.thumbnailFileId);
-                } else if (client && client->IsDownloading(info.thumbnailFileId)) {
-                    // Already downloading - boost priority since user clicked
-                    client->BoostDownloadPriority(info.thumbnailFileId);
+                if (client) {
+                    bool clientDownloading = client->IsDownloading(info.thumbnailFileId);
+                    bool hasPending = HasPendingDownload(info.thumbnailFileId);
+                    
+                    // If we have a stale pending download, clean it up
+                    if (hasPending && !clientDownloading) {
+                        CVWLOG("ShowMediaPopup: clearing stale pending thumbnail download for fileId=" << info.thumbnailFileId);
+                        RemovePendingDownload(info.thumbnailFileId);
+                        hasPending = false;
+                    }
+                    
+                    if (!clientDownloading && !hasPending) {
+                        CVWLOG("ShowMediaPopup: downloading sticker thumbnail, thumbnailFileId=" << info.thumbnailFileId);
+                        wxString displayName = info.fileName.IsEmpty() ? "Sticker" : info.fileName;
+                        client->DownloadFile(info.thumbnailFileId, 10, displayName, 0);
+                        AddPendingDownload(info.thumbnailFileId);
+                    } else if (clientDownloading) {
+                        // Already downloading - boost priority since user clicked
+                        client->BoostDownloadPriority(info.thumbnailFileId);
+                    }
                 }
             }
         }
@@ -1150,7 +1162,17 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
         if (info.fileId != 0 && m_mainFrame) {
             TelegramClient* client = m_mainFrame->GetTelegramClient();
             if (client) {
-                if (!client->IsDownloading(info.fileId) && !HasPendingDownload(info.fileId)) {
+                bool clientDownloading = client->IsDownloading(info.fileId);
+                bool hasPending = HasPendingDownload(info.fileId);
+                
+                // If we have a stale pending download (we think it's pending but TelegramClient doesn't), clean it up
+                if (hasPending && !clientDownloading) {
+                    CVWLOG("ShowMediaPopup: clearing stale pending download for fileId=" << info.fileId);
+                    RemovePendingDownload(info.fileId);
+                    hasPending = false;
+                }
+                
+                if (!clientDownloading && !hasPending) {
                     // Start download with high priority for preview
                     wxString displayName = info.fileName;
                     if (displayName.IsEmpty()) {
@@ -1168,7 +1190,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& positi
                     client->DownloadFile(info.fileId, 10, displayName, info.fileSize.IsEmpty() ? 0 : wxAtol(info.fileSize));
                     // Track this as a pending download so we can update popup when complete
                     AddPendingDownload(info.fileId);
-                } else if (client->IsDownloading(info.fileId)) {
+                } else if (clientDownloading) {
                     // Already downloading - boost priority since user clicked
                     CVWLOG("ShowMediaPopup: boosting download priority for fileId=" << info.fileId);
                     client->BoostDownloadPriority(info.fileId);

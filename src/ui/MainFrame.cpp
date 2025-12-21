@@ -1551,6 +1551,13 @@ void MainFrame::OnDownloadFailed(int32_t fileId, const wxString& error)
         m_transferManager.FailTransfer(it->second, error);
         m_fileToTransferId.erase(it);
     }
+    
+    // Clean up pending download tracking so user can retry
+    if (m_chatViewWidget) {
+        if (m_chatViewWidget->HasPendingDownload(fileId)) {
+            m_chatViewWidget->RemovePendingDownload(fileId);
+        }
+    }
 }
 
 void MainFrame::OnDownloadRetrying(int32_t fileId, int retryCount)
