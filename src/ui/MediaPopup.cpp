@@ -336,6 +336,12 @@ void MediaPopup::ApplyHexChatStyle()
 
 void MediaPopup::CreateMediaCtrl()
 {
+#ifdef __WXGTK__
+    // On Linux, wxMediaCtrl with GStreamer is unreliable and can crash.
+    // Don't create the media control at all on Linux.
+    return;
+#endif
+
     if (m_mediaCtrl) return;
     
     m_mediaCtrl = new wxMediaCtrl();
@@ -600,6 +606,15 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 {
     MPLOG("PlayVideo called: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
+
+#ifdef __WXGTK__
+    // On Linux, wxMediaCtrl with GStreamer is unreliable and can crash the app.
+    // Skip video playback entirely and fall back to thumbnail display.
+    // Users can click to open videos with their default player.
+    MPLOG("PlayVideo: disabled on Linux due to GStreamer instability, falling back to thumbnail");
+    FallbackToThumbnail();
+    return;
+#endif
 
     // Check if this video has failed to load recently
     if (HasFailedRecently(path)) {
