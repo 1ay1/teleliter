@@ -2184,6 +2184,9 @@ wxString TelegramClient::ExtractMessageText(td_api::MessageContent* content)
             text = "[Video Message]";
         } else if constexpr (std::is_same_v<T, td_api::messageSticker>) {
             text = "[Sticker] " + wxString::FromUTF8(c.sticker_ ? c.sticker_->emoji_ : "");
+        } else if constexpr (std::is_same_v<T, td_api::messageAnimatedEmoji>) {
+            // Animated emoji is just a fancy single emoji - display as plain text
+            text = wxString::FromUTF8(c.emoji_);
         } else if constexpr (std::is_same_v<T, td_api::messageAnimation>) {
             text = "[GIF]";
         } else if constexpr (std::is_same_v<T, td_api::messageAudio>) {
