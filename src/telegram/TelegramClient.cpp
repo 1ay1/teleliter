@@ -1135,7 +1135,7 @@ bool TelegramClient::ShouldAutoDownloadMedia(MediaType type, int64_t fileSize) c
     static const int64_t MAX_GIF_SIZE = 15 * 1024 * 1024;        // 15 MB
     static const int64_t MAX_VOICE_SIZE = 5 * 1024 * 1024;       // 5 MB
     static const int64_t MAX_VIDEO_NOTE_SIZE = 20 * 1024 * 1024; // 20 MB (video notes are small)
-    static const int64_t MAX_VIDEO_SIZE = 0;                      // Don't auto-download videos
+    static const int64_t MAX_VIDEO_SIZE = 50 * 1024 * 1024;      // 50 MB videos
     
     switch (type) {
         case MediaType::Photo:

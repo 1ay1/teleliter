@@ -226,7 +226,83 @@ void MediaPopup::StopAnimatedSticker()
 
 void MediaPopup::PlayWebmSticker(const wxString& path)
 {
-#ifdef HAVE_WEBM
+#if defined(__WXGTK__) && defined(HAVE_FFMPEG)
+    // On Linux, use FFmpegPlayer for WebM stickers (more reliable than libvpx)
+    MPLOG("PlayWebmSticker: using FFmpegPlayer on Linux for " << path.ToStdString());
+    
+    // Check if this sticker has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("PlayWebmSticker: skipping recently failed sticker");
+        FallbackToThumbnail();
+        return;
+    }
+    
+    // Stop all other playback first
+    StopAllPlayback();
+    
+    // Create FFmpeg player if needed
+    if (!m_ffmpegPlayer) {
+        m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
+    }
+    
+    // Set render size for stickers
+    int stickerWidth = STICKER_MAX_WIDTH - PADDING * 2;
+    int stickerHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
+    m_ffmpegPlayer->SetRenderSize(stickerWidth, stickerHeight);
+    m_ffmpegPlayer->SetLoop(true);
+    m_ffmpegPlayer->SetMuted(true);
+    
+    // Set up frame callback
+    m_ffmpegPlayer->SetFrameCallback([this](const wxBitmap& frame) {
+        OnFFmpegFrame(frame);
+    });
+    
+    // Load the WebM file
+    if (!m_ffmpegPlayer->LoadFile(path)) {
+        MPLOG("PlayWebmSticker: FFmpeg failed to load: " << path.ToStdString());
+        MarkLoadFailed(path);
+        m_ffmpegPlayer.reset();
+        FallbackToThumbnail();
+        return;
+    }
+    
+    // Get actual dimensions and scale
+    int vidWidth = m_ffmpegPlayer->GetWidth();
+    int vidHeight = m_ffmpegPlayer->GetHeight();
+    
+    if (vidWidth > 0 && vidHeight > 0) {
+        double scaleX = (double)stickerWidth / vidWidth;
+        double scaleY = (double)stickerHeight / vidHeight;
+        double scale = std::min(scaleX, scaleY);
+        
+        int scaledWidth = (int)(vidWidth * scale);
+        int scaledHeight = (int)(vidHeight * scale);
+        
+        m_ffmpegPlayer->SetRenderSize(scaledWidth, scaledHeight);
+        SetSize(scaledWidth + PADDING * 2 + BORDER_WIDTH * 2,
+                scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 20);
+    } else {
+        SetSize(STICKER_MAX_WIDTH, STICKER_MAX_HEIGHT);
+    }
+    
+    // Start playback
+    m_ffmpegPlayer->Play();
+    m_isPlayingFFmpeg = true;
+    m_hasImage = true;
+    
+    // Start timer for frame updates
+    int interval = m_ffmpegPlayer->GetTimerIntervalMs();
+    m_ffmpegAnimTimer.Start(interval);
+    
+    Show();
+    Raise();
+    Refresh();
+    
+    MPLOG("PlayWebmSticker: FFmpeg playback started");
+    return;
+    
+#elif defined(HAVE_WEBM)
+    // Use libvpx/libwebm on other platforms
     // Check if this sticker has failed to load recently
     if (HasFailedRecently(path)) {
         MPLOG("PlayWebmSticker: skipping recently failed sticker: " << path.ToStdString());
@@ -1252,8 +1328,19 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
     int contentY = PADDING + BORDER_WIDTH;
     int contentWidth = size.GetWidth() - (PADDING * 2) - (BORDER_WIDTH * 2);
     
-    // If video is playing, the media control handles the display
+    // If video is playing via wxMediaCtrl, the media control handles the display
     if (m_isPlayingVideo && m_mediaCtrl && m_mediaCtrl->IsShown()) {
+        // Draw the label at the bottom
+        DrawMediaLabel(dc, size);
+        return;
+    }
+    
+    // If video is playing via FFmpeg, draw the frame without any overlay
+    if (m_isPlayingFFmpeg && m_hasImage && m_bitmap.IsOk()) {
+        // Draw the current video frame
+        int imgX = contentX + (contentWidth - m_bitmap.GetWidth()) / 2;
+        int imgY = contentY;
+        dc.DrawBitmap(m_bitmap, imgX, imgY, true);
         // Draw the label at the bottom
         DrawMediaLabel(dc, size);
         return;

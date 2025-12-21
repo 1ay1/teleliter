@@ -36,36 +36,36 @@ class MediaPopup : public wxPopupWindow
 public:
     MediaPopup(wxWindow* parent);
     virtual ~MediaPopup();
-    
+
     void ShowMedia(const MediaInfo& info, const wxPoint& pos);
     void SetImage(const wxImage& image);
     void SetImage(const wxString& path);
     void ShowLoading();
     void ShowError(const wxString& message);
-    
+
     // Video/GIF playback
     void PlayVideo(const wxString& path, bool loop = false, bool muted = true);
     void StopVideo();
     bool IsPlayingVideo() const { return m_isPlayingVideo; }
-    
+
     // Animated sticker (.tgs) playback
     void PlayAnimatedSticker(const wxString& path);
     void StopAnimatedSticker();
     bool IsPlayingAnimatedSticker() const { return m_isPlayingSticker; }
-    
+
     // WebM video sticker playback
     void PlayWebmSticker(const wxString& path);
     void StopWebmSticker();
     bool IsPlayingWebmSticker() const { return m_isPlayingWebm; }
-    
+
     // Stop all playback (video, lottie, webm) - call before switching media or hiding
     void StopAllPlayback();
-    
+
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
-    
+
     // Set callback for when popup is clicked
     void SetClickCallback(std::function<void(const MediaInfo&)> callback) { m_clickCallback = callback; }
-    
+
 protected:
     void OnPaint(wxPaintEvent& event);
     void OnLeftDown(wxMouseEvent& event);
@@ -81,7 +81,7 @@ protected:
     void OnWebmFrame(const wxBitmap& frame);
     void OnFFmpegAnimTimer(wxTimerEvent& event);
     void OnFFmpegFrame(const wxBitmap& frame);
-    
+
 private:
     void UpdateSize();
     void ApplyHexChatStyle();
@@ -93,21 +93,21 @@ private:
     void PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted);
     void DrawMediaLabel(wxDC& dc, const wxSize& size);
     bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
-    
+
     // Async image loading to prevent UI blocking
     void LoadImageAsync(const wxString& path);
     void OnAsyncLoadTimer(wxTimerEvent& event);
-    
+
     // Track failed loads to avoid repeated attempts
     bool HasFailedRecently(const wxString& path) const;
     void MarkLoadFailed(const wxString& path);
     void ClearFailedLoads();
-    
+
     wxColour m_bgColor;
     wxColour m_borderColor;
     wxColour m_textColor;
     wxColour m_labelColor;
-    
+
     MediaInfo m_mediaInfo;
     wxBitmap m_bitmap;
     bool m_hasImage;
@@ -115,11 +115,11 @@ private:
     bool m_isDownloadingMedia;  // True when showing thumbnail with download in progress
     bool m_hasError;
     wxString m_errorMessage;
-    
+
     // Loading animation
     wxTimer m_loadingTimer;
     int m_loadingFrame;
-    
+
     // Video/GIF playback
     wxMediaCtrl* m_mediaCtrl;
     bool m_isPlayingVideo;
@@ -127,49 +127,49 @@ private:
     bool m_videoMuted;
     wxString m_videoPath;
     wxTimer m_videoLoadTimer;
-    
+
     // Animated sticker playback (Lottie .tgs)
     std::unique_ptr<LottiePlayer> m_lottiePlayer;
     bool m_isPlayingSticker;
     wxTimer m_lottieAnimTimer;
-    
+
     // WebM video sticker playback
     std::unique_ptr<WebmPlayer> m_webmPlayer;
     bool m_isPlayingWebm;
     wxTimer m_webmAnimTimer;
-    
+
     // FFmpeg video playback (Linux)
     std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
     bool m_isPlayingFFmpeg;
     wxTimer m_ffmpegAnimTimer;
-    
+
     // Click callback
     std::function<void(const MediaInfo&)> m_clickCallback;
-    
+
     // Async image loading state
     wxString m_pendingImagePath;
     wxTimer m_asyncLoadTimer;
     bool m_asyncLoadPending;
-    
+
     // Track files that failed to load (to avoid repeated attempts)
     std::set<wxString> m_failedLoads;
-    
+
     // Video load start time for timeout detection
     int64_t m_videoLoadStartTime;
-    
+
     // Size constraints for stickers/emojis (smaller)
     static constexpr int STICKER_MAX_WIDTH = 180;
     static constexpr int STICKER_MAX_HEIGHT = 150;
-    
+
     // Size constraints for photos/videos (compact preview)
     static constexpr int PHOTO_MAX_WIDTH = 300;
-    static constexpr int PHOTO_MAX_HEIGHT = 260;
-    
+    static constexpr int PHOTO_MAX_HEIGHT = 240;
+
     static constexpr int MIN_WIDTH = 100;
     static constexpr int MIN_HEIGHT = 60;
     static constexpr int PADDING = 8;
     static constexpr int BORDER_WIDTH = 1;
-    
+
     wxDECLARE_EVENT_TABLE();
 };
 
