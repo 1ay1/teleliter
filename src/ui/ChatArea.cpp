@@ -68,6 +68,10 @@ void ChatArea::CreateUI()
         wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
     m_chatDisplay->SetBackgroundColour(m_bgColor);
     m_chatDisplay->SetFont(m_chatFont);
+    m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));  // Arrow cursor by default, not I-beam
+    
+    // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
+    m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
 
     wxRichTextAttr defaultStyle;
     defaultStyle.SetTextColour(m_fgColor);
@@ -80,6 +84,12 @@ void ChatArea::CreateUI()
     SetSizer(sizer);
     Layout();
     m_chatDisplay->Show();
+}
+
+void ChatArea::OnSetCursor(wxSetCursorEvent& event)
+{
+    // Override wxRichTextCtrl's default I-beam cursor with our tracked cursor
+    event.SetCursor(wxCursor(m_currentCursor));
 }
 
 void ChatArea::Clear()

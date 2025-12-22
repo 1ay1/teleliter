@@ -118,9 +118,14 @@ public:
     // Get last position (for tracking spans)
     long GetLastPosition() const { return m_chatDisplay->GetLastPosition(); }
 
+    // Cursor control - allows parent widgets to set cursor for clickable elements
+    void SetCurrentCursor(wxStockCursor cursor) { m_currentCursor = cursor; }
+    wxStockCursor GetCurrentCursor() const { return m_currentCursor; }
+
 protected:
     void SetupColors();
     void CreateUI();
+    void OnSetCursor(wxSetCursorEvent& event);
 
     wxRichTextCtrl* m_chatDisplay;
     wxFont m_chatFont;
@@ -145,6 +150,9 @@ protected:
     // State
     bool m_wasAtBottom;
     int m_batchDepth;
+    
+    // Cursor tracking (to override wxRichTextCtrl's I-beam default)
+    wxStockCursor m_currentCursor = wxCURSOR_ARROW;
 };
 
 #endif // CHATAREA_H

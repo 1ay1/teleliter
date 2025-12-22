@@ -162,6 +162,7 @@ void ChatViewWidget::SetupDisplayControl()
     wxRichTextCtrl* display = m_chatArea->GetDisplay();
     if (!display) return;
 
+    // Cursor handling is now done in ChatArea (single source of truth)
     // Bind mouse events for cursor updates and click handling
     display->Bind(wxEVT_MOTION, &ChatViewWidget::OnMouseMove, this);
     display->Bind(wxEVT_LEAVE_WINDOW, &ChatViewWidget::OnMouseLeave, this);
@@ -1725,7 +1726,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         // Check for media span
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
-            ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
+            m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
             event.Skip();
             return;
         }
@@ -1733,7 +1734,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         // Check for link span
         LinkSpan* linkSpan = GetLinkSpanAtPosition(textPos);
         if (linkSpan) {
-            ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
+            m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
             event.Skip();
             return;
         }
@@ -1741,14 +1742,15 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         // Check for edit span
         EditSpan* editSpan = GetEditSpanAtPosition(textPos);
         if (editSpan) {
-            ctrl->SetCursor(wxCursor(wxCURSOR_HAND));
+            m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
             event.Skip();
             return;
         }
 
-        ctrl->SetCursor(wxCursor(wxCURSOR_IBEAM));
+        // Default arrow cursor for regular text (not I-beam)
+        m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     } else {
-        ctrl->SetCursor(wxCursor(wxCURSOR_DEFAULT));
+        m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     }
 
     event.Skip();
@@ -1757,9 +1759,8 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
 void ChatViewWidget::OnMouseLeave(wxMouseEvent& event)
 {
     HideEditHistoryPopup();
-    wxRichTextCtrl* display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-    if (display) {
-        display->SetCursor(wxCursor(wxCURSOR_IBEAM));
+    if (m_chatArea) {
+        m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     }
     event.Skip();
 }
