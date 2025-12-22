@@ -1780,6 +1780,85 @@ void MainFrame::OnRefreshTimer(wxTimerEvent& event)
     }
 }
 
+void MainFrame::ReactiveRefresh()
+{
+    // REACTIVE MVC: Poll dirty flags and update UI accordingly
+    // This is called when TelegramClient signals updates are available
+    if (!m_telegramClient) return;
+    
+    DirtyFlag flags = m_telegramClient->GetAndClearDirtyFlags();
+    if (flags == DirtyFlag::None) return;
+    
+    // Handle chat list updates
+    if ((flags & DirtyFlag::ChatList) != DirtyFlag::None) {
+        RefreshChatList();
+    }
+    
+    // Handle message updates for current chat
+    if ((flags & DirtyFlag::Messages) != DirtyFlag::None && m_currentChatId != 0) {
+        // Get new messages
+        auto newMessages = m_telegramClient->GetNewMessages(m_currentChatId);
+        for (const auto& msg : newMessages) {
+            OnNewMessage(msg);
+        }
+        
+        // Get updated messages (edits)
+        auto updatedMessages = m_telegramClient->GetUpdatedMessages(m_currentChatId);
+        for (const auto& msg : updatedMessages) {
+            if (msg.isEdited) {
+                OnMessageEdited(msg.chatId, msg.id, msg.text, msg.senderName);
+            } else {
+                OnMessageUpdated(msg.chatId, msg);
+            }
+        }
+    }
+    
+    // Handle download updates
+    if ((flags & DirtyFlag::Downloads) != DirtyFlag::None) {
+        // Get completed downloads
+        auto completedDownloads = m_telegramClient->GetCompletedDownloads();
+        for (const auto& result : completedDownloads) {
+            if (result.success) {
+                OnFileDownloaded(result.fileId, result.localPath);
+            } else {
+                OnDownloadFailed(result.fileId, result.error);
+            }
+        }
+        
+        // Get progress updates - UI can poll current state from TelegramClient
+        auto progressUpdates = m_telegramClient->GetDownloadProgressUpdates();
+        for (int32_t fileId : progressUpdates) {
+            int progress = m_telegramClient->GetDownloadProgress(fileId);
+            if (progress >= 0) {
+                // Update transfer manager with approximate progress
+                auto it = m_fileToTransferId.find(fileId);
+                if (it != m_fileToTransferId.end()) {
+                    TransferInfo* info = m_transferManager.GetTransfer(it->second);
+                    if (info && info->totalBytes > 0) {
+                        int64_t downloaded = (info->totalBytes * progress) / 100;
+                        m_transferManager.UpdateProgress(it->second, downloaded, info->totalBytes);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Handle user status updates
+    if ((flags & DirtyFlag::UserStatus) != DirtyFlag::None) {
+        // For private chats, update the topic bar with current user status
+        if (m_currentChatId != 0 && m_chatViewWidget) {
+            bool found = false;
+            ChatInfo chat = m_telegramClient->GetChat(m_currentChatId, &found);
+            if (found && chat.isPrivate && chat.userId > 0) {
+                UserInfo user = m_telegramClient->GetUser(chat.userId, &found);
+                if (found) {
+                    OnUserStatusChanged(chat.userId, user.isOnline, user.lastSeenTime);
+                }
+            }
+        }
+    }
+}
+
 void MainFrame::OnStatusTimer(wxTimerEvent& event)
 {
     // Update status bar periodically (connection status, session time, etc.)

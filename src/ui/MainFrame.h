@@ -57,6 +57,9 @@ public:
     void OnUserStatusChanged(int64_t userId, bool isOnline, int64_t lastSeenTime);
     void OnMembersLoaded(int64_t chatId, const std::vector<UserInfo>& members);
     void ShowStatusError(const wxString& error);
+    
+    // Reactive MVC - called when TelegramClient has dirty flags
+    void ReactiveRefresh();
     void UpdateMemberList(int64_t chatId);
     
     // Unread message tracking

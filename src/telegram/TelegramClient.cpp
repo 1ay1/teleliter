@@ -215,9 +215,7 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
                     it->second.title = wxString::FromUTF8(u.title_);
                 }
             }
-            PostToMainThread([this]() {
-                if (m_mainFrame) m_mainFrame->RefreshChatList();
-            });
+            SetDirty(DirtyFlag::ChatList);
         } else if constexpr (std::is_same_v<T, td_api::updateChatLastMessage>) {
             OnChatLastMessage(u.chat_id_, u.last_message_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatReadInbox>) {
@@ -556,11 +554,8 @@ void TelegramClient::LoadChats(int limit)
                     });
                 }
                 
-                PostToMainThread([this]() {
-                    if (m_mainFrame) {
-                        m_mainFrame->RefreshChatList();
-                    }
-                });
+                // REACTIVE MVC: Set dirty flag instead of posting callback
+                SetDirty(DirtyFlag::ChatList);
             }
         });
     });
@@ -1037,13 +1032,8 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
         TDLOG("DownloadFile: tracking fileId=%d, total active downloads=%zu", fileId, m_activeDownloads.size());
     }
     
-    // Notify UI that download is starting - always notify, no throttling
-    wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
-    PostToMainThread([this, fileId, displayName, fileSize]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
-        }
-    });
+    // REACTIVE MVC: Just set dirty flag - UI will poll download state
+    SetDirty(DirtyFlag::Downloads);
     
     StartDownloadInternal(fileId, priority);
 }
@@ -1104,13 +1094,7 @@ void TelegramClient::RetryDownload(int32_t fileId)
         }
         
         if (!it->second.CanRetry()) {
-            // Max retries exceeded - notify UI
-            PostToMainThread([this]() {
-                if (m_mainFrame) {
-                    m_mainFrame->SetStatusText(wxString::Format("Download failed after %d retries", 
-                        DownloadInfo::MAX_RETRIES), 0);
-                }
-            });
+            // Max retries exceeded - UI will see Failed state when it polls
             return;
         }
         
@@ -1121,15 +1105,10 @@ void TelegramClient::RetryDownload(int32_t fileId)
         
         TDLOG("Retrying download for file %d (attempt %d/%d)", 
               fileId, it->second.retryCount, DownloadInfo::MAX_RETRIES);
-        
-        // Notify UI about retry
-        int retryCount = it->second.retryCount;
-        PostToMainThread([this, fileId, retryCount]() {
-            if (m_mainFrame) {
-                m_mainFrame->OnDownloadRetrying(fileId, retryCount);
-            }
-        });
     }
+    
+    // REACTIVE MVC: Set dirty flag - UI will poll download state
+    SetDirty(DirtyFlag::Downloads);
     
     StartDownloadInternal(fileId, priority);
 }
@@ -1318,12 +1297,16 @@ void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
         }
     }
     
-    // Notify UI about failure
-    PostToMainThread([this, fileId, error]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnDownloadFailed(fileId, error);
-        }
-    });
+    // REACTIVE MVC: Add to completed downloads queue with error
+    {
+        std::lock_guard<std::mutex> lock(m_completedDownloadsMutex);
+        FileDownloadResult result;
+        result.fileId = fileId;
+        result.success = false;
+        result.error = error;
+        m_completedDownloads.push_back(result);
+    }
+    SetDirty(DirtyFlag::Downloads);
     
     if (shouldRetry) {
         // Schedule retry after a delay using CallAfter with a one-shot timer
@@ -1331,8 +1314,8 @@ void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
         int delayMs = 500 * (1 << retryCount);  // 500, 1000, 2000, etc.
         delayMs = std::min(delayMs, 5000);  // Cap at 5 seconds
         
-        // Use a one-shot timer to avoid blocking the main thread
-        PostToMainThread([this, fileId, delayMs]() {
+        // Use CallAfter to schedule the timer on main thread without blocking
+        wxTheApp->CallAfter([this, fileId, delayMs]() {
             // Create a one-shot timer for the retry
             wxTimer* retryTimer = new wxTimer();
             retryTimer->Bind(wxEVT_TIMER, [this, fileId, retryTimer](wxTimerEvent&) {
@@ -1641,11 +1624,12 @@ void TelegramClient::OnNewMessage(td_api::object_ptr<td_api::message>& message)
               (long long)msgInfo.chatId, (long long)msgInfo.id, basePriority, isCurrentChat ? 1 : 0);
     }
     
-    PostToMainThread([this, msgInfo]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnNewMessage(msgInfo);
-        }
-    });
+    // REACTIVE MVC: Add to new messages queue instead of posting callback
+    {
+        std::lock_guard<std::mutex> lock(m_newMessagesMutex);
+        m_newMessages[msgInfo.chatId].push_back(msgInfo);
+    }
+    SetDirty(DirtyFlag::Messages);
 }
 
 void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
@@ -1668,11 +1652,18 @@ void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
         }
     }
     
-    PostToMainThread([this, chatId, messageId, newText, senderName]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnMessageEdited(chatId, messageId, newText, senderName);
-        }
-    });
+    // REACTIVE MVC: Add to updated messages queue
+    {
+        std::lock_guard<std::mutex> lock(m_updatedMessagesMutex);
+        MessageInfo updatedMsg;
+        updatedMsg.chatId = chatId;
+        updatedMsg.id = messageId;
+        updatedMsg.text = newText;
+        updatedMsg.senderName = senderName;
+        updatedMsg.isEdited = true;
+        m_updatedMessages[chatId].push_back(updatedMsg);
+    }
+    SetDirty(DirtyFlag::Messages);
 }
 
 void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
@@ -1734,11 +1725,8 @@ void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
         m_chats[info.id] = info;
     }
     
-    PostToMainThread([this]() {
-        if (m_mainFrame) {
-            m_mainFrame->RefreshChatList();
-        }
-    });
+    // REACTIVE MVC: Set dirty flag instead of posting callback
+    SetDirty(DirtyFlag::ChatList);
 }
 
 void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user>& user)
@@ -1836,12 +1824,8 @@ void TelegramClient::OnUserStatusUpdate(int64_t userId, td_api::object_ptr<td_ap
         }
     }
     
-    // Notify MainFrame to update topic bar if this is the current chat's user
-    PostToMainThread([this, userId, isOnline, lastSeenTime]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnUserStatusChanged(userId, isOnline, lastSeenTime);
-        }
-    });
+    // REACTIVE MVC: Set dirty flag instead of posting callback
+    SetDirty(DirtyFlag::UserStatus);
 }
 
 void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
@@ -1860,26 +1844,6 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
     int64_t downloadedSize = file->local_->downloaded_size_;
     int64_t totalSize = file->size_ > 0 ? file->size_ : file->expected_size_;
     
-    // Throttle progress updates to max 5 per second per file to reduce UI overhead
-    // Completed updates are always sent immediately
-    // Uses mutex-protected instance member instead of static to be thread-safe
-    bool shouldSendProgress = false;
-    {
-        std::lock_guard<std::mutex> throttleLock(m_progressThrottleMutex);
-        if (isDownloading && !isComplete) {
-            int64_t now = wxGetLocalTimeMillis().GetValue();
-            auto it = m_lastProgressTime.find(fileId);
-            if (it == m_lastProgressTime.end() || (now - it->second) >= PROGRESS_THROTTLE_MS) {
-                m_lastProgressTime[fileId] = now;
-                shouldSendProgress = true;
-            }
-        }
-        if (isComplete) {
-            // Clean up throttle tracking on completion
-            m_lastProgressTime.erase(fileId);
-        }
-    }
-    
     // Update our download tracking
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
@@ -1896,35 +1860,36 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
                 it->second.totalSize = totalSize;
                 // Update progress time to prevent false timeout
                 it->second.lastProgressTime = wxGetUTCTime();
-                // Only log if we're sending to UI (throttled)
-                if (shouldSendProgress) {
-                    TDLOG("OnFileUpdate: Download PROGRESS for fileId=%d: %lld/%lld bytes", fileId, downloadedSize, totalSize);
-                }
             }
         } else {
             // File update for a file we're not tracking - could be auto-download
             if (isComplete) {
                 TDLOG("OnFileUpdate: Untracked file COMPLETED fileId=%d path=%s", fileId, localPath.ToStdString().c_str());
             }
-            // Don't log progress for untracked files - too noisy
         }
     }
     
-    // Only post to main thread if we have something to report
-    if (!isComplete && !shouldSendProgress) {
-        return;  // Throttled - skip this progress update
-    }
-    
-    PostToMainThread([this, fileId, isDownloading, isComplete, localPath, downloadedSize, totalSize, shouldSendProgress]() {
-        if (m_mainFrame) {
-            if (isComplete && !localPath.IsEmpty()) {
-                // Only report completed if we have a valid path
-                m_mainFrame->OnFileDownloaded(fileId, localPath);
-            } else if (isDownloading && shouldSendProgress) {
-                m_mainFrame->OnFileProgress(fileId, downloadedSize, totalSize);
-            }
+    // REACTIVE MVC: Add to queues instead of posting callbacks
+    // UI will poll these when it refreshes
+    if (isComplete && !localPath.IsEmpty()) {
+        // Add to completed downloads queue
+        {
+            std::lock_guard<std::mutex> lock(m_completedDownloadsMutex);
+            FileDownloadResult result;
+            result.fileId = fileId;
+            result.localPath = localPath;
+            result.success = true;
+            m_completedDownloads.push_back(result);
         }
-    });
+        SetDirty(DirtyFlag::Downloads);
+    } else if (isDownloading) {
+        // Add to progress updates set (just track fileId, UI reads current state)
+        {
+            std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
+            m_downloadProgressUpdates.insert(fileId);
+        }
+        SetDirty(DirtyFlag::Downloads);
+    }
 }
 
 void TelegramClient::OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message)
@@ -1955,11 +1920,8 @@ void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessag
         }
     }
     
-    PostToMainThread([this]() {
-        if (m_mainFrame) {
-            m_mainFrame->RefreshChatList();
-        }
-    });
+    // REACTIVE MVC: Set dirty flag instead of posting callback
+    SetDirty(DirtyFlag::ChatList);
 }
 
 void TelegramClient::OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position)
@@ -2386,27 +2348,22 @@ void TelegramClient::PostToMainThread(std::function<void()> func)
 
 void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
 {
-    // Process queued functions in batches to avoid UI stalls
-    // This allows the event loop to process user input between batches
-    std::queue<std::function<void()>> toProcess;
-    bool hasMore = false;
+    // REACTIVE MVC: First, tell MainFrame to poll dirty flags
+    // This handles all the frequent updates (messages, downloads, chat list)
+    if (m_mainFrame) {
+        m_mainFrame->ReactiveRefresh();
+    }
     
+    // Process any legacy callbacks (auth flow, errors, etc.) in batches
+    std::queue<std::function<void()>> toProcess;
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         
-        // Take only up to MAX_EVENTS_PER_BATCH items
-        size_t count = 0;
-        while (!m_mainThreadQueue.empty() && count < MAX_EVENTS_PER_BATCH) {
-            toProcess.push(std::move(m_mainThreadQueue.front()));
-            m_mainThreadQueue.pop();
-            count++;
-        }
-        
-        // Check if there are more items to process
-        hasMore = !m_mainThreadQueue.empty();
+        // Process all queued callbacks - these should be rare now
+        std::swap(toProcess, m_mainThreadQueue);
     }
     
-    // Process the batch
+    // Process callbacks
     while (!toProcess.empty()) {
         auto func = std::move(toProcess.front());
         toProcess.pop();
@@ -2421,14 +2378,86 @@ void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
         }
     }
     
-    // If there are more items, post another event to continue processing
-    // This yields to the event loop, allowing UI to remain responsive
-    if (hasMore) {
-        wxThreadEvent* nextEvent = new wxThreadEvent(wxEVT_TDLIB_UPDATE);
+    // Clear the refresh pending flag so next SetDirty can post again
+    m_uiRefreshPending.store(false);
+}
+
+// ===== REACTIVE MVC API IMPLEMENTATION =====
+
+void TelegramClient::SetDirty(DirtyFlag flag)
+{
+    // Atomically set the dirty flag
+    m_dirtyFlags.fetch_or(static_cast<uint32_t>(flag));
+    
+    // Notify UI to refresh (coalesced - only one event in flight)
+    NotifyUIRefresh();
+}
+
+void TelegramClient::NotifyUIRefresh()
+{
+    // Only post one refresh event at a time - coalesce multiple updates
+    bool expected = false;
+    if (m_uiRefreshPending.compare_exchange_strong(expected, true)) {
+        // We successfully set the flag from false to true, so post the event
+        wxThreadEvent* event = new wxThreadEvent(wxEVT_TDLIB_UPDATE);
         if (wxTheApp) {
-            wxQueueEvent(wxTheApp, nextEvent);
+            wxQueueEvent(wxTheApp, event);
         } else {
-            delete nextEvent;
+            delete event;
+            m_uiRefreshPending.store(false);
         }
     }
+    // If already pending, do nothing - the pending event will handle it
+}
+
+DirtyFlag TelegramClient::GetAndClearDirtyFlags()
+{
+    uint32_t flags = m_dirtyFlags.exchange(0);
+    return static_cast<DirtyFlag>(flags);
+}
+
+bool TelegramClient::IsDirty(DirtyFlag flag) const
+{
+    uint32_t flags = m_dirtyFlags.load();
+    return (flags & static_cast<uint32_t>(flag)) != 0;
+}
+
+std::vector<FileDownloadResult> TelegramClient::GetCompletedDownloads()
+{
+    std::lock_guard<std::mutex> lock(m_completedDownloadsMutex);
+    std::vector<FileDownloadResult> result;
+    result.swap(m_completedDownloads);
+    return result;
+}
+
+std::vector<MessageInfo> TelegramClient::GetNewMessages(int64_t chatId)
+{
+    std::lock_guard<std::mutex> lock(m_newMessagesMutex);
+    std::vector<MessageInfo> result;
+    auto it = m_newMessages.find(chatId);
+    if (it != m_newMessages.end()) {
+        result.swap(it->second);
+        m_newMessages.erase(it);
+    }
+    return result;
+}
+
+std::vector<MessageInfo> TelegramClient::GetUpdatedMessages(int64_t chatId)
+{
+    std::lock_guard<std::mutex> lock(m_updatedMessagesMutex);
+    std::vector<MessageInfo> result;
+    auto it = m_updatedMessages.find(chatId);
+    if (it != m_updatedMessages.end()) {
+        result.swap(it->second);
+        m_updatedMessages.erase(it);
+    }
+    return result;
+}
+
+std::set<int32_t> TelegramClient::GetDownloadProgressUpdates()
+{
+    std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
+    std::set<int32_t> result;
+    result.swap(m_downloadProgressUpdates);
+    return result;
 }

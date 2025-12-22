@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <map>
+#include <set>
 #include <functional>
 #include <mutex>
 #include <atomic>
@@ -16,6 +17,36 @@
 
 #include "Types.h"
 #include "../ui/MediaTypes.h"
+
+// Dirty flags for reactive UI updates - View polls these instead of receiving callbacks
+enum class DirtyFlag : uint32_t {
+    None            = 0,
+    ChatList        = 1 << 0,   // Chat list changed
+    Messages        = 1 << 1,   // Messages in current chat changed
+    Downloads       = 1 << 2,   // Download state changed
+    UserStatus      = 1 << 3,   // User online status changed
+    Auth            = 1 << 4,   // Auth state changed
+    All             = 0xFFFFFFFF
+};
+
+inline DirtyFlag operator|(DirtyFlag a, DirtyFlag b) {
+    return static_cast<DirtyFlag>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+inline DirtyFlag operator&(DirtyFlag a, DirtyFlag b) {
+    return static_cast<DirtyFlag>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+inline DirtyFlag& operator|=(DirtyFlag& a, DirtyFlag b) {
+    a = a | b;
+    return a;
+}
+
+// File download completion info - for reactive UI to poll
+struct FileDownloadResult {
+    int32_t fileId;
+    wxString localPath;
+    bool success;
+    wxString error;
+};
 
 // Forward declarations
 class MainFrame;
@@ -93,6 +124,30 @@ public:
     // Load members for a chat (groups/supergroups/channels)
     void LoadChatMembers(int64_t chatId, int limit = 200);
     
+    // ===== REACTIVE MVC API =====
+    // UI should poll these instead of waiting for callbacks
+    
+    // Check and clear dirty flags atomically - call from UI refresh timer
+    DirtyFlag GetAndClearDirtyFlags();
+    
+    // Check if specific flag is dirty (without clearing)
+    bool IsDirty(DirtyFlag flag) const;
+    
+    // Get completed downloads since last call (thread-safe, clears queue)
+    std::vector<FileDownloadResult> GetCompletedDownloads();
+    
+    // Get new messages since last call for a chat (thread-safe, clears queue)  
+    std::vector<MessageInfo> GetNewMessages(int64_t chatId);
+    
+    // Get updated messages since last call for a chat (thread-safe, clears queue)
+    std::vector<MessageInfo> GetUpdatedMessages(int64_t chatId);
+    
+    // Get file IDs that had download progress updates (thread-safe, clears set)
+    std::set<int32_t> GetDownloadProgressUpdates();
+    
+    // Signal UI to refresh (posts lightweight event, no data)
+    void NotifyUIRefresh();
+    
 private:
     std::unique_ptr<td::ClientManager> m_clientManager;
     int32_t m_clientId;
@@ -164,14 +219,31 @@ private:
     mutable std::mutex m_downloadsMutex;
     wxTimer m_downloadTimeoutTimer;
     
-    // Progress throttling - protected by mutex for thread safety
-    // Only throttle progress UI updates, not downloads themselves
-    std::map<int32_t, int64_t> m_lastProgressTime;
-    std::mutex m_progressThrottleMutex;
-    static constexpr int64_t PROGRESS_THROTTLE_MS = 100;  // 10 updates/sec max per file for UI
+    // ===== REACTIVE MVC STATE =====
+    // Dirty flags - set by background threads, polled by UI
+    std::atomic<uint32_t> m_dirtyFlags{0};
     
-    // Main thread queue processing - process in batches to keep UI responsive
-    static constexpr size_t MAX_EVENTS_PER_BATCH = 20;  // Events processed per OnTdlibUpdate call
+    // Completed downloads queue - background adds, UI polls
+    std::vector<FileDownloadResult> m_completedDownloads;
+    std::mutex m_completedDownloadsMutex;
+    
+    // New messages queue per chat - background adds, UI polls
+    std::map<int64_t, std::vector<MessageInfo>> m_newMessages;
+    std::mutex m_newMessagesMutex;
+    
+    // Updated messages queue per chat - background adds, UI polls
+    std::map<int64_t, std::vector<MessageInfo>> m_updatedMessages;
+    std::mutex m_updatedMessagesMutex;
+    
+    // Download progress updates - just track which files changed
+    std::set<int32_t> m_downloadProgressUpdates;
+    std::mutex m_downloadProgressMutex;
+    
+    // Coalescing flag to prevent flooding UI with refresh events
+    std::atomic<bool> m_uiRefreshPending{false};
+    
+    // Helper to set dirty flag and notify UI
+    void SetDirty(DirtyFlag flag);
     
     void OnDownloadTimeoutTimer(wxTimerEvent& event);
     void StartDownloadInternal(int32_t fileId, int priority);
