@@ -713,8 +713,9 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 {
     MPLOG("PlayVideo called: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
 
-#if defined(__WXGTK__) && defined(HAVE_FFMPEG)
-    // On Linux, use FFmpegPlayer instead of wxMediaCtrl to avoid GStreamer crashes
+#ifdef HAVE_FFMPEG
+    // Use FFmpegPlayer instead of wxMediaCtrl for better click handling
+    // wxMediaCtrl on macOS uses native AVPlayer that swallows mouse events
     PlayVideoWithFFmpeg(path, loop, muted);
     return;
 #elif defined(__WXGTK__)
