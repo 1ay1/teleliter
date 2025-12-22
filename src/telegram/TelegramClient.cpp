@@ -974,7 +974,7 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
     TDLOG("DownloadFile: requested fileId=%d priority=%d fileName=%s", fileId, priority, fileName.ToStdString().c_str());
     
     // Limit concurrent downloads to prevent overloading the UI and network
-    static const size_t MAX_CONCURRENT_DOWNLOADS = 10;
+    static const size_t MAX_CONCURRENT_DOWNLOADS = 5;
     
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
@@ -1038,12 +1038,27 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
     }
     
     // Notify UI that download is starting
-    wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
-    PostToMainThread([this, fileId, displayName, fileSize]() {
-        if (m_mainFrame) {
-            m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
+    // For low-priority (background) downloads, throttle notifications to avoid UI flooding
+    bool shouldNotifyUI = true;
+    if (priority < 8) {
+        // Background download - throttle notifications
+        int64_t now = wxGetLocalTimeMillis().GetValue();
+        int64_t lastNotify = m_lastBackgroundDownloadNotify.load();
+        if (now - lastNotify < BACKGROUND_DOWNLOAD_THROTTLE_MS) {
+            shouldNotifyUI = false;  // Skip UI notification for this background download
+        } else {
+            m_lastBackgroundDownloadNotify.store(now);
         }
-    });
+    }
+    
+    if (shouldNotifyUI) {
+        wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
+        PostToMainThread([this, fileId, displayName, fileSize]() {
+            if (m_mainFrame) {
+                m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
+            }
+        });
+    }
     
     StartDownloadInternal(fileId, priority);
 }
@@ -1276,25 +1291,42 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
     // Process messages from newest to oldest (reverse order)
     // Use low priority (1-5) for background downloads to not compete with user requests
     int priority = 5;  // Low priority for background downloads
+    int processedCount = 0;
+    constexpr int BATCH_SIZE = 5;  // Process in small batches
+    constexpr int BATCH_DELAY_MS = 50;  // Yield between batches to let UI breathe
+    constexpr int ITEM_DELAY_MS = 10;  // Small delay between items within a batch
+    
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        // Check if client is shutting down - exit early
+        if (!m_running) {
+            TDLOG("AutoDownloadChatMedia: client shutting down, stopping early");
+            return;
+        }
+        
         const MessageInfo& msg = *it;
         
         // Check if this message has any media
         if (msg.hasPhoto || msg.hasVideo || msg.hasVideoNote || 
             msg.hasSticker || msg.hasAnimation || msg.hasVoice) {
             DownloadMediaFromMessage(msg, priority);
+            processedCount++;
+            
+            // Yield between items to avoid CPU hogging
+            std::this_thread::sleep_for(std::chrono::milliseconds(ITEM_DELAY_MS));
+            
+            // Longer yield after each batch to let UI event loop process
+            if (processedCount % BATCH_SIZE == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(BATCH_DELAY_MS));
+            }
         }
         
         // Decrease priority for older messages (minimum 1)
         if (priority > 1) {
             priority--;
         }
-        
-        // Small yield to prevent hogging CPU in background thread
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     
-    TDLOG("AutoDownloadChatMedia: finished queuing downloads for chatId=%lld", chatId);
+    TDLOG("AutoDownloadChatMedia: finished queuing %d downloads for chatId=%lld", processedCount, chatId);
 }
 
 void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
@@ -1858,21 +1890,22 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
     
     // Throttle progress updates to max 5 per second per file to reduce UI overhead
     // Completed updates are always sent immediately
-    static std::map<int32_t, int64_t> lastProgressTime;
-    static const int64_t PROGRESS_THROTTLE_MS = 200;  // 5 updates/sec max
-    
+    // Uses mutex-protected instance member instead of static to be thread-safe
     bool shouldSendProgress = false;
-    if (isDownloading && !isComplete) {
-        int64_t now = wxGetLocalTimeMillis().GetValue();
-        auto it = lastProgressTime.find(fileId);
-        if (it == lastProgressTime.end() || (now - it->second) >= PROGRESS_THROTTLE_MS) {
-            lastProgressTime[fileId] = now;
-            shouldSendProgress = true;
+    {
+        std::lock_guard<std::mutex> throttleLock(m_progressThrottleMutex);
+        if (isDownloading && !isComplete) {
+            int64_t now = wxGetLocalTimeMillis().GetValue();
+            auto it = m_lastProgressTime.find(fileId);
+            if (it == m_lastProgressTime.end() || (now - it->second) >= PROGRESS_THROTTLE_MS) {
+                m_lastProgressTime[fileId] = now;
+                shouldSendProgress = true;
+            }
         }
-    }
-    if (isComplete) {
-        // Clean up throttle tracking on completion
-        lastProgressTime.erase(fileId);
+        if (isComplete) {
+            // Clean up throttle tracking on completion
+            m_lastProgressTime.erase(fileId);
+        }
     }
     
     // Update our download tracking
@@ -2381,13 +2414,27 @@ void TelegramClient::PostToMainThread(std::function<void()> func)
 
 void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
 {
-    // Process all queued functions on main thread
+    // Process queued functions in batches to avoid UI stalls
+    // This allows the event loop to process user input between batches
     std::queue<std::function<void()>> toProcess;
+    bool hasMore = false;
+    
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
-        std::swap(toProcess, m_mainThreadQueue);
+        
+        // Take only up to MAX_EVENTS_PER_BATCH items
+        size_t count = 0;
+        while (!m_mainThreadQueue.empty() && count < MAX_EVENTS_PER_BATCH) {
+            toProcess.push(std::move(m_mainThreadQueue.front()));
+            m_mainThreadQueue.pop();
+            count++;
+        }
+        
+        // Check if there are more items to process
+        hasMore = !m_mainThreadQueue.empty();
     }
     
+    // Process the batch
     while (!toProcess.empty()) {
         auto func = std::move(toProcess.front());
         toProcess.pop();
@@ -2399,6 +2446,17 @@ void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
             } catch (...) {
                 TDLOG("OnTdlibUpdate: unknown exception in callback");
             }
+        }
+    }
+    
+    // If there are more items, post another event to continue processing
+    // This yields to the event loop, allowing UI to remain responsive
+    if (hasMore) {
+        wxThreadEvent* nextEvent = new wxThreadEvent(wxEVT_TDLIB_UPDATE);
+        if (wxTheApp) {
+            wxQueueEvent(wxTheApp, nextEvent);
+        } else {
+            delete nextEvent;
         }
     }
 }

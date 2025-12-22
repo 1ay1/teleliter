@@ -164,6 +164,18 @@ private:
     mutable std::mutex m_downloadsMutex;
     wxTimer m_downloadTimeoutTimer;
     
+    // Progress throttling - protected by mutex for thread safety
+    std::map<int32_t, int64_t> m_lastProgressTime;
+    std::mutex m_progressThrottleMutex;
+    
+    // Background download throttling - avoid flooding UI with notifications
+    std::atomic<int64_t> m_lastBackgroundDownloadNotify{0};
+    static constexpr int64_t BACKGROUND_DOWNLOAD_THROTTLE_MS = 50;  // Min ms between background download starts
+    
+    // Main thread queue processing limits to avoid UI stalls
+    static constexpr size_t MAX_EVENTS_PER_BATCH = 10;  // Max events processed per OnTdlibUpdate call
+    static constexpr int64_t PROGRESS_THROTTLE_MS = 200;  // 5 updates/sec max per file
+    
     void OnDownloadTimeoutTimer(wxTimerEvent& event);
     void StartDownloadInternal(int32_t fileId, int priority);
 };
