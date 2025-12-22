@@ -973,8 +973,8 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
     
     TDLOG("DownloadFile: requested fileId=%d priority=%d fileName=%s", fileId, priority, fileName.ToStdString().c_str());
     
-    // Limit concurrent downloads to prevent overloading the UI and network
-    static const size_t MAX_CONCURRENT_DOWNLOADS = 5;
+    // Allow many concurrent downloads - TDLib handles its own throttling
+    static const size_t MAX_CONCURRENT_DOWNLOADS = 20;
     
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
@@ -1037,28 +1037,13 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
         TDLOG("DownloadFile: tracking fileId=%d, total active downloads=%zu", fileId, m_activeDownloads.size());
     }
     
-    // Notify UI that download is starting
-    // For low-priority (background) downloads, throttle notifications to avoid UI flooding
-    bool shouldNotifyUI = true;
-    if (priority < 8) {
-        // Background download - throttle notifications
-        int64_t now = wxGetLocalTimeMillis().GetValue();
-        int64_t lastNotify = m_lastBackgroundDownloadNotify.load();
-        if (now - lastNotify < BACKGROUND_DOWNLOAD_THROTTLE_MS) {
-            shouldNotifyUI = false;  // Skip UI notification for this background download
-        } else {
-            m_lastBackgroundDownloadNotify.store(now);
+    // Notify UI that download is starting - always notify, no throttling
+    wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
+    PostToMainThread([this, fileId, displayName, fileSize]() {
+        if (m_mainFrame) {
+            m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
         }
-    }
-    
-    if (shouldNotifyUI) {
-        wxString displayName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
-        PostToMainThread([this, fileId, displayName, fileSize]() {
-            if (m_mainFrame) {
-                m_mainFrame->OnDownloadStarted(fileId, displayName, fileSize);
-            }
-        });
-    }
+    });
     
     StartDownloadInternal(fileId, priority);
 }
@@ -1291,10 +1276,6 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
     // Process messages from newest to oldest (reverse order)
     // Use low priority (1-5) for background downloads to not compete with user requests
     int priority = 5;  // Low priority for background downloads
-    int processedCount = 0;
-    constexpr int BATCH_SIZE = 5;  // Process in small batches
-    constexpr int BATCH_DELAY_MS = 50;  // Yield between batches to let UI breathe
-    constexpr int ITEM_DELAY_MS = 10;  // Small delay between items within a batch
     
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
         // Check if client is shutting down - exit early
@@ -1309,15 +1290,6 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
         if (msg.hasPhoto || msg.hasVideo || msg.hasVideoNote || 
             msg.hasSticker || msg.hasAnimation || msg.hasVoice) {
             DownloadMediaFromMessage(msg, priority);
-            processedCount++;
-            
-            // Yield between items to avoid CPU hogging
-            std::this_thread::sleep_for(std::chrono::milliseconds(ITEM_DELAY_MS));
-            
-            // Longer yield after each batch to let UI event loop process
-            if (processedCount % BATCH_SIZE == 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(BATCH_DELAY_MS));
-            }
         }
         
         // Decrease priority for older messages (minimum 1)
@@ -1326,7 +1298,7 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
         }
     }
     
-    TDLOG("AutoDownloadChatMedia: finished queuing %d downloads for chatId=%lld", processedCount, chatId);
+    TDLOG("AutoDownloadChatMedia: finished for chatId=%lld", chatId);
 }
 
 void TelegramClient::OnDownloadError(int32_t fileId, const wxString& error)
