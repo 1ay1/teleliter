@@ -1,5 +1,6 @@
 #include "ChatArea.h"
 #include <wx/datetime.h>
+#include <wx/settings.h>
 
 ChatArea::ChatArea(wxWindow* parent, wxWindowID id)
     : wxPanel(parent, id),
@@ -13,69 +14,49 @@ ChatArea::ChatArea(wxWindow* parent, wxWindowID id)
 
 void ChatArea::SetupColors()
 {
-    // HexChat dark theme - exactly like WelcomeChat
-    m_bgColor = wxColour(0x2B, 0x2B, 0x2B);
-    m_fgColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_timestampColor = wxColour(0x88, 0x88, 0x88);
-    m_infoColor = wxColour(0x72, 0x9F, 0xCF);       // Blue
-    m_errorColor = wxColour(0xEF, 0x29, 0x29);      // Red
-    m_successColor = wxColour(0x8A, 0xE2, 0x34);    // Green
-    m_promptColor = wxColour(0xFC, 0xAF, 0x3E);     // Orange
-    m_serviceColor = wxColour(0x88, 0x88, 0x88);    // Gray
-    m_actionColor = wxColour(0xCE, 0x5C, 0x00);     // Orange
-    m_linkColor = wxColour(0x72, 0x9F, 0xCF);       // Blue
+    // Use native system font
+    m_chatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
 
-    // Monospace font - exactly like WelcomeChat
-    // macOS renders fonts smaller, so use larger size on Mac
-#ifdef __WXOSX__
-    int fontSize = 12;
-#else
-    int fontSize = 8;
-#endif
-    m_chatFont = wxFont(fontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    // Only set colors that are actually needed for semantic meaning
+    // All other colors will use native defaults
+    m_errorColor = wxColour(0xCC, 0x00, 0x00);      // Red for errors
+    m_successColor = wxColour(0x00, 0x80, 0x00);    // Green for success
 
-    // User colors - no grays (gray is reserved for current user)
-    m_userColors[0]  = wxColour(0x35, 0x36, 0xB2);  // Blue
-    m_userColors[1]  = wxColour(0x2A, 0x8C, 0x2A);  // Green
-    m_userColors[2]  = wxColour(0xC3, 0x38, 0x38);  // Red
-    m_userColors[3]  = wxColour(0xC7, 0x38, 0x38);  // Dark red
-    m_userColors[4]  = wxColour(0x80, 0x00, 0x80);  // Purple
-    m_userColors[5]  = wxColour(0xFF, 0x80, 0x00);  // Orange
-    m_userColors[6]  = wxColour(0x80, 0x80, 0x00);  // Olive
-    m_userColors[7]  = wxColour(0x33, 0xCC, 0x33);  // Lime
-    m_userColors[8]  = wxColour(0x00, 0x80, 0x80);  // Teal
-    m_userColors[9]  = wxColour(0x33, 0xCC, 0xCC);  // Cyan
-    m_userColors[10] = wxColour(0x66, 0x66, 0xFF);  // Light blue
-    m_userColors[11] = wxColour(0xFF, 0x00, 0xFF);  // Magenta
-    m_userColors[12] = wxColour(0x72, 0x9F, 0xCF);  // Sky blue
-    m_userColors[13] = wxColour(0xAD, 0x7F, 0xA8);  // Pink/mauve
-    m_userColors[14] = wxColour(0xFC, 0xAF, 0x3E);  // Gold
-    m_userColors[15] = wxColour(0x8A, 0xE2, 0x34);  // Yellow-green
-
-    // Gray color for current user (not in the hash palette)
-    m_selfColor = wxColour(0xAA, 0xAA, 0xAA);
+    // User colors for sender names - need distinct colors for different users
+    m_userColors[0]  = wxColour(0x00, 0x00, 0xAA);  // Dark blue
+    m_userColors[1]  = wxColour(0x00, 0x73, 0x00);  // Dark green
+    m_userColors[2]  = wxColour(0xAA, 0x00, 0x00);  // Dark red
+    m_userColors[3]  = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
+    m_userColors[4]  = wxColour(0x55, 0x00, 0x55);  // Purple
+    m_userColors[5]  = wxColour(0x00, 0x73, 0x73);  // Teal
+    m_userColors[6]  = wxColour(0x73, 0x00, 0x73);  // Magenta
+    m_userColors[7]  = wxColour(0x00, 0x55, 0xAA);  // Steel blue
+    m_userColors[8]  = wxColour(0x55, 0x55, 0x00);  // Olive
+    m_userColors[9]  = wxColour(0x73, 0x3D, 0x00);  // Sienna
+    m_userColors[10] = wxColour(0x00, 0x55, 0x55);  // Dark cyan
+    m_userColors[11] = wxColour(0x55, 0x00, 0xAA);  // Indigo
+    m_userColors[12] = wxColour(0xAA, 0x00, 0x55);  // Deep pink
+    m_userColors[13] = wxColour(0x3D, 0x73, 0x00);  // Dark lime
+    m_userColors[14] = wxColour(0x00, 0x3D, 0x73);  // Navy
+    m_userColors[15] = wxColour(0x73, 0x00, 0x3D);  // Maroon
 }
 
 void ChatArea::CreateUI()
 {
-    SetBackgroundColour(m_bgColor);
-
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
 
-    // Chat display - exactly like WelcomeChat
+    // Chat display - let it use native styling
     m_chatDisplay = new wxRichTextCtrl(this, wxID_ANY,
         wxEmptyString, wxDefaultPosition, wxDefaultSize,
         wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
-    m_chatDisplay->SetBackgroundColour(m_bgColor);
     m_chatDisplay->SetFont(m_chatFont);
-    m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));  // Arrow cursor by default, not I-beam
+    m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));
     
     // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
     m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
 
+    // Only set font in default style, let colors be native
     wxRichTextAttr defaultStyle;
-    defaultStyle.SetTextColour(m_fgColor);
-    defaultStyle.SetBackgroundColour(m_bgColor);
     defaultStyle.SetFont(m_chatFont);
     m_chatDisplay->SetDefaultStyle(defaultStyle);
     m_chatDisplay->SetBasicStyle(defaultStyle);
@@ -103,14 +84,10 @@ void ChatArea::ResetStyles()
     if (!m_chatDisplay) return;
 
     // Force end any potentially open style blocks
-    // This prevents style leaking (especially underline) from corrupting future text
     m_chatDisplay->EndAllStyles();
 
-    // Reset all text styles to prevent style corruption from leaking
-    // This ensures underline, bold, italic, etc. don't persist
+    // Reset text styles - only set font, let colors be native
     wxRichTextAttr defaultStyle;
-    defaultStyle.SetTextColour(m_fgColor);
-    defaultStyle.SetBackgroundColour(m_bgColor);
     defaultStyle.SetFont(m_chatFont);
     defaultStyle.SetFontUnderlined(false);
     defaultStyle.SetFontWeight(wxFONTWEIGHT_NORMAL);
@@ -178,7 +155,7 @@ void ChatArea::WriteTimestamp()
 void ChatArea::WriteTimestamp(const wxString& timestamp)
 {
     if (!m_chatDisplay) return;
-    m_chatDisplay->BeginTextColour(m_timestampColor);
+    m_chatDisplay->BeginTextColour(GetTimestampColor());
     m_chatDisplay->WriteText("[" + timestamp + "] ");
     m_chatDisplay->EndTextColour();
 }
@@ -188,7 +165,7 @@ void ChatArea::AppendInfo(const wxString& message)
     if (!m_chatDisplay) return;
     WriteTimestamp();
 
-    m_chatDisplay->BeginTextColour(m_infoColor);
+    m_chatDisplay->BeginTextColour(GetInfoColor());
     m_chatDisplay->WriteText("* " + message + "\n");
     m_chatDisplay->EndTextColour();
 
@@ -224,7 +201,7 @@ void ChatArea::AppendPrompt(const wxString& prompt)
     if (!m_chatDisplay) return;
     WriteTimestamp();
 
-    m_chatDisplay->BeginTextColour(m_promptColor);
+    m_chatDisplay->BeginTextColour(GetPromptColor());
     m_chatDisplay->WriteText(">> " + prompt + "\n");
     m_chatDisplay->EndTextColour();
 
@@ -236,7 +213,7 @@ void ChatArea::AppendUserInput(const wxString& input)
     if (!m_chatDisplay) return;
     WriteTimestamp();
 
-    m_chatDisplay->BeginTextColour(m_fgColor);
+    m_chatDisplay->BeginTextColour(GetFgColor());
     m_chatDisplay->WriteText("> " + input + "\n");
     m_chatDisplay->EndTextColour();
 
@@ -248,7 +225,7 @@ void ChatArea::AppendService(const wxString& message)
     if (!m_chatDisplay) return;
     WriteTimestamp();
 
-    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->BeginTextColour(GetServiceColor());
     m_chatDisplay->WriteText("* " + message + "\n");
     m_chatDisplay->EndTextColour();
 
@@ -274,7 +251,7 @@ void ChatArea::AppendMessage(const wxString& timestamp, const wxString& sender, 
     m_chatDisplay->WriteText("> ");
     m_chatDisplay->EndTextColour();
 
-    m_chatDisplay->BeginTextColour(m_fgColor);
+    m_chatDisplay->BeginTextColour(GetFgColor());
     m_chatDisplay->WriteText(message + "\n");
     m_chatDisplay->EndTextColour();
 
@@ -291,7 +268,7 @@ void ChatArea::AppendAction(const wxString& timestamp, const wxString& sender, c
     if (!m_chatDisplay) return;
     WriteTimestamp(timestamp);
 
-    m_chatDisplay->BeginTextColour(m_actionColor);
+    m_chatDisplay->BeginTextColour(GetActionColor());
     m_chatDisplay->WriteText("* ");
     m_chatDisplay->BeginBold();
     m_chatDisplay->WriteText(sender);
@@ -312,7 +289,7 @@ void ChatArea::AppendJoin(const wxString& timestamp, const wxString& user)
     if (!m_chatDisplay) return;
     WriteTimestamp(timestamp);
 
-    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->BeginTextColour(GetServiceColor());
     m_chatDisplay->WriteText("--> " + user + " has joined\n");
     m_chatDisplay->EndTextColour();
 
@@ -329,7 +306,7 @@ void ChatArea::AppendLeave(const wxString& timestamp, const wxString& user)
     if (!m_chatDisplay) return;
     WriteTimestamp(timestamp);
 
-    m_chatDisplay->BeginTextColour(m_serviceColor);
+    m_chatDisplay->BeginTextColour(GetServiceColor());
     m_chatDisplay->WriteText("<-- " + user + " has left\n");
     m_chatDisplay->EndTextColour();
 
@@ -352,7 +329,7 @@ wxColour ChatArea::GetUserColor(const wxString& username) const
 
     // Current user always gets gray
     if (!m_currentUsername.IsEmpty() && username == m_currentUsername) {
-        return m_selfColor;
+        return GetSelfColor();
     }
 
     // Other users get a color from the palette (no grays)

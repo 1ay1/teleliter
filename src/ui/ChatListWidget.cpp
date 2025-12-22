@@ -2,13 +2,14 @@
 #include "MainFrame.h"
 #include "MenuIds.h"
 #include "../telegram/Types.h"
+#include <wx/settings.h>
 
 ChatListWidget::ChatListWidget(wxWindow* parent, MainFrame* mainFrame)
     : wxPanel(parent, wxID_ANY),
       m_chatTree(nullptr),
-      m_bgColor(0x23, 0x23, 0x23),
-      m_fgColor(0xD0, 0xD0, 0xD0),
-      m_selBgColor(0x3A, 0x3A, 0x3A)
+      m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX)),
+      m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT)),
+      m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT))
 {
     CreateLayout();
     CreateCategories();
@@ -22,14 +23,14 @@ void ChatListWidget::CreateLayout()
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
     
-    // Tree control for chat list
+    // Tree control for chat list - use native styling
     m_chatTree = new wxTreeCtrl(this, ID_CHAT_TREE,
         wxDefaultPosition, wxDefaultSize,
         wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT | wxTR_NO_LINES | 
-        wxTR_FULL_ROW_HIGHLIGHT | wxBORDER_NONE | wxTR_SINGLE);
+        wxTR_FULL_ROW_HIGHLIGHT | wxTR_SINGLE);
     
-    m_chatTree->SetBackgroundColour(m_bgColor);
-    m_chatTree->SetForegroundColour(m_fgColor);
+    // Explicitly set native window background
+    m_chatTree->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
     
     sizer->Add(m_chatTree, 1, wxEXPAND);
     SetSizer(sizer);
@@ -140,9 +141,8 @@ void ChatListWidget::SetTreeColors(const wxColour& bg, const wxColour& fg, const
     m_fgColor = fg;
     m_selBgColor = selBg;
     
+    // Let tree control use native colors - don't override
     if (m_chatTree) {
-        m_chatTree->SetBackgroundColour(m_bgColor);
-        m_chatTree->SetForegroundColour(m_fgColor);
         m_chatTree->Refresh();
     }
 }
@@ -151,8 +151,8 @@ void ChatListWidget::SetTreeFont(const wxFont& font)
 {
     m_font = font;
     
+    // Let tree control use native font - don't override
     if (m_chatTree) {
-        m_chatTree->SetFont(m_font);
         m_chatTree->Refresh();
     }
 }

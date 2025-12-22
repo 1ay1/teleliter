@@ -2,6 +2,7 @@
 #include "../telegram/Types.h"
 #include <wx/regex.h>
 #include <wx/datetime.h>
+#include <wx/settings.h>
 
 MessageFormatter::MessageFormatter(ChatArea* chatArea)
     : m_chatArea(chatArea ? chatArea : nullptr),
@@ -12,12 +13,12 @@ MessageFormatter::MessageFormatter(ChatArea* chatArea)
       m_lastTimestamp(0),
       m_lastDateDay(0)
 {
-    // Additional colors not provided by ChatArea
-    m_mediaColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for media links
-    m_editedColor = wxColour(0x88, 0x88, 0x88);     // Gray for (edited) marker
-    m_forwardColor = wxColour(0xAD, 0x7F, 0xA8);    // Purple for forwards
-    m_replyColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for replies
-    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);  // Yellow/orange for highlights
+    // Additional colors not provided by ChatArea - use system colors
+    m_mediaColor = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    m_editedColor = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    m_forwardColor = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    m_replyColor = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    m_highlightColor = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
 }
 
 void MessageFormatter::ResetGroupingState()
@@ -88,8 +89,8 @@ wxString MessageFormatter::GetDateString(int64_t unixTime)
 
 void MessageFormatter::AppendDateSeparator(const wxString& dateText)
 {
-    // HexChat-style date separator - simple and unobtrusive
-    m_chatArea->BeginTextColour(wxColour(0x66, 0x66, 0x66));
+    // Date separator - use system gray text color
+    m_chatArea->BeginTextColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
     m_chatArea->WriteText("--- " + dateText + " ---\n");
     m_chatArea->EndTextColour();
 }
@@ -475,17 +476,19 @@ void MessageFormatter::AppendUnreadMarker()
     m_chatArea->WriteText("\n");
     
     // Visual marker showing where messages have been read up to
-    m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
+    // Use system highlight color for the marker
+    wxColour markerColor = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    m_chatArea->BeginTextColour(markerColor);
     m_chatArea->WriteText("----------------------- ");
     m_chatArea->EndTextColour();
     
-    m_chatArea->BeginTextColour(wxColour(0x6E, 0xE9, 0x6E)); // Lighter green for text
+    m_chatArea->BeginTextColour(markerColor);
     m_chatArea->BeginBold();
     m_chatArea->WriteText("<- read up to here");
     m_chatArea->EndBold();
     m_chatArea->EndTextColour();
     
-    m_chatArea->BeginTextColour(wxColour(0x4E, 0xC9, 0x4E)); // Green
+    m_chatArea->BeginTextColour(markerColor);
     m_chatArea->WriteText(" -----------------------\n");
     m_chatArea->EndTextColour();
     

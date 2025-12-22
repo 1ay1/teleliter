@@ -74,13 +74,31 @@ void InputBoxWidget::CreateLayout()
     m_inputBox->Bind(wxEVT_SET_FOCUS, &InputBoxWidget::OnFocusGained, this);
     m_inputBox->Bind(wxEVT_KILL_FOCUS, &InputBoxWidget::OnFocusLost, this);
 
+    // Use fixed-width font for input (matches chat area)
+    wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+    m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, fixedFont);
+    m_inputBox->StyleClearAll();
+
     // Show placeholder initially
     m_inputBox->SetText(m_placeholder);
     m_inputBox->StyleSetForeground(wxSTC_STYLE_DEFAULT, wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
     m_inputBox->StyleClearAll();
 
-    // Use ALIGN_CENTER_VERTICAL to center text vertically
-    sizer->Add(m_inputBox, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 2);
+    // Add top padding to text and cursor
+    // m_inputBox->SetExtraAscent(0);
+
+    // Set minimal height based on font line height
+    int lineHeight = m_inputBox->TextHeight(0);
+    if (lineHeight <= 0) {
+        lineHeight = fixedFont.GetPixelSize().GetHeight();
+        if (lineHeight <= 0) {
+            lineHeight = 16;  // Fallback
+        }
+    }
+    SetMinSize(wxSize(-1, lineHeight ));
+    SetMaxSize(wxSize(-1, lineHeight ));
+
+    sizer->Add(m_inputBox, 1, wxEXPAND | wxLEFT | wxRIGHT, 2);
     SetSizer(sizer);
 }
 

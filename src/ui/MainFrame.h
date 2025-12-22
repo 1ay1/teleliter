@@ -167,29 +167,7 @@ private:
     // Status bar manager
     StatusBarManager* m_statusBar;
     
-    // Colors
-    wxColour m_bgColor;
-    wxColour m_fgColor;
-    wxColour m_inputBgColor;
-    wxColour m_inputFgColor;
-    wxColour m_treeBgColor;
-    wxColour m_treeFgColor;
-    wxColour m_treeSelBgColor;
-    wxColour m_memberListBgColor;
-    wxColour m_memberListFgColor;
-    wxColour m_chatInfoBgColor;
-    wxColour m_chatInfoFgColor;
-    wxColour m_timestampColor;
-    wxColour m_textColor;
-    wxColour m_serviceColor;
-    wxColour m_highlightColor;
-    wxColour m_actionColor;
-    wxColour m_linkColor;
-    wxColour m_mediaColor;
-    wxColour m_editedColor;
-    wxColour m_forwardColor;
-    wxColour m_replyColor;
-    wxColour m_noticeColor;
+    // User colors for sender names (only colors that need to be stored)
     wxColour m_userColors[16];
     
     // Fonts

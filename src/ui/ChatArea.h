@@ -3,6 +3,7 @@
 
 #include <wx/wx.h>
 #include <wx/richtext/richtextctrl.h>
+#include <wx/settings.h>
 
 // Reusable chat display area with consistent HexChat-style formatting
 // Used by WelcomeChat, ChatViewWidget, and any other chat-like views
@@ -95,17 +96,18 @@ public:
     void AppendLeave(const wxString& user);
     void AppendLeave(const wxString& timestamp, const wxString& user);
 
-    // ===== Color accessors =====
-    const wxColour& GetBgColor() const { return m_bgColor; }
-    const wxColour& GetFgColor() const { return m_fgColor; }
-    const wxColour& GetTimestampColor() const { return m_timestampColor; }
-    const wxColour& GetInfoColor() const { return m_infoColor; }
+    // ===== Color accessors - return system colors on-demand =====
+    wxColour GetBgColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW); }
+    wxColour GetFgColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT); }
+    wxColour GetTimestampColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT); }
+    wxColour GetInfoColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
     const wxColour& GetErrorColor() const { return m_errorColor; }
     const wxColour& GetSuccessColor() const { return m_successColor; }
-    const wxColour& GetPromptColor() const { return m_promptColor; }
-    const wxColour& GetServiceColor() const { return m_serviceColor; }
-    const wxColour& GetActionColor() const { return m_actionColor; }
-    const wxColour& GetLinkColor() const { return m_linkColor; }
+    wxColour GetPromptColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
+    wxColour GetServiceColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT); }
+    wxColour GetActionColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
+    wxColour GetLinkColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
+    wxColour GetSelfColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT); }
 
     // User colors for sender name coloring
     void SetUserColors(const wxColour colors[16]);
@@ -131,21 +133,12 @@ protected:
     wxFont m_chatFont;
     wxString m_currentUsername;  // Current user gets gray color
 
-    // HexChat dark theme colors (exactly like WelcomeChat)
-    wxColour m_bgColor;
-    wxColour m_fgColor;
-    wxColour m_timestampColor;
-    wxColour m_infoColor;
+    // Semantic colors that have no system equivalent
     wxColour m_errorColor;
     wxColour m_successColor;
-    wxColour m_promptColor;
-    wxColour m_serviceColor;
-    wxColour m_actionColor;
-    wxColour m_linkColor;
 
     // User colors (16 colors for sender names)
     wxColour m_userColors[16];
-    wxColour m_selfColor;  // Gray color for current user
 
     // State
     bool m_wasAtBottom;

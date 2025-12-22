@@ -181,7 +181,7 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     }
 
     SetMinSize(wxSize(800, 600));
-    SetBackgroundColour(m_bgColor);
+    // Don't set background color - let the system use native window background
 }
 
 MainFrame::~MainFrame()
@@ -207,87 +207,41 @@ MainFrame::~MainFrame()
 
 void MainFrame::SetupColors()
 {
-    // HexChat-style dark theme
-    m_bgColor = wxColour(0x2B, 0x2B, 0x2B);
-    m_fgColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_inputBgColor = wxColour(0x2B, 0x2B, 0x2B);
-    m_inputFgColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_treeBgColor = wxColour(0x2B, 0x2B, 0x2B);
-    m_treeFgColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_treeSelBgColor = wxColour(0x3C, 0x3C, 0x3C);
-    m_memberListBgColor = wxColour(0x2B, 0x2B, 0x2B);
-    m_memberListFgColor = wxColour(0xD3, 0xD7, 0xCF);
-    m_chatInfoBgColor = wxColour(0x23, 0x23, 0x23);
-    m_chatInfoFgColor = wxColour(0xD3, 0xD7, 0xCF);
-
-    // Message colors (HexChat-style)
-    m_timestampColor = wxColour(0x88, 0x88, 0x88);  // Gray
-    m_textColor = wxColour(0xD3, 0xD7, 0xCF);       // Light gray
-    m_serviceColor = wxColour(0x88, 0x88, 0x88);    // Gray for server messages
-    m_highlightColor = wxColour(0xFC, 0xAF, 0x3E);  // Yellow for highlights
-    m_actionColor = wxColour(0xCE, 0x5C, 0x00);     // Orange for /me actions
-    m_linkColor = wxColour(0x72, 0x9F, 0xCF);       // Blue for links
-    m_mediaColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for media tags
-    m_editedColor = wxColour(0x88, 0x88, 0x88);     // Gray for (edited)
-    m_forwardColor = wxColour(0xAD, 0x7F, 0xA8);    // Purple for forwards
-    m_replyColor = wxColour(0x72, 0x9F, 0xCF);      // Blue for replies
-    m_noticeColor = wxColour(0xAD, 0x7F, 0xA8);     // Purple for notices
-
-    // User colors (for sender names)
-    m_userColors[0]  = wxColour(0xCC, 0xCC, 0xCC);
-    m_userColors[1]  = wxColour(0x35, 0x36, 0xB2);
-    m_userColors[2]  = wxColour(0x2A, 0x8C, 0x2A);
-    m_userColors[3]  = wxColour(0xC3, 0x38, 0x38);
-    m_userColors[4]  = wxColour(0xC7, 0x38, 0x38);
-    m_userColors[5]  = wxColour(0x80, 0x00, 0x80);
-    m_userColors[6]  = wxColour(0xFF, 0x80, 0x00);
-    m_userColors[7]  = wxColour(0x80, 0x80, 0x00);
-    m_userColors[8]  = wxColour(0x33, 0xCC, 0x33);
-    m_userColors[9]  = wxColour(0x00, 0x80, 0x80);
-    m_userColors[10] = wxColour(0x33, 0xCC, 0xCC);
-    m_userColors[11] = wxColour(0x66, 0x66, 0xFF);
-    m_userColors[12] = wxColour(0xFF, 0x00, 0xFF);
-    m_userColors[13] = wxColour(0x80, 0x80, 0x80);
-    m_userColors[14] = wxColour(0xCC, 0xCC, 0xCC);
-    m_userColors[15] = wxColour(0x72, 0x9F, 0xCF);
+    // Only set user colors for sender names - everything else uses native defaults
+    // These are IRC-style colors that are readable on any background
+    m_userColors[0]  = wxColour(0x00, 0x00, 0xAA);  // Dark blue
+    m_userColors[1]  = wxColour(0x00, 0x73, 0x00);  // Dark green
+    m_userColors[2]  = wxColour(0xAA, 0x00, 0x00);  // Dark red
+    m_userColors[3]  = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
+    m_userColors[4]  = wxColour(0x55, 0x00, 0x55);  // Purple
+    m_userColors[5]  = wxColour(0x00, 0x73, 0x73);  // Teal
+    m_userColors[6]  = wxColour(0x73, 0x00, 0x73);  // Magenta
+    m_userColors[7]  = wxColour(0x00, 0x55, 0xAA);  // Steel blue
+    m_userColors[8]  = wxColour(0x55, 0x55, 0x00);  // Olive
+    m_userColors[9]  = wxColour(0x73, 0x3D, 0x00);  // Sienna
+    m_userColors[10] = wxColour(0x00, 0x55, 0x55);  // Dark cyan
+    m_userColors[11] = wxColour(0x55, 0x00, 0xAA);  // Indigo
+    m_userColors[12] = wxColour(0xAA, 0x00, 0x55);  // Deep pink
+    m_userColors[13] = wxColour(0x3D, 0x73, 0x00);  // Dark lime
+    m_userColors[14] = wxColour(0x00, 0x3D, 0x73);  // Navy
+    m_userColors[15] = wxColour(0x73, 0x00, 0x3D);  // Maroon
 }
 
 void MainFrame::SetupFonts()
 {
-    wxArrayString monoFonts;
-    monoFonts.Add("Monospace");
-    monoFonts.Add("DejaVu Sans Mono");
-    monoFonts.Add("Consolas");
-    monoFonts.Add("Monaco");
-    monoFonts.Add("Menlo");
-    monoFonts.Add("Courier New");
-
-    wxString fontName = "Monospace";
-    for (const auto& font : monoFonts) {
-        if (wxFontEnumerator::IsValidFacename(font)) {
-            fontName = font;
-            break;
-        }
-    }
-
-    // macOS renders fonts smaller, so use larger sizes on Mac
-#ifdef __WXOSX__
-    int chatFontSize = 12;
-    int treeFontSize = 12;
-    int memberFontSize = 12;
-    int inputFontSize = 12;  // Same as ChatArea font
-#else
-    int chatFontSize = 9;
-    int treeFontSize = 9;
-    int memberFontSize = 9;
-    int inputFontSize = 8;  // Smaller than ChatArea font
-#endif
-
-    m_chatFont = wxFont(chatFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, fontName);
-    m_treeFont = wxFont(treeFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    m_memberListFont = wxFont(memberFontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    // Input font must match ChatArea exactly - same size, same family, no explicit font name
-    m_inputFont = wxFont(inputFontSize, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    // Use native system fonts for 100% native look & feel
+    wxFont defaultFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+    wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+    
+    // For chat display, use the system fixed-width font
+    m_chatFont = fixedFont;
+    
+    // For tree/list controls, use the default GUI font
+    m_treeFont = defaultFont;
+    m_memberListFont = defaultFont;
+    
+    // Input uses the same fixed-width font as chat
+    m_inputFont = fixedFont;
 }
 
 void MainFrame::CreateMenuBar()
@@ -365,24 +319,21 @@ void MainFrame::CreateMenuBar()
 void MainFrame::CreateMainLayout()
 {
     wxPanel* mainPanel = new wxPanel(this);
-    mainPanel->SetBackgroundColour(m_bgColor);
+    // Let panels use native background colors
 
     // Main horizontal splitter (chat list | rest)
     m_mainSplitter = new wxSplitterWindow(mainPanel, wxID_ANY,
         wxDefaultPosition, wxDefaultSize,
-        wxSP_LIVE_UPDATE | wxSP_3DSASH | wxSP_NO_XP_THEME);
-    m_mainSplitter->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+        wxSP_LIVE_UPDATE | wxSP_3DSASH);
     m_mainSplitter->SetSashGravity(0.0);
     m_mainSplitter->SetMinimumPaneSize(120);
 
     // Left panel - Chat list widget
     m_leftPanel = new wxPanel(m_mainSplitter);
-    m_leftPanel->SetBackgroundColour(m_treeBgColor);
+    // Use native background
 
-    // Create chat list widget
+    // Create chat list widget - uses native styling
     m_chatListWidget = new ChatListWidget(m_leftPanel, this);
-    m_chatListWidget->SetTreeColors(m_treeBgColor, m_treeFgColor, m_treeSelBgColor);
-    m_chatListWidget->SetTreeFont(m_treeFont);
 
     // Bind tree events directly to the tree control (since it's in a child widget)
     wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
@@ -398,19 +349,18 @@ void MainFrame::CreateMainLayout()
     // Right splitter (chat area | member list)
     m_rightSplitter = new wxSplitterWindow(m_mainSplitter, wxID_ANY,
         wxDefaultPosition, wxDefaultSize,
-        wxSP_LIVE_UPDATE | wxSP_3DSASH | wxSP_NO_XP_THEME);
-    m_rightSplitter->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+        wxSP_LIVE_UPDATE | wxSP_3DSASH);
     m_rightSplitter->SetSashGravity(1.0);
     m_rightSplitter->SetMinimumPaneSize(100);
 
     // Center panel - Chat
     m_chatPanel = new wxPanel(m_rightSplitter);
-    m_chatPanel->SetBackgroundColour(m_bgColor);
+    // Use native background
     CreateChatPanel(m_chatPanel);
 
     // Right panel - Member list
     m_rightPanel = new wxPanel(m_rightSplitter);
-    m_rightPanel->SetBackgroundColour(m_memberListBgColor);
+    // Use native background
     CreateMemberList(m_rightPanel);
 
     // Split the right splitter (chat | members)
@@ -449,15 +399,8 @@ void MainFrame::CreateChatPanel(wxWindow* parent)
     sizer->Show(m_chatViewWidget, false);
     sizer->Show(m_welcomeChat, true);
 
-    // Bottom separator
-    wxPanel* separator2 = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
-    separator2->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
-    sizer->Add(separator2, 0, wxEXPAND);
-
-    // Input box widget
+    // Input box widget - uses native styling
     m_inputBoxWidget = new InputBoxWidget(parent, this);
-    m_inputBoxWidget->SetColors(m_inputBgColor, m_inputFgColor);
-    m_inputBoxWidget->SetInputFont(m_inputFont);
     m_inputBoxWidget->SetChatView(m_chatViewWidget);
     m_inputBoxWidget->SetWelcomeChat(m_welcomeChat);
     // Note: member list and message formatter will be connected after CreateMemberList
@@ -470,28 +413,21 @@ void MainFrame::CreateMemberList(wxWindow* parent)
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
 
-    // Member list
+    // Member list - use native styling
     m_memberList = new wxListCtrl(parent, ID_MEMBER_LIST,
         wxDefaultPosition, wxDefaultSize,
-        wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER | wxBORDER_NONE);
-    m_memberList->SetBackgroundColour(m_memberListBgColor);
-    m_memberList->SetForegroundColour(m_memberListFgColor);
-    m_memberList->SetFont(m_memberListFont);
+        wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER);
+    // Explicitly set native window background
+    m_memberList->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
 
     // Single column for usernames
     m_memberList->InsertColumn(0, "Members", wxLIST_FORMAT_LEFT, 120);
 
     sizer->Add(m_memberList, 1, wxEXPAND);
 
-    // Member count at bottom
+    // Member count at bottom - use native styling
     m_memberCountLabel = new wxStaticText(parent, wxID_ANY, "0 members");
-    m_memberCountLabel->SetForegroundColour(m_treeFgColor);
-    m_memberCountLabel->SetBackgroundColour(m_memberListBgColor);
-#ifdef __WXOSX__
-    m_memberCountLabel->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-#else
-    m_memberCountLabel->SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-#endif
+    // Let label use native font - no need to override
     sizer->Add(m_memberCountLabel, 0, wxALL, 3);
 
     parent->SetSizer(sizer);
@@ -994,9 +930,9 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)
             }
             m_chatPanel->Layout();
 
-            // Remove bold and unread indicator (HexChat style)
+            // Remove bold and unread indicator
             chatTree->SetItemBold(item, false);
-            chatTree->SetItemTextColour(item, m_treeFgColor);
+            chatTree->SetItemTextColour(item, wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT));
 
             // Update title to remove unread count
             if (chatId != -1 && m_telegramClient) {
@@ -1425,9 +1361,9 @@ void MainFrame::OnNewMessage(const MessageInfo& message)
             if (item.IsOk()) {
                 wxTreeCtrl* chatTree = m_chatListWidget->GetTreeCtrl();
                 if (chatTree) {
-                    // Make bold and change color for unread
+                    // Make bold and change color for unread - use system highlight color
                     chatTree->SetItemBold(item, true);
-                    chatTree->SetItemTextColour(item, wxColour(0xFF, 0x80, 0x00)); // Orange
+                    chatTree->SetItemTextColour(item, wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT));
 
                     // Update title with incremented unread count
                     wxString title = chatTree->GetItemText(item);
@@ -1943,11 +1879,11 @@ void MainFrame::UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount)
     if (unreadCount > 0) {
         title += wxString::Format(" (%d)", unreadCount);
         chatTree->SetItemBold(item, true);
-        chatTree->SetItemTextColour(item, wxColour(0xFF, 0x80, 0x00)); // Orange for unread
+        chatTree->SetItemTextColour(item, wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT));
         m_chatsWithUnread.insert(chatId);
     } else {
         chatTree->SetItemBold(item, false);
-        chatTree->SetItemTextColour(item, m_treeFgColor);
+        chatTree->SetItemTextColour(item, wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT));
         m_chatsWithUnread.erase(chatId);
     }
 

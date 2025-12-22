@@ -5,6 +5,7 @@
 #include "InputBoxWidget.h"
 #include <iostream>
 #include <algorithm>
+#include <wx/settings.h>
 
 #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 // #define CVWLOG(msg) do {} while(0)
@@ -74,19 +75,13 @@ void ChatViewWidget::CreateLayout()
 {
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
 
-    // Topic bar at top (HexChat-style) - shows chat name and info
+    // Topic bar at top - use native styling (no explicit colors)
     m_topicBar = new wxPanel(this, wxID_ANY);
-    m_topicBar->SetBackgroundColour(wxColour(0x3C, 0x3C, 0x3C));  // Slightly lighter than chat bg
 
     wxBoxSizer* topicSizer = new wxBoxSizer(wxHORIZONTAL);
 
     m_topicText = new wxStaticText(m_topicBar, wxID_ANY, "");
-    m_topicText->SetForegroundColour(wxColour(0xD3, 0xD7, 0xCF));
-#ifdef __WXOSX__
-    m_topicText->SetFont(wxFont(13, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-#else
-    m_topicText->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-#endif
+    // Let text use native colors and font
 
     topicSizer->Add(m_topicText, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
     m_topicBar->SetSizer(topicSizer);
@@ -143,15 +138,9 @@ void ChatViewWidget::CreateNewMessageButton()
 {
     m_newMessageButton = new wxButton(this, ID_NEW_MESSAGE_BUTTON,
         "v New Messages",
-        wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        wxDefaultPosition, wxDefaultSize);
 
-    m_newMessageButton->SetBackgroundColour(wxColour(0x72, 0x9F, 0xCF));
-    m_newMessageButton->SetForegroundColour(wxColour(0xFF, 0xFF, 0xFF));
-#ifdef __WXOSX__
-    m_newMessageButton->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-#else
-    m_newMessageButton->SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-#endif
+    // Use native button styling
     m_newMessageButton->Hide();
 
     Bind(wxEVT_BUTTON, &ChatViewWidget::OnNewMessageButtonClick, this, ID_NEW_MESSAGE_BUTTON);
@@ -966,13 +955,13 @@ void ChatViewWidget::ShowEditHistoryPopup(const EditSpan& span, const wxPoint& p
     m_editHistoryPopup->DestroyChildren();
 
     wxPanel* panel = new wxPanel(m_editHistoryPopup);
-    panel->SetBackgroundColour(wxColour(0x1A, 0x1A, 0x1A));
+    panel->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_INFOBK));
 
     wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
 
     // Header
     wxStaticText* header = new wxStaticText(panel, wxID_ANY, "Original message:");
-    header->SetForegroundColour(wxColour(0x88, 0x88, 0x88));
+    header->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
     header->SetFont(header->GetFont().Bold());
     sizer->Add(header, 0, wxALL, 8);
 
@@ -997,7 +986,7 @@ void ChatViewWidget::ShowEditHistoryPopup(const EditSpan& span, const wxPoint& p
     }
 
     wxStaticText* textLabel = new wxStaticText(panel, wxID_ANY, originalText);
-    textLabel->SetForegroundColour(wxColour(0xD3, 0xD7, 0xCF));
+    textLabel->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_INFOTEXT));
     sizer->Add(textLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
     // Edit time
@@ -1006,7 +995,7 @@ void ChatViewWidget::ShowEditHistoryPopup(const EditSpan& span, const wxPoint& p
         wxDateTime dt(t);
         wxString editTimeStr = "Edited: " + dt.Format("%Y-%m-%d %H:%M:%S");
         wxStaticText* timeLabel = new wxStaticText(panel, wxID_ANY, editTimeStr);
-        timeLabel->SetForegroundColour(wxColour(0x66, 0x66, 0x66));
+        timeLabel->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
         timeLabel->SetFont(timeLabel->GetFont().Smaller());
         sizer->Add(timeLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     }

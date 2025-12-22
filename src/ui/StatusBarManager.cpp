@@ -1,5 +1,6 @@
 #include "StatusBarManager.h"
 #include "../telegram/TelegramClient.h"
+#include <wx/settings.h>
 
 StatusBarManager::StatusBarManager(wxFrame* parent)
     : m_parent(parent),
@@ -18,13 +19,13 @@ StatusBarManager::StatusBarManager(wxFrame* parent)
       m_currentChatMemberCount(0),
       m_totalChats(0),
       m_unreadChats(0),
-      m_bgColor(0x2B, 0x2B, 0x2B),
-      m_fgColor(0xD3, 0xD7, 0xCF),
-      m_onlineColor(0x4E, 0xC9, 0x4E),      // Green
-      m_connectingColor(0xFC, 0xAF, 0x3E),  // Yellow/Orange
-      m_offlineColor(0xCC, 0x00, 0x00),     // Red
-      m_successColor(0x4E, 0xC9, 0x4E),     // Green
-      m_errorColor(0xCC, 0x00, 0x00),       // Red
+      m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)),
+      m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT)),
+      m_onlineColor(0x00, 0x80, 0x00),      // Green (semantic - no system equivalent)
+      m_connectingColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT)),
+      m_offlineColor(0xCC, 0x00, 0x00),     // Red (semantic - no system equivalent)
+      m_successColor(0x00, 0x80, 0x00),     // Green (semantic - no system equivalent)
+      m_errorColor(0xCC, 0x00, 0x00),       // Red (semantic - no system equivalent)
       m_telegramClient(nullptr)
 {
     m_transferTimer.Start();
@@ -42,7 +43,7 @@ void StatusBarManager::Setup()
     // Create status bar with 3 fields:
     // [chat info / transfer progress] [session time] [connection status]
     m_statusBar = m_parent->CreateStatusBar(3);
-    m_statusBar->SetBackgroundColour(m_bgColor);
+    // Let status bar use native styling
     
     // Field widths: main area (flexible), session time (fixed), connection (fixed)
     int widths[] = {-1, 130, 120};
@@ -53,7 +54,7 @@ void StatusBarManager::Setup()
     
     // Create connection status label (in field 2) with color support
     m_connectionLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
-    m_connectionLabel->SetBackgroundColour(m_bgColor);
+    // Let label use native background
     
     wxRect connRect;
     m_statusBar->GetFieldRect(2, connRect);

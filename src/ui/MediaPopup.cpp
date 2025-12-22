@@ -4,6 +4,7 @@
 #include "WebmPlayer.h"
 #include "FFmpegPlayer.h"
 #include <wx/filename.h>
+#include <wx/settings.h>
 #include <iostream>
 
 #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
@@ -416,13 +417,11 @@ void MediaPopup::OnLottieFrame(const wxBitmap& frame)
 
 void MediaPopup::ApplyHexChatStyle()
 {
-    // HexChat dark theme colors
-    m_bgColor = wxColour(0x1A, 0x1A, 0x1A);       // Darker than main bg
-    m_borderColor = wxColour(0x55, 0x57, 0x53);   // Gray border
-    m_textColor = wxColour(0xD3, 0xD7, 0xCF);     // Light text
-    m_labelColor = wxColour(0x88, 0x88, 0x88);    // Dimmer label
-    
-    SetBackgroundColour(m_bgColor);
+    // Use native system colors - don't explicitly set background, let it inherit
+    m_bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+    m_borderColor = wxSystemSettings::GetColour(wxSYS_COLOUR_3DSHADOW);
+    m_textColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    m_labelColor = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
 }
 
 void MediaPopup::CreateMediaCtrl()
@@ -446,7 +445,7 @@ void MediaPopup::CreateMediaCtrl()
         return;
     }
     
-    m_mediaCtrl->SetBackgroundColour(m_bgColor);
+    // Let media control use native background
     
     // Forward mouse clicks from media control to parent popup
     // This is needed because wxMediaCtrl on macOS captures all mouse events
@@ -1394,21 +1393,21 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.DrawRectangle(imgX, imgY, m_bitmap.GetWidth(), m_bitmap.GetHeight());
             
             // Draw downloading circle background
-            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF, 220)));
+            dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
             
             // Draw animated spinner
             static const wxString spinnerChars[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
             wxString spinner = spinnerChars[m_loadingFrame % 8];
-            dc.SetFont(wxFont(18, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-            dc.SetTextForeground(wxColour(255, 255, 255));
+            dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
+            dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
             wxSize spinnerSize = dc.GetTextExtent(spinner);
             dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
             
             // Draw "Downloading..." text below
-            dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-            dc.SetTextForeground(wxColour(0xFF, 0xFF, 0xFF));
+            dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
+            dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
             wxString statusText = "Downloading...";
             wxSize statusSize = dc.GetTextExtent(statusText);
             dc.DrawText(statusText, centerX - statusSize.GetWidth() / 2, centerY + radius + 8);
@@ -1420,7 +1419,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.DrawCircle(centerX, centerY, radius + 4);
             
             // Draw play button circle
-            dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF, 220)));
+            dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
             
@@ -1434,8 +1433,8 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.DrawPolygon(3, triangle);
             
             // Draw hint text
-            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
-            dc.SetTextForeground(wxColour(0xAA, 0xAA, 0xAA));
+            dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
+            dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
             wxString hint = "Click to play";
             wxSize hintSize = dc.GetTextExtent(hint);
             dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
@@ -1446,8 +1445,8 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         
     } else if (m_hasError) {
         // Error state
-        dc.SetTextForeground(wxColour(0xCC, 0x00, 0x00)); // Red
-        dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        dc.SetTextForeground(wxColour(0xCC, 0x00, 0x00)); // Red for errors (semantic color)
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
         
         wxString errorText = m_errorMessage.IsEmpty() ? "Error loading media" : m_errorMessage;
         wxSize textSize = dc.GetTextExtent(errorText);
@@ -1465,19 +1464,19 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int centerY = contentY + 40;
         int radius = 28;
         
-        dc.SetBrush(wxBrush(wxColour(0x72, 0x9F, 0xCF)));
+        dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.DrawCircle(centerX, centerY, radius);
         
-        dc.SetFont(wxFont(24, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-        dc.SetTextForeground(wxColour(255, 255, 255));
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
+        dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
         
         wxSize spinnerSize = dc.GetTextExtent(spinner);
         dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
         
         // Draw "Downloading..." text below
-        dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-        dc.SetTextForeground(wxColour(0xFF, 0xFF, 0xFF));
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+        dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
         wxString statusText = "Downloading...";
         wxSize statusSize = dc.GetTextExtent(statusText);
         int statusX = (size.GetWidth() - statusSize.GetWidth()) / 2;
@@ -1492,14 +1491,14 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         wxString icon = GetMediaIcon();
         
         // For stickers, show the emoji much larger
-        int fontSize = 36;
+        double scaleFactor = 3.0;
         if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
-            fontSize = 64;  // Larger emoji for stickers
+            scaleFactor = 5.0;  // Larger emoji for stickers
             icon = m_mediaInfo.emoji;
         }
         
         // Draw large emoji icon
-        dc.SetFont(wxFont(fontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
         dc.SetTextForeground(m_textColor);
         
         wxSize iconSize = dc.GetTextExtent(icon);
@@ -1513,7 +1512,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             typeText = "Sticker";  // Just show "Sticker" without repeating emoji
         }
         
-        dc.SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
         dc.SetTextForeground(m_textColor);
         
         wxSize typeSize = dc.GetTextExtent(typeText);
@@ -1532,7 +1531,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         }
         
         if (!infoText.IsEmpty()) {
-            dc.SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+            dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Smaller());
             dc.SetTextForeground(m_labelColor);
             
             wxSize infoSize = dc.GetTextExtent(infoText);
@@ -1559,7 +1558,7 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
     
     // Draw media type label
     dc.SetTextForeground(m_labelColor);
-    dc.SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
     
     int maxLabelWidth = size.GetWidth() - (PADDING * 2);
     wxSize labelSize = dc.GetTextExtent(label);
@@ -1579,7 +1578,7 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
     
     // Draw caption below label if available (in smaller text)
     if (!m_mediaInfo.caption.IsEmpty()) {
-        dc.SetFont(wxFont(8, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+        dc.SetFont(wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT).Smaller().Italic());
         
         wxString caption = m_mediaInfo.caption;
         wxSize captionSize = dc.GetTextExtent(caption);
