@@ -1369,6 +1369,31 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
     // Scroll to bottom after loading
     m_chatViewWidget->ScrollToBottom();
 
+    // Trigger auto-download for all media in loaded messages
+    if (m_telegramClient) {
+        for (const auto& msg : messages) {
+            if (msg.hasPhoto || msg.hasVideo || msg.hasVideoNote || 
+                msg.hasSticker || msg.hasAnimation || msg.hasVoice) {
+                // High priority for visible chat messages
+                if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
+                    m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 15, "Thumbnail", 0);
+                }
+                if (msg.mediaFileId != 0 && msg.mediaLocalPath.IsEmpty()) {
+                    // Use appropriate priority based on media type
+                    int priority = 10;
+                    wxString name = "Media";
+                    if (msg.hasPhoto) { name = "Photo"; priority = 12; }
+                    else if (msg.hasSticker) { name = "Sticker"; priority = 14; }
+                    else if (msg.hasAnimation) { name = "GIF"; priority = 11; }
+                    else if (msg.hasVoice) { name = "Voice"; priority = 13; }
+                    else if (msg.hasVideoNote) { name = "VideoNote"; priority = 10; }
+                    else if (msg.hasVideo) { name = "Video"; priority = 8; }
+                    m_telegramClient->DownloadFile(msg.mediaFileId, priority, name, msg.mediaFileSize);
+                }
+            }
+        }
+    }
+
     // Mark the chat as read now that messages are loaded and displayed
     if (m_telegramClient && !messages.empty()) {
         // Find the last message ID (newest) - need to find max since messages may not be sorted
