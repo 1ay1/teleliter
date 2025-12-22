@@ -47,6 +47,13 @@ struct FileDownloadStarted {
     int64_t totalSize;
 };
 
+// File download progress info - for reactive UI to poll
+struct FileDownloadProgress {
+    int32_t fileId;
+    int64_t downloadedSize;
+    int64_t totalSize;
+};
+
 // File download completion info - for reactive UI to poll
 struct FileDownloadResult {
     int32_t fileId;
@@ -152,8 +159,8 @@ public:
     // Get updated messages since last call for a chat (thread-safe, clears queue)
     std::vector<MessageInfo> GetUpdatedMessages(int64_t chatId);
     
-    // Get file IDs that had download progress updates (thread-safe, clears set)
-    std::set<int32_t> GetDownloadProgressUpdates();
+    // Get download progress updates with actual byte counts (thread-safe, clears queue)
+    std::vector<FileDownloadProgress> GetDownloadProgressUpdates();
     
     // Signal UI to refresh (posts lightweight event, no data)
     void NotifyUIRefresh();
@@ -249,8 +256,8 @@ private:
     std::map<int64_t, std::vector<MessageInfo>> m_updatedMessages;
     std::mutex m_updatedMessagesMutex;
     
-    // Download progress updates - just track which files changed
-    std::set<int32_t> m_downloadProgressUpdates;
+    // Download progress updates - track actual bytes for status bar
+    std::vector<FileDownloadProgress> m_downloadProgressUpdates;
     std::mutex m_downloadProgressMutex;
     
     // Coalescing flag to prevent flooding UI with refresh events

@@ -1831,20 +1831,13 @@ void MainFrame::ReactiveRefresh()
             }
         }
         
-        // Get progress updates - UI can poll current state from TelegramClient
+        // Get progress updates with actual byte counts
         auto progressUpdates = m_telegramClient->GetDownloadProgressUpdates();
-        for (int32_t fileId : progressUpdates) {
-            int progress = m_telegramClient->GetDownloadProgress(fileId);
-            if (progress >= 0) {
-                // Update transfer manager with approximate progress
-                auto it = m_fileToTransferId.find(fileId);
-                if (it != m_fileToTransferId.end()) {
-                    TransferInfo* info = m_transferManager.GetTransfer(it->second);
-                    if (info && info->totalBytes > 0) {
-                        int64_t downloaded = (info->totalBytes * progress) / 100;
-                        m_transferManager.UpdateProgress(it->second, downloaded, info->totalBytes);
-                    }
-                }
+        for (const auto& progress : progressUpdates) {
+            // Update transfer manager with actual bytes
+            auto it = m_fileToTransferId.find(progress.fileId);
+            if (it != m_fileToTransferId.end()) {
+                m_transferManager.UpdateProgress(it->second, progress.downloadedSize, progress.totalSize);
             }
         }
     }

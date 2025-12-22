@@ -1891,10 +1891,14 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
         }
         SetDirty(DirtyFlag::Downloads);
     } else if (isDownloading) {
-        // Add to progress updates set (just track fileId, UI reads current state)
+        // Add to progress updates with actual byte counts for status bar
         {
             std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
-            m_downloadProgressUpdates.insert(fileId);
+            FileDownloadProgress progress;
+            progress.fileId = fileId;
+            progress.downloadedSize = downloadedSize;
+            progress.totalSize = totalSize;
+            m_downloadProgressUpdates.push_back(progress);
         }
         SetDirty(DirtyFlag::Downloads);
     }
@@ -2470,10 +2474,10 @@ std::vector<MessageInfo> TelegramClient::GetUpdatedMessages(int64_t chatId)
     return result;
 }
 
-std::set<int32_t> TelegramClient::GetDownloadProgressUpdates()
+std::vector<FileDownloadProgress> TelegramClient::GetDownloadProgressUpdates()
 {
     std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
-    std::set<int32_t> result;
+    std::vector<FileDownloadProgress> result;
     result.swap(m_downloadProgressUpdates);
     return result;
 }
