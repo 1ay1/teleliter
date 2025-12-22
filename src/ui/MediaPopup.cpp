@@ -448,6 +448,21 @@ void MediaPopup::CreateMediaCtrl()
     
     m_mediaCtrl->SetBackgroundColour(m_bgColor);
     
+    // Forward mouse clicks from media control to parent popup
+    // This is needed because wxMediaCtrl on macOS captures all mouse events
+    m_mediaCtrl->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& event) {
+        MPLOG("wxMediaCtrl clicked, forwarding to popup callback");
+        if (m_clickCallback) {
+            m_clickCallback(m_mediaInfo);
+        }
+    });
+    m_mediaCtrl->Bind(wxEVT_LEFT_DCLICK, [this](wxMouseEvent& event) {
+        MPLOG("wxMediaCtrl double-clicked, forwarding to popup callback");
+        if (m_clickCallback) {
+            m_clickCallback(m_mediaInfo);
+        }
+    });
+    
     // Bind media events
     m_mediaCtrl->Bind(wxEVT_MEDIA_LOADED, &MediaPopup::OnMediaLoaded, this);
     m_mediaCtrl->Bind(wxEVT_MEDIA_FINISHED, &MediaPopup::OnMediaFinished, this);
