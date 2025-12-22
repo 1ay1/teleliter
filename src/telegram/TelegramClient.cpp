@@ -1032,7 +1032,15 @@ void TelegramClient::DownloadFile(int32_t fileId, int priority, const wxString& 
         TDLOG("DownloadFile: tracking fileId=%d, total active downloads=%zu", fileId, m_activeDownloads.size());
     }
     
-    // REACTIVE MVC: Just set dirty flag - UI will poll download state
+    // REACTIVE MVC: Add to started downloads queue for UI to poll
+    {
+        std::lock_guard<std::mutex> lock(m_startedDownloadsMutex);
+        FileDownloadStarted started;
+        started.fileId = fileId;
+        started.fileName = fileName.IsEmpty() ? wxString::Format("File %d", fileId) : fileName;
+        started.totalSize = fileSize;
+        m_startedDownloads.push_back(started);
+    }
     SetDirty(DirtyFlag::Downloads);
     
     StartDownloadInternal(fileId, priority);
@@ -2420,6 +2428,14 @@ bool TelegramClient::IsDirty(DirtyFlag flag) const
 {
     uint32_t flags = m_dirtyFlags.load();
     return (flags & static_cast<uint32_t>(flag)) != 0;
+}
+
+std::vector<FileDownloadStarted> TelegramClient::GetStartedDownloads()
+{
+    std::lock_guard<std::mutex> lock(m_startedDownloadsMutex);
+    std::vector<FileDownloadStarted> result;
+    result.swap(m_startedDownloads);
+    return result;
 }
 
 std::vector<FileDownloadResult> TelegramClient::GetCompletedDownloads()

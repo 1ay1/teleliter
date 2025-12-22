@@ -40,6 +40,13 @@ inline DirtyFlag& operator|=(DirtyFlag& a, DirtyFlag b) {
     return a;
 }
 
+// File download started info - for reactive UI to poll
+struct FileDownloadStarted {
+    int32_t fileId;
+    wxString fileName;
+    int64_t totalSize;
+};
+
 // File download completion info - for reactive UI to poll
 struct FileDownloadResult {
     int32_t fileId;
@@ -133,6 +140,9 @@ public:
     // Check if specific flag is dirty (without clearing)
     bool IsDirty(DirtyFlag flag) const;
     
+    // Get started downloads since last call (thread-safe, clears queue)
+    std::vector<FileDownloadStarted> GetStartedDownloads();
+    
     // Get completed downloads since last call (thread-safe, clears queue)
     std::vector<FileDownloadResult> GetCompletedDownloads();
     
@@ -222,6 +232,10 @@ private:
     // ===== REACTIVE MVC STATE =====
     // Dirty flags - set by background threads, polled by UI
     std::atomic<uint32_t> m_dirtyFlags{0};
+    
+    // Started downloads queue - background adds, UI polls
+    std::vector<FileDownloadStarted> m_startedDownloads;
+    std::mutex m_startedDownloadsMutex;
     
     // Completed downloads queue - background adds, UI polls
     std::vector<FileDownloadResult> m_completedDownloads;

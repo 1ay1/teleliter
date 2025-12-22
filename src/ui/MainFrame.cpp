@@ -1815,6 +1815,12 @@ void MainFrame::ReactiveRefresh()
     
     // Handle download updates
     if ((flags & DirtyFlag::Downloads) != DirtyFlag::None) {
+        // Get started downloads first - register them with TransferManager
+        auto startedDownloads = m_telegramClient->GetStartedDownloads();
+        for (const auto& started : startedDownloads) {
+            OnDownloadStarted(started.fileId, started.fileName, started.totalSize);
+        }
+        
         // Get completed downloads
         auto completedDownloads = m_telegramClient->GetCompletedDownloads();
         for (const auto& result : completedDownloads) {
