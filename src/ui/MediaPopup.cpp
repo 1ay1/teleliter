@@ -612,7 +612,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         // Fall back to thumbnail for preview (thumbnails are usually static WebP/JPEG)
         if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
             MPLOG("ShowMedia: sticker - falling back to thumbnail: " << info.thumbnailPath.ToStdString());
-            SetImage(info.thumbnailPath);
+            LoadImageAsync(info.thumbnailPath);
             UpdateSize();
             SetPosition(pos);
             Show();
@@ -682,7 +682,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     
     // Try thumbnail if main file not available
     if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
-        SetImage(info.thumbnailPath);
+        LoadImageAsync(info.thumbnailPath);
         // If main file is downloading, show downloading overlay on thumbnail
         if (info.isDownloading || (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath)))) {
             m_isDownloadingMedia = true;
@@ -936,7 +936,7 @@ void MediaPopup::FallbackToThumbnail()
         MPLOG("FallbackToThumbnail: using thumbnail");
         m_hasError = false;
         m_errorMessage.Clear();
-        SetImage(m_mediaInfo.thumbnailPath);
+        LoadImageAsync(m_mediaInfo.thumbnailPath);
         UpdateSize();
         if (!IsShown()) Show();
         Raise();
@@ -947,7 +947,7 @@ void MediaPopup::FallbackToThumbnail()
         MPLOG("FallbackToThumbnail: using localPath as image");
         m_hasError = false;
         m_errorMessage.Clear();
-        SetImage(m_mediaInfo.localPath);
+        LoadImageAsync(m_mediaInfo.localPath);
         UpdateSize();
         if (!IsShown()) Show();
         Raise();
