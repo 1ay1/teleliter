@@ -6,6 +6,9 @@
 #include <wx/filename.h>
 #include <wx/settings.h>
 #include <iostream>
+#include <thread>
+
+wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 
 #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
 // #define MPLOG(msg) do {} while(0)
@@ -93,6 +96,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
     // Bind async load timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
     
+    // Bind image loaded event
+    Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
+
     // Bind click event to open media
     Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
 }
@@ -582,7 +588,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 #endif
                     
                 case StickerFormat::Webp:
-                    SetImage(info.localPath);
+                    LoadImageAsync(info.localPath);
                     UpdateSize();
                     SetPosition(pos);
                     Show();
@@ -592,7 +598,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
                 case StickerFormat::Unknown:
                 default:
                     if (IsSupportedImageFormat(info.localPath)) {
-                        SetImage(info.localPath);
+                        LoadImageAsync(info.localPath);
                         UpdateSize();
                         SetPosition(pos);
                         Show();
@@ -665,7 +671,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             PlayVideo(info.localPath, shouldLoop, shouldMute);
             return;
         } else if (IsSupportedImageFormat(info.localPath)) {
-            SetImage(info.localPath);
+            LoadImageAsync(info.localPath);
             UpdateSize();
             SetPosition(pos);
             Show();
@@ -1614,10 +1620,43 @@ void MediaPopup::LoadImageAsync(const wxString& path)
     }
 
     m_pendingImagePath = path;
-    m_asyncLoadPending = true;
+    
+    // Offload loading to a background thread to prevent UI freeze
+    std::thread([this, path]() {
+        wxImage image;
+        bool success = LoadImageWithWebPSupport(path, image) && image.IsOk();
+        
+        wxThreadEvent* event = new wxThreadEvent(wxEVT_IMAGE_LOADED);
+        event->SetString(path); // Pass path to verify relevance
+        
+        if (success) {
+            event->SetPayload(image);
+            event->SetInt(1);
+        } else {
+            event->SetInt(0);
+        }
+        
+        wxQueueEvent(this, event);
+    }).detach();
+}
 
-    // Use a short timer to defer the load slightly, allowing UI to remain responsive
-    m_asyncLoadTimer.StartOnce(10);
+void MediaPopup::OnImageLoaded(wxThreadEvent& event)
+{
+    wxString path = event.GetString();
+    
+    // Ignore stale events (user switched to another media)
+    if (!m_pendingImagePath.IsEmpty() && path != m_pendingImagePath) {
+        return;
+    }
+
+    if (event.GetInt() == 1) {
+        wxImage image = event.GetPayload<wxImage>();
+        SetImage(image);
+    } else {
+        MPLOG("OnImageLoaded: failed to load image: " << path.ToStdString());
+        MarkLoadFailed(path);
+        FallbackToThumbnail();
+    }
 }
 
 void MediaPopup::OnAsyncLoadTimer(wxTimerEvent& event)

@@ -97,6 +97,7 @@ private:
     // Async image loading to prevent UI blocking
     void LoadImageAsync(const wxString& path);
     void OnAsyncLoadTimer(wxTimerEvent& event);
+    void OnImageLoaded(wxThreadEvent& event);
 
     // Track failed loads to avoid repeated attempts
     bool HasFailedRecently(const wxString& path) const;
