@@ -15,7 +15,13 @@ ChatArea::ChatArea(wxWindow* parent, wxWindowID id)
 void ChatArea::SetupColors()
 {
     // Use native system font
+#ifdef __WXGTK__
+    // On Linux/GTK, wxSYS_ANSI_FIXED_FONT might not return a monospace font
+    // Force a monospace font using the TELETYPE family
+    m_chatFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+#else
     m_chatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+#endif
 
     // Only set colors that are actually needed for semantic meaning
     // All other colors will use native defaults

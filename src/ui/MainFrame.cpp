@@ -231,7 +231,11 @@ void MainFrame::SetupFonts()
 {
     // Use native system fonts for 100% native look & feel
     wxFont defaultFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+#ifdef __WXGTK__
+    wxFont fixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+#else
     wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+#endif
     
     // For chat display, use the system fixed-width font
     m_chatFont = fixedFont;

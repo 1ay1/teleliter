@@ -75,7 +75,11 @@ void InputBoxWidget::CreateLayout()
     m_inputBox->Bind(wxEVT_KILL_FOCUS, &InputBoxWidget::OnFocusLost, this);
 
     // Use fixed-width font for input (matches chat area)
+#ifdef __WXGTK__
+    wxFont fixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+#else
     wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+#endif
     m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, fixedFont);
     m_inputBox->StyleClearAll();
 
