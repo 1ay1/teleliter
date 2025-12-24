@@ -162,6 +162,9 @@ private:
     bool m_pendingVideoLoop;
     bool m_pendingVideoMuted;
 
+    // Store original position for screen bounds adjustment
+    wxPoint m_originalPosition;
+
     // Track files that failed to load (to avoid repeated attempts)
     std::set<wxString> m_failedLoads;
 

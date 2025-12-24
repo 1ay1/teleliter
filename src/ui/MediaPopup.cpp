@@ -1369,6 +1369,9 @@ void MediaPopup::OnLeftDown(wxMouseEvent& event)
 
 void MediaPopup::AdjustPositionToScreen(const wxPoint& pos)
 {
+    // Store the original position for future adjustments (e.g., after size changes)
+    m_originalPosition = pos;
+    
     wxSize popupSize = GetSize();
     wxPoint adjustedPos = pos;
     
@@ -1381,6 +1384,11 @@ void MediaPopup::AdjustPositionToScreen(const wxPoint& pos)
     wxDisplay display(displayIndex);
     wxRect screenRect = display.GetClientArea();
     
+    MPLOG("AdjustPositionToScreen: pos=(" << pos.x << "," << pos.y << ")"
+          << " popupSize=(" << popupSize.GetWidth() << "," << popupSize.GetHeight() << ")"
+          << " screenRect=(" << screenRect.GetLeft() << "," << screenRect.GetTop() 
+          << "," << screenRect.GetRight() << "," << screenRect.GetBottom() << ")");
+    
     // Adjust horizontal position if popup goes off-screen
     if (adjustedPos.x + popupSize.GetWidth() > screenRect.GetRight()) {
         adjustedPos.x = screenRect.GetRight() - popupSize.GetWidth();
@@ -1391,18 +1399,27 @@ void MediaPopup::AdjustPositionToScreen(const wxPoint& pos)
     
     // Adjust vertical position if popup goes off-screen
     // If not enough space below, show above the original position
-    if (adjustedPos.y + popupSize.GetHeight() > screenRect.GetBottom()) {
+    int popupBottom = adjustedPos.y + popupSize.GetHeight();
+    int screenBottom = screenRect.GetBottom();
+    
+    MPLOG("AdjustPositionToScreen: popupBottom=" << popupBottom << " screenBottom=" << screenBottom);
+    
+    if (popupBottom > screenBottom) {
         // Try to show above - move up by popup height plus some offset
         adjustedPos.y = pos.y - popupSize.GetHeight() - 20;
+        MPLOG("AdjustPositionToScreen: moving up, new y=" << adjustedPos.y);
         
         // If still off-screen (above top), just pin to bottom
         if (adjustedPos.y < screenRect.GetTop()) {
-            adjustedPos.y = screenRect.GetBottom() - popupSize.GetHeight();
+            adjustedPos.y = screenBottom - popupSize.GetHeight();
+            MPLOG("AdjustPositionToScreen: pinning to bottom, new y=" << adjustedPos.y);
         }
     }
     if (adjustedPos.y < screenRect.GetTop()) {
         adjustedPos.y = screenRect.GetTop();
     }
+    
+    MPLOG("AdjustPositionToScreen: final adjustedPos=(" << adjustedPos.x << "," << adjustedPos.y << ")");
     
     SetPosition(adjustedPos);
 }
@@ -1437,7 +1454,44 @@ void MediaPopup::UpdateSize()
     SetSize(width, height);
     
     // Re-adjust position to ensure popup stays within screen bounds after size change
-    AdjustPositionToScreen(GetPosition());
+    // Use the original position, not current position, so we can properly flip above/below
+    if (m_originalPosition.x != 0 || m_originalPosition.y != 0) {
+        wxSize newSize = GetSize();
+        wxPoint adjustedPos = m_originalPosition;
+        
+        // Get the display that contains this point
+        int displayIndex = wxDisplay::GetFromPoint(m_originalPosition);
+        if (displayIndex == wxNOT_FOUND) {
+            displayIndex = 0;
+        }
+        
+        wxDisplay display(displayIndex);
+        wxRect screenRect = display.GetClientArea();
+        
+        // Adjust horizontal
+        if (adjustedPos.x + newSize.GetWidth() > screenRect.GetRight()) {
+            adjustedPos.x = screenRect.GetRight() - newSize.GetWidth();
+        }
+        if (adjustedPos.x < screenRect.GetLeft()) {
+            adjustedPos.x = screenRect.GetLeft();
+        }
+        
+        // Adjust vertical - if not enough space below, show above
+        if (adjustedPos.y + newSize.GetHeight() > screenRect.GetBottom()) {
+            // Show above the original position
+            adjustedPos.y = m_originalPosition.y - newSize.GetHeight() - 20;
+            
+            // If still off-screen above, pin to bottom
+            if (adjustedPos.y < screenRect.GetTop()) {
+                adjustedPos.y = screenRect.GetBottom() - newSize.GetHeight();
+            }
+        }
+        if (adjustedPos.y < screenRect.GetTop()) {
+            adjustedPos.y = screenRect.GetTop();
+        }
+        
+        SetPosition(adjustedPos);
+    }
 }
 
 void MediaPopup::OnPaint(wxPaintEvent& event)
