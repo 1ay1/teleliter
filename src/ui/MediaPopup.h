@@ -84,6 +84,7 @@ protected:
 
 private:
     void UpdateSize();
+    void AdjustPositionToScreen(const wxPoint& pos);
     void ApplyHexChatStyle();
     wxString GetMediaLabel() const;
     wxString GetMediaIcon() const;

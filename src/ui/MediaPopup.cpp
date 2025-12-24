@@ -5,6 +5,7 @@
 #include "FFmpegPlayer.h"
 #include <wx/filename.h>
 #include <wx/settings.h>
+#include <wx/display.h>
 #include <iostream>
 #include <thread>
 
@@ -537,7 +538,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         if (!localPathChanged && !thumbnailPathChanged) {
             // Same media, no path changes, just update position if needed
             MPLOG("ShowMedia: same media, no changes, skipping reload");
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             return;
         }
         MPLOG("ShowMedia: path changed, reloading media");
@@ -564,18 +565,18 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 #ifdef HAVE_WEBM
                     PlayWebmSticker(info.localPath);
                     UpdateSize();
-                    SetPosition(pos);
+                    AdjustPositionToScreen(pos);
                     Show();
                     Refresh();
                     return;
 #else
-                    SetPosition(pos);
+                    AdjustPositionToScreen(pos);
                     PlayVideo(info.localPath, true, true);
                     return;
 #endif
                     
                 case StickerFormat::Gif:
-                    SetPosition(pos);
+                    AdjustPositionToScreen(pos);
                     PlayVideo(info.localPath, true, true);
                     return;
                     
@@ -583,7 +584,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
 #ifdef HAVE_RLOTTIE
                     PlayAnimatedSticker(info.localPath);
                     UpdateSize();
-                    SetPosition(pos);
+                    AdjustPositionToScreen(pos);
                     Show();
                     Refresh();
                     return;
@@ -594,7 +595,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
                 case StickerFormat::Webp:
                     LoadImageAsync(info.localPath);
                     UpdateSize();
-                    SetPosition(pos);
+                    AdjustPositionToScreen(pos);
                     Show();
                     Refresh();
                     return;
@@ -604,7 +605,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
                     if (IsSupportedImageFormat(info.localPath)) {
                         LoadImageAsync(info.localPath);
                         UpdateSize();
-                        SetPosition(pos);
+                        AdjustPositionToScreen(pos);
                         Show();
                         Refresh();
                         return;
@@ -618,7 +619,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             MPLOG("ShowMedia: sticker - falling back to thumbnail: " << info.thumbnailPath.ToStdString());
             LoadImageAsync(info.thumbnailPath);
             UpdateSize();
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             Show();
             Refresh();
             return;
@@ -631,7 +632,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             m_loadingFrame = 0;
             m_loadingTimer.Start(150);
             UpdateSize();
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             Show();
             Refresh();
             return;
@@ -643,7 +644,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             m_loadingFrame = 0;
             m_loadingTimer.Start(150);
             UpdateSize();
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             Show();
             Refresh();
             return;
@@ -652,7 +653,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         // No thumbnail available, show emoji placeholder
         m_hasImage = false;
         UpdateSize();
-        SetPosition(pos);
+        AdjustPositionToScreen(pos);
         Show();
         Refresh();
         return;
@@ -669,7 +670,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             // Always mute preview popups - user can click to open with sound
             bool shouldMute = true;
             // Set position BEFORE PlayVideo so the popup is in the right place
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             // PlayVideo will call Show() internally after setting up the media control
             // Don't call Show() again here to avoid duplicate window issues
             LoadVideoAsync(info.localPath, shouldLoop, shouldMute);
@@ -677,7 +678,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         } else if (IsSupportedImageFormat(info.localPath)) {
             LoadImageAsync(info.localPath);
             UpdateSize();
-            SetPosition(pos);
+            AdjustPositionToScreen(pos);
             Show();
             Refresh();
             return;
@@ -695,7 +696,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             MPLOG("ShowMedia: showing thumbnail with downloading overlay");
         }
         UpdateSize();
-        SetPosition(pos);
+        AdjustPositionToScreen(pos);
         Show();
         Refresh();
         return;
@@ -713,7 +714,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     }
     
     UpdateSize();
-    SetPosition(pos);
+    AdjustPositionToScreen(pos);
     Show();
     Refresh();
 }
@@ -1364,6 +1365,46 @@ void MediaPopup::OnLeftDown(wxMouseEvent& event)
         m_clickCallback(m_mediaInfo);
     }
     event.Skip();
+}
+
+void MediaPopup::AdjustPositionToScreen(const wxPoint& pos)
+{
+    wxSize popupSize = GetSize();
+    wxPoint adjustedPos = pos;
+    
+    // Get the display that contains this point
+    int displayIndex = wxDisplay::GetFromPoint(pos);
+    if (displayIndex == wxNOT_FOUND) {
+        displayIndex = 0;  // Fall back to primary display
+    }
+    
+    wxDisplay display(displayIndex);
+    wxRect screenRect = display.GetClientArea();
+    
+    // Adjust horizontal position if popup goes off-screen
+    if (adjustedPos.x + popupSize.GetWidth() > screenRect.GetRight()) {
+        adjustedPos.x = screenRect.GetRight() - popupSize.GetWidth();
+    }
+    if (adjustedPos.x < screenRect.GetLeft()) {
+        adjustedPos.x = screenRect.GetLeft();
+    }
+    
+    // Adjust vertical position if popup goes off-screen
+    // If not enough space below, show above the original position
+    if (adjustedPos.y + popupSize.GetHeight() > screenRect.GetBottom()) {
+        // Try to show above - move up by popup height plus some offset
+        adjustedPos.y = pos.y - popupSize.GetHeight() - 20;
+        
+        // If still off-screen (above top), just pin to bottom
+        if (adjustedPos.y < screenRect.GetTop()) {
+            adjustedPos.y = screenRect.GetBottom() - popupSize.GetHeight();
+        }
+    }
+    if (adjustedPos.y < screenRect.GetTop()) {
+        adjustedPos.y = screenRect.GetTop();
+    }
+    
+    SetPosition(adjustedPos);
 }
 
 void MediaPopup::UpdateSize()
