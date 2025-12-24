@@ -124,7 +124,7 @@ public:
     void RemovePendingOpen(int32_t fileId);
     
     // Media popup
-    void ShowMediaPopup(const MediaInfo& info, const wxPoint& position);
+    void ShowMediaPopup(const MediaInfo& info, const wxPoint& position, int parentBottom = -1);
     void HideMediaPopup();
     void UpdateMediaPopup(int32_t fileId, const wxString& localPath);
     

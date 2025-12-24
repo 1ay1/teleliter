@@ -63,6 +63,9 @@ public:
 
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
 
+    // Set parent window bottom bound for positioning
+    void SetParentBottom(int bottom) { m_parentBottom = bottom; }
+
     // Set callback for when popup is clicked
     void SetClickCallback(std::function<void(const MediaInfo&)> callback) { m_clickCallback = callback; }
 
@@ -85,6 +88,7 @@ protected:
 private:
     void UpdateSize();
     void AdjustPositionToScreen(const wxPoint& pos);
+    void ApplySizeAndPosition(int width, int height);  // Single source of truth for size + position
     void ApplyHexChatStyle();
     wxString GetMediaLabel() const;
     wxString GetMediaIcon() const;
@@ -164,6 +168,9 @@ private:
 
     // Store original position for screen bounds adjustment
     wxPoint m_originalPosition;
+    
+    // Parent window bottom bound (in screen coordinates)
+    int m_parentBottom;
 
     // Track files that failed to load (to avoid repeated attempts)
     std::set<wxString> m_failedLoads;

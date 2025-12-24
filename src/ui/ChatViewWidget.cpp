@@ -1095,12 +1095,15 @@ bool ChatViewWidget::IsSameMedia(const MediaInfo& a, const MediaInfo& b) const
     return false;
 }
 
-void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& position)
+void ChatViewWidget::ShowMediaPopup(const MediaInfo& info, const wxPoint& position, int parentBottom)
 {
     if (!m_mediaPopup) {
         CVWLOG("ShowMediaPopup: no popup widget");
         return;
     }
+    
+    // Store parent bottom for popup positioning
+    m_mediaPopup->SetParentBottom(parentBottom);
     
     // Validate input - must have either a fileId, thumbnailFileId, or a local path
     // Stickers may only have thumbnailFileId initially before the main sticker downloads
@@ -1787,7 +1790,9 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent& event)
                     HideMediaPopup();
                 } else {
                     wxPoint screenPos = ctrl->ClientToScreen(pos);
-                    ShowMediaPopup(info, screenPos);
+                    // Also get the bottom of the chat area in screen coordinates
+                    wxRect chatRect = ctrl->GetScreenRect();
+                    ShowMediaPopup(info, screenPos, chatRect.GetBottom());
                 }
             } else {
                 // Non-visual media (Voice, File) - open directly

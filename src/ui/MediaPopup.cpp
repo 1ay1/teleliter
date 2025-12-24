@@ -12,26 +12,26 @@
 wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 wxDEFINE_EVENT(wxEVT_VIDEO_LOADED, wxThreadEvent);
 
-#define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
-// #define MPLOG(msg) do {} while(0)
+// #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+#define MPLOG(msg) do {} while(0)
 
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString& path)
 {
     wxFileName fn(path);
     wxString ext = fn.GetExt().Lower();
-    
+
     // Natively supported static image formats
-    if (ext == "jpg" || ext == "jpeg" || ext == "png" || 
+    if (ext == "jpg" || ext == "jpeg" || ext == "png" ||
         ext == "bmp" || ext == "ico" || ext == "tiff" || ext == "tif") {
         return true;
     }
-    
+
     // WebP is supported if libwebp is available
     if (ext == "webp") {
         return HasWebPSupport();
     }
-    
+
     return false;
 }
 
@@ -40,14 +40,14 @@ static bool IsVideoFormat(const wxString& path)
 {
     wxFileName fn(path);
     wxString ext = fn.GetExt().Lower();
-    
+
     // Video formats that wxMediaCtrl can typically handle
-    if (ext == "mp4" || ext == "webm" || ext == "avi" || 
+    if (ext == "mp4" || ext == "webm" || ext == "avi" ||
         ext == "mov" || ext == "mkv" || ext == "gif" ||
         ext == "m4v" || ext == "ogv") {
         return true;
     }
-    
+
     return false;
 }
 
@@ -75,29 +75,30 @@ MediaPopup::MediaPopup(wxWindow* parent)
       m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID),
       m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID),
       m_asyncLoadPending(false),
+      m_parentBottom(-1),
       m_videoLoadStartTime(0)
 {
     // Set hand cursor to indicate popup is clickable
     SetCursor(wxCursor(wxCURSOR_HAND));
-    
+
     ApplyHexChatStyle();
     SetSize(MIN_WIDTH, MIN_HEIGHT);
-    
+
     // Bind loading timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
-    
+
     // Bind lottie animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnLottieAnimTimer, this, LOTTIE_ANIM_TIMER_ID);
-    
+
     // Bind webm animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnWebmAnimTimer, this, WEBM_ANIM_TIMER_ID);
-    
+
     // Bind ffmpeg animation timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnFFmpegAnimTimer, this, FFMPEG_ANIM_TIMER_ID);
-    
+
     // Bind async load timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
-    
+
     // Bind image loaded event
     Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
 
@@ -127,32 +128,32 @@ void MediaPopup::StopAllPlayback()
     m_ffmpegAnimTimer.Stop();
     m_loadingTimer.Stop();
     m_asyncLoadTimer.Stop();
-    
+
     // Stop video playback
     if (m_mediaCtrl) {
         m_mediaCtrl->Stop();
         m_mediaCtrl->Hide();
     }
     m_isPlayingVideo = false;
-    
+
     // Stop Lottie animation
     if (m_lottiePlayer) {
         m_lottiePlayer->Stop();
     }
     m_isPlayingSticker = false;
-    
+
     // Stop WebM playback
     if (m_webmPlayer) {
         m_webmPlayer->Stop();
     }
     m_isPlayingWebm = false;
-    
+
     // Stop FFmpeg playback
     if (m_ffmpegPlayer) {
         m_ffmpegPlayer->Stop();
     }
     m_isPlayingFFmpeg = false;
-    
+
     // Reset loading state
     m_isLoading = false;
     m_isDownloadingMedia = false;
@@ -172,15 +173,15 @@ enum class StickerFormat {
 static StickerFormat DetectStickerFormat(const wxString& path)
 {
     if (path.IsEmpty()) return StickerFormat::Unknown;
-    
+
     wxFileName fn(path);
     wxString ext = fn.GetExt().Lower();
-    
+
     if (ext == "tgs") return StickerFormat::Tgs;
     if (ext == "webm") return StickerFormat::Webm;
     if (ext == "webp") return StickerFormat::Webp;
     if (ext == "gif") return StickerFormat::Gif;
-    
+
     return StickerFormat::Unknown;
 }
 
@@ -194,31 +195,35 @@ void MediaPopup::PlayAnimatedSticker(const wxString& path)
         FallbackToThumbnail();
         return;
     }
-    
+
     // Stop all other playback first
     StopAllPlayback();
-    
+
     if (!m_lottiePlayer) {
         m_lottiePlayer = std::make_unique<LottiePlayer>();
     }
-    
+
     // Set render size to fit popup (use sticker size for animated stickers)
     m_lottiePlayer->SetRenderSize(STICKER_MAX_WIDTH - PADDING * 2, STICKER_MAX_HEIGHT - PADDING * 2 - 20);
     m_lottiePlayer->SetLoop(true);
-    
+
     // Set callback to receive frames
     m_lottiePlayer->SetFrameCallback([this](const wxBitmap& frame) {
         OnLottieFrame(frame);
     });
-    
+
     if (m_lottiePlayer->LoadTgsFile(path)) {
         m_isPlayingSticker = true;
         m_hasImage = true;  // Mark that we have content to display
         m_lottiePlayer->Play();
-        
+
         // Start timer to drive the animation
         int intervalMs = m_lottiePlayer->GetTimerIntervalMs();
         m_lottieAnimTimer.Start(intervalMs);
+
+        // Apply size and position using single source of truth
+        ApplySizeAndPosition(STICKER_MAX_WIDTH, STICKER_MAX_HEIGHT);
+        Refresh();
     } else {
         MPLOG("PlayAnimatedSticker: failed to load: " << path.ToStdString());
         MarkLoadFailed(path);
@@ -241,34 +246,34 @@ void MediaPopup::PlayWebmSticker(const wxString& path)
 #if defined(__WXGTK__) && defined(HAVE_FFMPEG)
     // On Linux, use FFmpegPlayer for WebM stickers (more reliable than libvpx)
     MPLOG("PlayWebmSticker: using FFmpegPlayer on Linux for " << path.ToStdString());
-    
+
     // Check if this sticker has failed to load recently
     if (HasFailedRecently(path)) {
         MPLOG("PlayWebmSticker: skipping recently failed sticker");
         FallbackToThumbnail();
         return;
     }
-    
+
     // Stop all other playback first
     StopAllPlayback();
-    
+
     // Create FFmpeg player if needed
     if (!m_ffmpegPlayer) {
         m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
     }
-    
+
     // Set render size for stickers
     int stickerWidth = STICKER_MAX_WIDTH - PADDING * 2;
     int stickerHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
     m_ffmpegPlayer->SetRenderSize(stickerWidth, stickerHeight);
     m_ffmpegPlayer->SetLoop(true);
     m_ffmpegPlayer->SetMuted(true);
-    
+
     // Set up frame callback
     m_ffmpegPlayer->SetFrameCallback([this](const wxBitmap& frame) {
         OnFFmpegFrame(frame);
     });
-    
+
     // Load the WebM file
     if (!m_ffmpegPlayer->LoadFile(path)) {
         MPLOG("PlayWebmSticker: FFmpeg failed to load: " << path.ToStdString());
@@ -277,42 +282,42 @@ void MediaPopup::PlayWebmSticker(const wxString& path)
         FallbackToThumbnail();
         return;
     }
-    
+
     // Get actual dimensions and scale
     int vidWidth = m_ffmpegPlayer->GetWidth();
     int vidHeight = m_ffmpegPlayer->GetHeight();
-    
+
     if (vidWidth > 0 && vidHeight > 0) {
         double scaleX = (double)stickerWidth / vidWidth;
         double scaleY = (double)stickerHeight / vidHeight;
         double scale = std::min(scaleX, scaleY);
-        
+
         int scaledWidth = (int)(vidWidth * scale);
         int scaledHeight = (int)(vidHeight * scale);
-        
+
         m_ffmpegPlayer->SetRenderSize(scaledWidth, scaledHeight);
-        SetSize(scaledWidth + PADDING * 2 + BORDER_WIDTH * 2,
-                scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 20);
+        int popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
+        int popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 20;
+        ApplySizeAndPosition(popupWidth, popupHeight);
     } else {
-        SetSize(STICKER_MAX_WIDTH, STICKER_MAX_HEIGHT);
+        ApplySizeAndPosition(STICKER_MAX_WIDTH, STICKER_MAX_HEIGHT);
     }
-    
+
     // Start playback
     m_ffmpegPlayer->Play();
     m_isPlayingFFmpeg = true;
     m_hasImage = true;
-    
+
     // Start timer for frame updates
     int interval = m_ffmpegPlayer->GetTimerIntervalMs();
     m_ffmpegAnimTimer.Start(interval);
-    
-    Show();
-    Raise();
+
+    // ApplySizeAndPosition already called Show(), just refresh
     Refresh();
-    
+
     MPLOG("PlayWebmSticker: FFmpeg playback started");
     return;
-    
+
 #elif defined(HAVE_WEBM)
     // Use libvpx/libwebm on other platforms
     // Check if this sticker has failed to load recently
@@ -321,28 +326,28 @@ void MediaPopup::PlayWebmSticker(const wxString& path)
         FallbackToThumbnail();
         return;
     }
-    
+
     // Stop all other playback first
     StopAllPlayback();
-    
+
     if (!m_webmPlayer) {
         m_webmPlayer = std::make_unique<WebmPlayer>();
     }
-    
+
     // Set render size to fit popup (use sticker size for webm stickers)
     m_webmPlayer->SetRenderSize(STICKER_MAX_WIDTH - PADDING * 2, STICKER_MAX_HEIGHT - PADDING * 2 - 20);
     m_webmPlayer->SetLoop(true);
-    
+
     // Set callback to receive frames
     m_webmPlayer->SetFrameCallback([this](const wxBitmap& frame) {
         OnWebmFrame(frame);
     });
-    
+
     if (m_webmPlayer->LoadFile(path)) {
         m_isPlayingWebm = true;
         m_hasImage = true;  // Mark that we have content to display
         m_webmPlayer->Play();
-        
+
         // Start timer to drive the animation
         int intervalMs = m_webmPlayer->GetTimerIntervalMs();
         m_webmAnimTimer.Start(intervalMs);
@@ -444,7 +449,7 @@ void MediaPopup::CreateMediaCtrl()
 #endif
 
     if (m_mediaCtrl) return;
-    
+
     m_mediaCtrl = new wxMediaCtrl();
     // Use default backend - wxMEDIABACKEND_GSTREAMER on Linux
     if (!m_mediaCtrl->Create(this, wxID_ANY, wxEmptyString,
@@ -455,9 +460,9 @@ void MediaPopup::CreateMediaCtrl()
         m_mediaCtrl = nullptr;
         return;
     }
-    
+
     // Let media control use native background
-    
+
     // Forward mouse clicks from media control to parent popup
     // This is needed because wxMediaCtrl on macOS captures all mouse events
     m_mediaCtrl->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& event) {
@@ -472,7 +477,7 @@ void MediaPopup::CreateMediaCtrl()
             m_clickCallback(m_mediaInfo);
         }
     });
-    
+
     // Bind media events
     m_mediaCtrl->Bind(wxEVT_MEDIA_LOADED, &MediaPopup::OnMediaLoaded, this);
     m_mediaCtrl->Bind(wxEVT_MEDIA_FINISHED, &MediaPopup::OnMediaFinished, this);
@@ -498,7 +503,7 @@ bool MediaPopup::IsSameMedia(const MediaInfo& a, const MediaInfo& b) const
 {
     // Must be same type
     if (a.type != b.type) return false;
-    
+
     // Compare by fileId if both have valid IDs
     if (a.fileId != 0 && b.fileId != 0) {
         return a.fileId == b.fileId;
@@ -520,21 +525,24 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
           << " localPath=" << info.localPath.ToStdString()
           << " thumbnailPath=" << info.thumbnailPath.ToStdString()
           << " isDownloading=" << info.isDownloading);
-    
+
+    // Store original position immediately so UpdateSize() can use it
+    m_originalPosition = pos;
+
     // Check if we're already showing the same media - avoid unnecessary reloads
     // BUT: if localPath changed (download completed), we need to reload!
     if (IsShown() && IsSameMedia(m_mediaInfo, info)) {
         // Check if the localPath has changed (download completed)
-        bool localPathChanged = (m_mediaInfo.localPath != info.localPath && 
+        bool localPathChanged = (m_mediaInfo.localPath != info.localPath &&
                                  !info.localPath.IsEmpty() && wxFileExists(info.localPath));
-        bool thumbnailPathChanged = (m_mediaInfo.thumbnailPath != info.thumbnailPath && 
+        bool thumbnailPathChanged = (m_mediaInfo.thumbnailPath != info.thumbnailPath &&
                                      !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
-        
-        MPLOG("ShowMedia: same media check - localPathChanged=" << localPathChanged 
+
+        MPLOG("ShowMedia: same media check - localPathChanged=" << localPathChanged
               << " thumbnailPathChanged=" << thumbnailPathChanged
               << " current.localPath=" << m_mediaInfo.localPath.ToStdString()
               << " new.localPath=" << info.localPath.ToStdString());
-        
+
         if (!localPathChanged && !thumbnailPathChanged) {
             // Same media, no path changes, just update position if needed
             MPLOG("ShowMedia: same media, no changes, skipping reload");
@@ -544,164 +552,155 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         MPLOG("ShowMedia: path changed, reloading media");
         // Path changed - fall through to reload with new file
     }
-    
+
     // Stop all current playback and reset state
     StopAllPlayback();
-    
+
     m_mediaInfo = info;
     m_hasError = false;
     m_errorMessage.Clear();
     m_hasImage = false;
     m_isDownloadingMedia = false;
-    
+
     // For stickers, detect format and use appropriate renderer
     if (info.type == MediaType::Sticker) {
         bool hasLocalFile = !info.localPath.IsEmpty() && wxFileExists(info.localPath);
         StickerFormat format = hasLocalFile ? DetectStickerFormat(info.localPath) : StickerFormat::Unknown;
-        
+
         if (hasLocalFile) {
             switch (format) {
                 case StickerFormat::Webm:
 #ifdef HAVE_WEBM
                     PlayWebmSticker(info.localPath);
-                    UpdateSize();
-                    AdjustPositionToScreen(pos);
-                    Show();
                     Refresh();
                     return;
 #else
-                    AdjustPositionToScreen(pos);
                     PlayVideo(info.localPath, true, true);
                     return;
 #endif
-                    
+
                 case StickerFormat::Gif:
-                    AdjustPositionToScreen(pos);
                     PlayVideo(info.localPath, true, true);
                     return;
-                    
+
                 case StickerFormat::Tgs:
 #ifdef HAVE_RLOTTIE
                     PlayAnimatedSticker(info.localPath);
-                    UpdateSize();
-                    AdjustPositionToScreen(pos);
-                    Show();
                     Refresh();
                     return;
 #else
                     break;  // Fall through to thumbnail
 #endif
-                    
+
                 case StickerFormat::Webp:
+                    // Show loading placeholder immediately, then load image async
+                    m_isLoading = true;
+                    m_loadingFrame = 0;
+                    m_loadingTimer.Start(150);
+                    ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
                     LoadImageAsync(info.localPath);
-                    UpdateSize();
-                    AdjustPositionToScreen(pos);
-                    Show();
                     Refresh();
                     return;
-                    
+
                 case StickerFormat::Unknown:
                 default:
                     if (IsSupportedImageFormat(info.localPath)) {
+                        // Show loading placeholder immediately, then load image async
+                        m_isLoading = true;
+                        m_loadingFrame = 0;
+                        m_loadingTimer.Start(150);
+                        ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
                         LoadImageAsync(info.localPath);
-                        UpdateSize();
-                        AdjustPositionToScreen(pos);
-                        Show();
                         Refresh();
                         return;
                     }
                     break;  // Fall through to thumbnail
             }
         }
-        
+
         // Fall back to thumbnail for preview (thumbnails are usually static WebP/JPEG)
         if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
             MPLOG("ShowMedia: sticker - falling back to thumbnail: " << info.thumbnailPath.ToStdString());
+            // Show loading placeholder immediately, then load image async
+            m_isLoading = true;
+            m_loadingFrame = 0;
+            m_loadingTimer.Start(150);
+            ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
             LoadImageAsync(info.thumbnailPath);
-            UpdateSize();
-            AdjustPositionToScreen(pos);
-            Show();
             Refresh();
             return;
         }
-        
+
         // If file not downloaded yet but we have a file ID, show loading
         if (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath))) {
             MPLOG("ShowMedia: sticker file not ready, showing loading for fileId=" << info.fileId);
             m_isLoading = true;
             m_loadingFrame = 0;
             m_loadingTimer.Start(150);
-            UpdateSize();
-            AdjustPositionToScreen(pos);
-            Show();
+            ApplySizeAndPosition(180, 120);
             Refresh();
             return;
         }
-        
+
         // If thumbnail not available, check if we need to download it
         if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
             m_isLoading = true;
             m_loadingFrame = 0;
             m_loadingTimer.Start(150);
-            UpdateSize();
-            AdjustPositionToScreen(pos);
-            Show();
+            ApplySizeAndPosition(180, 120);
             Refresh();
             return;
         }
-        
+
         // No thumbnail available, show emoji placeholder
         m_hasImage = false;
-        UpdateSize();
-        AdjustPositionToScreen(pos);
-        Show();
+        ApplySizeAndPosition(200, 150);
         Refresh();
         return;
     }
-    
+
     // Non-sticker media types (Photo, Video, GIF, VideoNote, Audio, Voice, File)
-    
+
     // If we have a local path, try to load it
     if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
         // Check if it's a video/GIF that should be played
-        if ((info.type == MediaType::Video || info.type == MediaType::GIF || 
+        if ((info.type == MediaType::Video || info.type == MediaType::GIF ||
              info.type == MediaType::VideoNote) && IsVideoFormat(info.localPath)) {
             bool shouldLoop = (info.type == MediaType::GIF);
             // Always mute preview popups - user can click to open with sound
             bool shouldMute = true;
-            // Set position BEFORE PlayVideo so the popup is in the right place
-            AdjustPositionToScreen(pos);
-            // PlayVideo will call Show() internally after setting up the media control
-            // Don't call Show() again here to avoid duplicate window issues
+            // LoadVideoAsync will call ApplySizeAndPosition internally
             LoadVideoAsync(info.localPath, shouldLoop, shouldMute);
             return;
         } else if (IsSupportedImageFormat(info.localPath)) {
+            // Show loading placeholder immediately, then load image async
+            m_isLoading = true;
+            m_loadingFrame = 0;
+            m_loadingTimer.Start(150);
+            ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
             LoadImageAsync(info.localPath);
-            UpdateSize();
-            AdjustPositionToScreen(pos);
-            Show();
             Refresh();
             return;
         }
     }
-    
+
     // Try thumbnail if main file not available
     if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
+        // Show loading placeholder immediately, then load image async
+        m_isLoading = true;
+        m_loadingFrame = 0;
+        m_loadingTimer.Start(150);
+        ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
         LoadImageAsync(info.thumbnailPath);
         // If main file is downloading, show downloading overlay on thumbnail
         if (info.isDownloading || (info.fileId != 0 && (info.localPath.IsEmpty() || !wxFileExists(info.localPath)))) {
             m_isDownloadingMedia = true;
-            m_loadingFrame = 0;
-            m_loadingTimer.Start(150);  // Start timer for spinner animation
             MPLOG("ShowMedia: showing thumbnail with downloading overlay");
         }
-        UpdateSize();
-        AdjustPositionToScreen(pos);
-        Show();
         Refresh();
         return;
     }
-    
+
     // No local file - show downloading state
     if (info.isDownloading || info.fileId != 0) {
         MPLOG("ShowMedia: no local file, showing downloading state for fileId=" << info.fileId);
@@ -712,10 +711,8 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     } else {
         MPLOG("ShowMedia: no local file and no fileId, showing placeholder");
     }
-    
-    UpdateSize();
-    AdjustPositionToScreen(pos);
-    Show();
+
+    ApplySizeAndPosition(180, 120);
     Refresh();
 }
 
@@ -763,11 +760,9 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     // Set size for video BEFORE creating media control
     int videoWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
     int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
-    SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
-
-    // Show the popup window - required on macOS for video to be visible
-    Show();
-    Raise();  // Bring popup to front
+    
+    // Use single source of truth for size and position - this also shows the window
+    ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
 
     // Create media control if needed
     CreateMediaCtrl();
@@ -785,7 +780,7 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 
     // Load and play the video
     MPLOG("PlayVideo: loading video file");
-    
+
     // Wrap the Load call in try-catch to prevent crashes
     bool loadSuccess = false;
     try {
@@ -797,7 +792,7 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
         MPLOG("PlayVideo: unknown exception during Load()");
         loadSuccess = false;
     }
-    
+
     if (loadSuccess) {
         // OnMediaLoaded will be called when ready
         m_isLoading = true;
@@ -818,40 +813,40 @@ void MediaPopup::LoadVideoAsync(const wxString& path, bool loop, bool muted)
 {
 #ifdef HAVE_FFMPEG
     MPLOG("LoadVideoAsync: " << path.ToStdString());
-    
+
     // Check if this video has failed to load recently
     if (HasFailedRecently(path)) {
         MPLOG("LoadVideoAsync: skipping recently failed video");
         FallbackToThumbnail();
         return;
     }
-    
+
     // Store pending video info
     m_pendingVideoPath = path;
     m_pendingVideoLoop = loop;
     m_pendingVideoMuted = muted;
-    
+
     // Show loading indicator immediately so UI is responsive
     m_isLoading = true;
     m_loadingFrame = 0;
     m_loadingTimer.Start(150);
-    SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
-    Show();
-    Raise();
-    Refresh();
     
+    // Use single source of truth for size and position - this also shows the window
+    ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    Refresh();
+
     // Defer the heavy FFmpeg loading using CallAfter
     // This allows the UI to update before the blocking call
     CallAfter([this]() {
         if (m_pendingVideoPath.IsEmpty()) {
             return;  // Cancelled
         }
-        
+
         wxString path = m_pendingVideoPath;
         bool loop = m_pendingVideoLoop;
         bool muted = m_pendingVideoMuted;
         m_pendingVideoPath.Clear();
-        
+
         // Now do the actual FFmpeg loading
         PlayVideoWithFFmpeg(path, loop, muted);
     });
@@ -871,45 +866,45 @@ void MediaPopup::PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted
 {
 #ifdef HAVE_FFMPEG
     MPLOG("PlayVideoWithFFmpeg: " << path.ToStdString());
-    
+
     // Stop loading indicator
     m_isLoading = false;
     m_loadingTimer.Stop();
-    
+
     // Check if this video has failed to load recently
     if (HasFailedRecently(path)) {
         MPLOG("PlayVideoWithFFmpeg: skipping recently failed video");
         FallbackToThumbnail();
         return;
     }
-    
+
     // Stop all other playback first
     StopAllPlayback();
-    
+
     m_videoPath = path;
     m_loopVideo = loop;
     m_videoMuted = muted;
     m_hasImage = false;
-    
+
     // Calculate video display size
     int videoWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
     int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
-    
+
     // Create FFmpeg player if needed
     if (!m_ffmpegPlayer) {
         m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
     }
-    
+
     // Set render size before loading
     m_ffmpegPlayer->SetRenderSize(videoWidth, videoHeight);
     m_ffmpegPlayer->SetLoop(loop);
     m_ffmpegPlayer->SetMuted(muted);
-    
+
     // Set up frame callback
     m_ffmpegPlayer->SetFrameCallback([this](const wxBitmap& frame) {
         OnFFmpegFrame(frame);
     });
-    
+
     // Load the video
     if (!m_ffmpegPlayer->LoadFile(path)) {
         MPLOG("PlayVideoWithFFmpeg: failed to load video");
@@ -918,42 +913,43 @@ void MediaPopup::PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted
         FallbackToThumbnail();
         return;
     }
-    
+
     // Get actual video dimensions and calculate scaled size
     int vidWidth = m_ffmpegPlayer->GetWidth();
     int vidHeight = m_ffmpegPlayer->GetHeight();
-    
+
     if (vidWidth > 0 && vidHeight > 0) {
         // Scale to fit within max dimensions while preserving aspect ratio
         double scaleX = (double)videoWidth / vidWidth;
         double scaleY = (double)videoHeight / vidHeight;
         double scale = std::min(scaleX, scaleY);
-        
+
         int scaledWidth = (int)(vidWidth * scale);
         int scaledHeight = (int)(vidHeight * scale);
-        
+
         // Update render size
         m_ffmpegPlayer->SetRenderSize(scaledWidth, scaledHeight);
-        
-        // Set popup size
-        SetSize(scaledWidth + PADDING * 2 + BORDER_WIDTH * 2,
-                scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24);
+
+        // Use single source of truth for size and position
+        int popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
+        int popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+        ApplySizeAndPosition(popupWidth, popupHeight);
     } else {
-        SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+        ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
     }
-    
+
     // Start playback
     m_ffmpegPlayer->Play();
     m_isPlayingFFmpeg = true;
-    
-    // Start timer for frame updates
+    m_hasImage = true;
+
+    // Start animation timer
     int interval = m_ffmpegPlayer->GetTimerIntervalMs();
     m_ffmpegAnimTimer.Start(interval);
-    
-    Show();
-    Raise();
+
+    // ApplySizeAndPosition already called Show()
     Refresh();
-    
+
     MPLOG("PlayVideoWithFFmpeg: playback started, interval=" << interval << "ms");
 #else
     // FFmpeg not available, fall back to thumbnail
@@ -968,7 +964,7 @@ void MediaPopup::OnFFmpegAnimTimer(wxTimerEvent& event)
         m_ffmpegAnimTimer.Stop();
         return;
     }
-    
+
     if (!m_ffmpegPlayer->AdvanceFrame()) {
         // Video ended (and not looping)
         m_ffmpegAnimTimer.Stop();
@@ -981,7 +977,7 @@ void MediaPopup::OnFFmpegAnimTimer(wxTimerEvent& event)
 void MediaPopup::OnFFmpegFrame(const wxBitmap& frame)
 {
     if (!frame.IsOk()) return;
-    
+
     m_bitmap = frame;
     m_hasImage = true;
     Refresh();
@@ -991,18 +987,16 @@ void MediaPopup::FallbackToThumbnail()
 {
     MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
           << " localPath=" << m_mediaInfo.localPath.ToStdString());
-    
+
     m_loadingTimer.Stop();
-    
+
     // Try to use the thumbnail from the current media info
     if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
         MPLOG("FallbackToThumbnail: using thumbnail");
         m_hasError = false;
         m_errorMessage.Clear();
         LoadImageAsync(m_mediaInfo.thumbnailPath);
-        UpdateSize();
-        if (!IsShown()) Show();
-        Raise();
+        // LoadImageAsync -> SetImage -> UpdateSize -> ApplySizeAndPosition handles positioning
         Refresh();
     } else if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath) &&
                IsSupportedImageFormat(m_mediaInfo.localPath)) {
@@ -1011,9 +1005,6 @@ void MediaPopup::FallbackToThumbnail()
         m_hasError = false;
         m_errorMessage.Clear();
         LoadImageAsync(m_mediaInfo.localPath);
-        UpdateSize();
-        if (!IsShown()) Show();
-        Raise();
         Refresh();
     } else if (!m_mediaInfo.emoji.IsEmpty()) {
         // Show emoji placeholder
@@ -1021,9 +1012,7 @@ void MediaPopup::FallbackToThumbnail()
         m_hasError = false;
         m_errorMessage.Clear();
         m_hasImage = false;
-        UpdateSize();
-        if (!IsShown()) Show();
-        Raise();
+        ApplySizeAndPosition(200, 150);
         Refresh();
     } else {
         // Show a placeholder indicating video/media
@@ -1031,9 +1020,7 @@ void MediaPopup::FallbackToThumbnail()
         m_hasError = false;
         m_errorMessage.Clear();
         m_hasImage = false;
-        UpdateSize();
-        if (!IsShown()) Show();
-        Raise();
+        ApplySizeAndPosition(180, 120);
         Refresh();
     }
 }
@@ -1041,18 +1028,18 @@ void MediaPopup::FallbackToThumbnail()
 void MediaPopup::StopVideo()
 {
     MPLOG("StopVideo called");
-    
+
     // Stop the loading timer first
     m_loadingTimer.Stop();
-    
+
     if (m_mediaCtrl) {
         try {
             // Stop playback
             m_mediaCtrl->Stop();
-            
+
             // Set volume to 0 to ensure no audio leak
             m_mediaCtrl->SetVolume(0.0);
-            
+
             // Hide the control
             m_mediaCtrl->Hide();
         } catch (const std::exception& e) {
@@ -1061,12 +1048,12 @@ void MediaPopup::StopVideo()
             MPLOG("StopVideo: unknown exception stopping media");
         }
     }
-    
+
     m_isPlayingVideo = false;
     m_isLoading = false;
     m_videoPath.Clear();
     m_videoLoadStartTime = 0;
-    
+
     // Note: Don't stop animated stickers here - they are independent
 }
 
@@ -1078,16 +1065,18 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
     m_isPlayingVideo = true;
 
     // Ensure popup is visible now that video is ready
+    // Position should already be set, but ensure we're visible
     if (!IsShown()) {
-        Show();
+        // Re-apply size and position to ensure correct placement
+        wxSize size = GetSize();
+        ApplySizeAndPosition(size.GetWidth(), size.GetHeight());
     }
-    Raise();  // Make sure popup is in front of other windows
 
     if (m_mediaCtrl) {
         // Set volume BEFORE playing - set it to 0 first, then apply desired volume
         // This helps ensure muting works on all platforms
         m_mediaCtrl->SetVolume(0.0);
-        
+
         // Now set the actual desired volume
         if (m_videoMuted) {
             m_mediaCtrl->SetVolume(0.0);
@@ -1119,17 +1108,23 @@ void MediaPopup::OnMediaLoaded(wxMediaEvent& event)
 
             m_mediaCtrl->SetSize(PADDING + BORDER_WIDTH, PADDING + BORDER_WIDTH,
                                 vidWidth, vidHeight);
-            SetSize(vidWidth + PADDING * 2 + BORDER_WIDTH * 2,
-                   vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24);
+            // Use single source of truth for size and position
+            int popupWidth = vidWidth + PADDING * 2 + BORDER_WIDTH * 2;
+            int popupHeight = vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+            ApplySizeAndPosition(popupWidth, popupHeight);
+        } else {
+            // Even if size didn't change, ensure position is correct
+            wxSize size = GetSize();
+            ApplySizeAndPosition(size.GetWidth(), size.GetHeight());
         }
 
         m_mediaCtrl->Play();
-        
+
         // Re-apply volume after Play() as some backends reset it
         if (m_videoMuted) {
             m_mediaCtrl->SetVolume(0.0);
         }
-        
+
         // Ensure media control is visible and raised
         m_mediaCtrl->Show();
         m_mediaCtrl->Raise();
@@ -1160,10 +1155,10 @@ void MediaPopup::OnMediaStateChanged(wxMediaEvent& event)
 {
     // Handle state changes for better error detection
     if (!m_mediaCtrl) return;
-    
+
     wxMediaState state = m_mediaCtrl->GetState();
     MPLOG("OnMediaStateChanged: state=" << static_cast<int>(state));
-    
+
     // If we were loading and state changed to stopped, it might be an error
     if (m_isLoading && state == wxMEDIASTATE_STOPPED) {
         // Check if we've been loading for too long without success
@@ -1187,20 +1182,20 @@ void MediaPopup::SetImage(const wxImage& image)
         m_hasImage = false;
         return;
     }
-    
+
     // Validate dimensions to prevent pixman errors
     if (image.GetWidth() <= 0 || image.GetHeight() <= 0) {
         m_hasImage = false;
         return;
     }
-    
+
     // Stop all playback when setting a static image
     StopAllPlayback();
-    
+
     m_isLoading = false;
     m_loadingTimer.Stop();
     m_hasError = false;
-    
+
     // Use larger size for photos/videos, smaller for stickers/emojis
     int maxWidth, maxHeight;
     if (m_mediaInfo.type == MediaType::Photo || m_mediaInfo.type == MediaType::Video ||
@@ -1211,26 +1206,26 @@ void MediaPopup::SetImage(const wxImage& image)
         maxWidth = STICKER_MAX_WIDTH;
         maxHeight = STICKER_MAX_HEIGHT;
     }
-    
+
     // Scale image to fit within max dimensions while preserving aspect ratio
     int imgWidth = image.GetWidth();
     int imgHeight = image.GetHeight();
-    
+
     if (imgWidth > maxWidth || imgHeight > maxHeight) {
         double scaleX = (double)maxWidth / imgWidth;
         double scaleY = (double)maxHeight / imgHeight;
         double scale = std::min(scaleX, scaleY);
-        
+
         imgWidth = (int)(imgWidth * scale);
         imgHeight = (int)(imgHeight * scale);
     }
-    
+
     // Ensure valid dimensions after scaling
     if (imgWidth <= 0 || imgHeight <= 0) {
         m_hasImage = false;
         return;
     }
-    
+
     wxImage scaled = image.Scale(imgWidth, imgHeight, wxIMAGE_QUALITY_HIGH);
     if (!scaled.IsOk()) {
         m_hasImage = false;
@@ -1238,9 +1233,15 @@ void MediaPopup::SetImage(const wxImage& image)
     }
     m_bitmap = wxBitmap(scaled);
     m_hasImage = true;
+
+    // Calculate size and apply position - this is the single source of truth
+    int width = m_bitmap.GetWidth() + (PADDING * 2) + (BORDER_WIDTH * 2);
+    int height = m_bitmap.GetHeight() + (PADDING * 2) + (BORDER_WIDTH * 2) + 24;
+    ApplySizeAndPosition(width, height);
     
-    UpdateSize();
     Refresh();
+    MPLOG("SetImage: after ApplySizeAndPosition - pos=" << GetPosition().x << "," << GetPosition().y 
+          << " size=" << GetSize().GetWidth() << "," << GetSize().GetHeight());
 }
 
 void MediaPopup::SetImage(const wxString& path)
@@ -1371,69 +1372,150 @@ void MediaPopup::AdjustPositionToScreen(const wxPoint& pos)
 {
     // Store the original position for future adjustments (e.g., after size changes)
     m_originalPosition = pos;
+
+    MPLOG("AdjustPositionToScreen: storing originalPosition=(" << pos.x << "," << pos.y << ")");
     
-    wxSize popupSize = GetSize();
-    wxPoint adjustedPos = pos;
+    // Note: This just stores the position. ApplySizeAndPosition should be called
+    // separately to actually apply the size and position.
+}
+
+// Single source of truth for setting size and position with GTK workaround
+void MediaPopup::ApplySizeAndPosition(int width, int height)
+{
+    MPLOG("ApplySizeAndPosition: requested size=(" << width << "," << height << ")"
+          << " m_originalPosition=(" << m_originalPosition.x << "," << m_originalPosition.y << ")");
+
+    // Calculate the target position
+    wxPoint targetPos = m_originalPosition;
     
-    // Get the display that contains this point
-    int displayIndex = wxDisplay::GetFromPoint(pos);
-    if (displayIndex == wxNOT_FOUND) {
-        displayIndex = 0;  // Fall back to primary display
-    }
-    
-    wxDisplay display(displayIndex);
-    wxRect screenRect = display.GetClientArea();
-    
-    MPLOG("AdjustPositionToScreen: pos=(" << pos.x << "," << pos.y << ")"
-          << " popupSize=(" << popupSize.GetWidth() << "," << popupSize.GetHeight() << ")"
-          << " screenRect=(" << screenRect.GetLeft() << "," << screenRect.GetTop() 
-          << "," << screenRect.GetRight() << "," << screenRect.GetBottom() << ")");
-    
-    // Adjust horizontal position if popup goes off-screen
-    if (adjustedPos.x + popupSize.GetWidth() > screenRect.GetRight()) {
-        adjustedPos.x = screenRect.GetRight() - popupSize.GetWidth();
-    }
-    if (adjustedPos.x < screenRect.GetLeft()) {
-        adjustedPos.x = screenRect.GetLeft();
-    }
-    
-    // Adjust vertical position if popup goes off-screen
-    // If not enough space below, show above the original position
-    int popupBottom = adjustedPos.y + popupSize.GetHeight();
-    int screenBottom = screenRect.GetBottom();
-    
-    MPLOG("AdjustPositionToScreen: popupBottom=" << popupBottom << " screenBottom=" << screenBottom);
-    
-    if (popupBottom > screenBottom) {
-        // Try to show above - move up by popup height plus some offset
-        adjustedPos.y = pos.y - popupSize.GetHeight() - 20;
-        MPLOG("AdjustPositionToScreen: moving up, new y=" << adjustedPos.y);
+    if (m_originalPosition.x != 0 || m_originalPosition.y != 0) {
+        // Get the display that contains this point
+        int displayIndex = wxDisplay::GetFromPoint(m_originalPosition);
+        if (displayIndex == wxNOT_FOUND) {
+            displayIndex = 0;
+        }
+
+        wxDisplay display(displayIndex);
+        wxRect screenRect = display.GetClientArea();
         
-        // If still off-screen (above top), just pin to bottom
-        if (adjustedPos.y < screenRect.GetTop()) {
-            adjustedPos.y = screenBottom - popupSize.GetHeight();
-            MPLOG("AdjustPositionToScreen: pinning to bottom, new y=" << adjustedPos.y);
+        // Use parent window bottom as the effective screen bottom
+        // This is more reliable than guessing taskbar height
+        int effectiveScreenBottom = screenRect.GetBottom();
+        
+        // Get parent window to use its bottom as boundary
+        wxWindow* parent = GetParent();
+        if (parent) {
+            wxPoint parentPos = parent->GetScreenPosition();
+            wxSize parentSize = parent->GetSize();
+            int parentBottom = parentPos.y + parentSize.GetHeight();
+            // Use the smaller of screen bottom and parent bottom
+            effectiveScreenBottom = std::min(effectiveScreenBottom, parentBottom);
+            MPLOG("ApplySizeAndPosition: parentPos=(" << parentPos.x << "," << parentPos.y << ")"
+                  << " parentSize=(" << parentSize.GetWidth() << "," << parentSize.GetHeight() << ")"
+                  << " parentBottom=" << parentBottom);
+        }
+        
+        // Add a small margin to ensure popup doesn't touch the edge
+        effectiveScreenBottom -= 10;
+
+        MPLOG("ApplySizeAndPosition: size=(" << width << "," << height << ")"
+              << " originalPos=(" << m_originalPosition.x << "," << m_originalPosition.y << ")"
+              << " screenBottom=" << screenRect.GetBottom()
+              << " effectiveScreenBottom=" << effectiveScreenBottom);
+
+        // Adjust horizontal
+        if (targetPos.x + width > screenRect.GetRight()) {
+            targetPos.x = screenRect.GetRight() - width;
+        }
+        if (targetPos.x < screenRect.GetLeft()) {
+            targetPos.x = screenRect.GetLeft();
+        }
+
+        // Simple logic: if popup would go below screen bottom, show above cursor
+        int popupBottom = m_originalPosition.y + height;
+        
+        MPLOG("ApplySizeAndPosition: popupBottom=" << popupBottom << " effectiveScreenBottom=" << effectiveScreenBottom
+              << " wouldGoOff=" << (popupBottom > effectiveScreenBottom));
+        
+        if (popupBottom > effectiveScreenBottom) {
+            MPLOG("ApplySizeAndPosition: NOT ENOUGH SPACE - showing above cursor");
+            // Not enough space below - show above cursor
+            targetPos.y = m_originalPosition.y - height - 5;
+            
+            // If off-screen above, pin to top
+            if (targetPos.y < screenRect.GetTop()) {
+                targetPos.y = screenRect.GetTop();
+            }
+        } else {
+            // Enough space below - show below cursor (default)
+            targetPos.y = m_originalPosition.y;
+            MPLOG("ApplySizeAndPosition: enough space below, showing at y=" << targetPos.y);
         }
     }
-    if (adjustedPos.y < screenRect.GetTop()) {
-        adjustedPos.y = screenRect.GetTop();
+
+    MPLOG("ApplySizeAndPosition: FINAL target=(" << targetPos.x << "," << targetPos.y << "," << width << "," << height << ")");
+    
+    // On GTK, popup windows are notoriously difficult to reposition.
+    // We use multiple approaches to ensure the position sticks:
+    
+    // 1. Always hide first - this is essential for GTK to accept new geometry
+    Hide();
+    
+    // 2. Use the atomic SetSize(x,y,w,h) form which sets position and size together
+    SetSize(targetPos.x, targetPos.y, width, height);
+    
+    // 3. Also call Move explicitly as backup
+    Move(targetPos.x, targetPos.y);
+    
+    // 4. Force a position with SetPosition as well
+    SetPosition(targetPos);
+    
+    // 5. Process pending events to let GTK apply the geometry
+    wxYield();
+    
+    // 6. Now show the window at the new position
+    Show();
+    Raise();
+    
+    // 7. Verify and retry if needed
+    wxPoint actualPos = GetPosition();
+    if (actualPos.y != targetPos.y) {
+        MPLOG("ApplySizeAndPosition: position mismatch! actual=(" << actualPos.x << "," << actualPos.y 
+              << ") target=(" << targetPos.x << "," << targetPos.y << ") - retrying");
+        
+        // Hide and try again with a fresh window state
+        Hide();
+        wxYield();
+        
+        // Set geometry again
+        SetSize(targetPos.x, targetPos.y, width, height);
+        Move(targetPos);
+        
+        wxYield();
+        
+        Show();
+        Raise();
+        
+        actualPos = GetPosition();
     }
-    
-    MPLOG("AdjustPositionToScreen: final adjustedPos=(" << adjustedPos.x << "," << adjustedPos.y << ")");
-    
-    SetPosition(adjustedPos);
+
+    MPLOG("ApplySizeAndPosition: after all - pos=(" << actualPos.x << "," << actualPos.y << ")"
+          << " size=(" << GetSize().GetWidth() << "," << GetSize().GetHeight() << ")"
+          << " IsShown=" << IsShown());
 }
 
 void MediaPopup::UpdateSize()
 {
     int width = MIN_WIDTH;
     int height = MIN_HEIGHT;
-    
+
     if (m_isPlayingVideo && m_mediaCtrl && m_mediaCtrl->IsShown()) {
-        // Size already set by video playback
+        // Size already set by video playback, but still apply position
+        wxSize size = GetSize();
+        ApplySizeAndPosition(size.GetWidth(), size.GetHeight());
         return;
     }
-    
+
     if (m_hasImage && m_bitmap.IsOk()) {
         width = m_bitmap.GetWidth() + (PADDING * 2) + (BORDER_WIDTH * 2);
         height = m_bitmap.GetHeight() + (PADDING * 2) + (BORDER_WIDTH * 2) + 24; // +24 for label
@@ -1446,76 +1528,39 @@ void MediaPopup::UpdateSize()
         width = 180;
         height = 120;
     }
-    
+
     // Ensure minimum size
     width = std::max(width, MIN_WIDTH);
     height = std::max(height, MIN_HEIGHT);
-    
-    SetSize(width, height);
-    
-    // Re-adjust position to ensure popup stays within screen bounds after size change
-    // Use the original position, not current position, so we can properly flip above/below
-    if (m_originalPosition.x != 0 || m_originalPosition.y != 0) {
-        wxSize newSize = GetSize();
-        wxPoint adjustedPos = m_originalPosition;
-        
-        // Get the display that contains this point
-        int displayIndex = wxDisplay::GetFromPoint(m_originalPosition);
-        if (displayIndex == wxNOT_FOUND) {
-            displayIndex = 0;
-        }
-        
-        wxDisplay display(displayIndex);
-        wxRect screenRect = display.GetClientArea();
-        
-        // Adjust horizontal
-        if (adjustedPos.x + newSize.GetWidth() > screenRect.GetRight()) {
-            adjustedPos.x = screenRect.GetRight() - newSize.GetWidth();
-        }
-        if (adjustedPos.x < screenRect.GetLeft()) {
-            adjustedPos.x = screenRect.GetLeft();
-        }
-        
-        // Adjust vertical - if not enough space below, show above
-        if (adjustedPos.y + newSize.GetHeight() > screenRect.GetBottom()) {
-            // Show above the original position
-            adjustedPos.y = m_originalPosition.y - newSize.GetHeight() - 20;
-            
-            // If still off-screen above, pin to bottom
-            if (adjustedPos.y < screenRect.GetTop()) {
-                adjustedPos.y = screenRect.GetBottom() - newSize.GetHeight();
-            }
-        }
-        if (adjustedPos.y < screenRect.GetTop()) {
-            adjustedPos.y = screenRect.GetTop();
-        }
-        
-        SetPosition(adjustedPos);
-    }
+
+    MPLOG("UpdateSize: calculated size=(" << width << "," << height << ")");
+
+    // Use single source of truth for size and position
+    ApplySizeAndPosition(width, height);
 }
 
 void MediaPopup::OnPaint(wxPaintEvent& event)
 {
     wxBufferedPaintDC dc(this);
     wxSize size = GetSize();
-    
+
     // Background
     dc.SetBrush(wxBrush(m_bgColor));
     dc.SetPen(wxPen(m_borderColor, BORDER_WIDTH));
     dc.DrawRectangle(0, 0, size.GetWidth(), size.GetHeight());
-    
+
     // Content area dimensions
     int contentX = PADDING + BORDER_WIDTH;
     int contentY = PADDING + BORDER_WIDTH;
     int contentWidth = size.GetWidth() - (PADDING * 2) - (BORDER_WIDTH * 2);
-    
+
     // If video is playing via wxMediaCtrl, the media control handles the display
     if (m_isPlayingVideo && m_mediaCtrl && m_mediaCtrl->IsShown()) {
         // Draw the label at the bottom
         DrawMediaLabel(dc, size);
         return;
     }
-    
+
     // If video is playing via FFmpeg, draw the frame without any overlay
     if (m_isPlayingFFmpeg && m_hasImage && m_bitmap.IsOk()) {
         // Draw the current video frame
@@ -1526,43 +1571,43 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         DrawMediaLabel(dc, size);
         return;
     }
-    
+
     // Draw main content based on state
     if (m_hasImage && m_bitmap.IsOk()) {
         // Draw image centered in content area
         int imgX = contentX + (contentWidth - m_bitmap.GetWidth()) / 2;
         int imgY = contentY;
         dc.DrawBitmap(m_bitmap, imgX, imgY, true);
-        
+
         // Check if this is a video type that should show a play button
-        bool isVideoType = (m_mediaInfo.type == MediaType::Video || 
-                           m_mediaInfo.type == MediaType::GIF || 
+        bool isVideoType = (m_mediaInfo.type == MediaType::Video ||
+                           m_mediaInfo.type == MediaType::GIF ||
                            m_mediaInfo.type == MediaType::VideoNote);
-        
+
         // If this is a thumbnail and the main file is still downloading, show download indicator
-        bool isShowingThumbnail = !m_mediaInfo.thumbnailPath.IsEmpty() && 
+        bool isShowingThumbnail = !m_mediaInfo.thumbnailPath.IsEmpty() &&
                                    wxFileExists(m_mediaInfo.thumbnailPath) &&
                                    (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
-        bool needsDownload = m_mediaInfo.fileId != 0 && 
+        bool needsDownload = m_mediaInfo.fileId != 0 &&
                              (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
-        
+
         // Calculate center for overlay icons
         int centerX = imgX + m_bitmap.GetWidth() / 2;
         int centerY = imgY + m_bitmap.GetHeight() / 2;
         int radius = 24;
-        
+
         // If downloading, show downloading overlay for ALL media types
         if (m_isDownloadingMedia || (isShowingThumbnail && needsDownload)) {
             // Draw semi-transparent dark overlay over the whole image
             dc.SetBrush(wxBrush(wxColour(0, 0, 0, 150)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawRectangle(imgX, imgY, m_bitmap.GetWidth(), m_bitmap.GetHeight());
-            
+
             // Draw downloading circle background
             dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
-            
+
             // Draw animated spinner
             static const wxString spinnerChars[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
             wxString spinner = spinnerChars[m_loadingFrame % 8];
@@ -1570,7 +1615,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
             wxSize spinnerSize = dc.GetTextExtent(spinner);
             dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
-            
+
             // Draw "Downloading..." text below
             dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
             dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
@@ -1583,12 +1628,12 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.SetBrush(wxBrush(wxColour(0, 0, 0, 100)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius + 4);
-            
+
             // Draw play button circle
             dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawCircle(centerX, centerY, radius);
-            
+
             // Draw play triangle (file is available, click to open)
             wxPoint triangle[3];
             triangle[0] = wxPoint(centerX - 6, centerY - 10);
@@ -1597,7 +1642,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.DrawPolygon(3, triangle);
-            
+
             // Draw hint text
             dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
             dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
@@ -1605,41 +1650,41 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             wxSize hintSize = dc.GetTextExtent(hint);
             dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
         }
-        
+
         // Draw the label at the bottom
         DrawMediaLabel(dc, size);
-        
+
     } else if (m_hasError) {
         // Error state
         dc.SetTextForeground(wxColour(0xCC, 0x00, 0x00)); // Red for errors (semantic color)
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
-        
+
         wxString errorText = m_errorMessage.IsEmpty() ? "Error loading media" : m_errorMessage;
         wxSize textSize = dc.GetTextExtent(errorText);
         int textX = (size.GetWidth() - textSize.GetWidth()) / 2;
         int textY = (size.GetHeight() - textSize.GetHeight()) / 2;
         dc.DrawText(errorText, textX, textY);
-        
+
     } else if (m_isLoading || m_isDownloadingMedia) {
         // Loading/Downloading state - show animated spinner with "Downloading..."
         static const wxString spinners[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
         wxString spinner = spinners[m_loadingFrame % 8];
-        
+
         // Draw a circle background for the spinner
         int centerX = size.GetWidth() / 2;
         int centerY = contentY + 40;
         int radius = 28;
-        
+
         dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.DrawCircle(centerX, centerY, radius);
-        
+
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
         dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
-        
+
         wxSize spinnerSize = dc.GetTextExtent(spinner);
         dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2, centerY - spinnerSize.GetHeight() / 2);
-        
+
         // Draw "Downloading..." text below
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
         dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
@@ -1648,44 +1693,44 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int statusX = (size.GetWidth() - statusSize.GetWidth()) / 2;
         int statusY = centerY + radius + 10;
         dc.DrawText(statusText, statusX, statusY);
-        
+
         // Draw the label at the bottom
         DrawMediaLabel(dc, size);
-        
+
     } else {
         // Placeholder state - show media type icon and info
         wxString icon = GetMediaIcon();
-        
+
         // For stickers, show the emoji much larger
         double scaleFactor = 3.0;
         if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
             scaleFactor = 5.0;  // Larger emoji for stickers
             icon = m_mediaInfo.emoji;
         }
-        
+
         // Draw large emoji icon
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
         dc.SetTextForeground(m_textColor);
-        
+
         wxSize iconSize = dc.GetTextExtent(icon);
         int iconX = (size.GetWidth() - iconSize.GetWidth()) / 2;
         int iconY = contentY + 5;
         dc.DrawText(icon, iconX, iconY);
-        
+
         // Draw media type below icon
         wxString typeText = GetMediaLabel();
         if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
             typeText = "Sticker";  // Just show "Sticker" without repeating emoji
         }
-        
+
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
         dc.SetTextForeground(m_textColor);
-        
+
         wxSize typeSize = dc.GetTextExtent(typeText);
         int typeX = (size.GetWidth() - typeSize.GetWidth()) / 2;
         int typeY = iconY + iconSize.GetHeight() + 5;
         dc.DrawText(typeText, typeX, typeY);
-        
+
         // Draw file info if available (size, filename)
         wxString infoText;
         if (!m_mediaInfo.fileSize.IsEmpty()) {
@@ -1695,11 +1740,11 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
             if (!infoText.IsEmpty()) infoText += " - ";
             infoText += m_mediaInfo.fileName;
         }
-        
+
         if (!infoText.IsEmpty()) {
             dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Smaller());
             dc.SetTextForeground(m_labelColor);
-            
+
             wxSize infoSize = dc.GetTextExtent(infoText);
             // Truncate if needed
             if (infoSize.GetWidth() > contentWidth) {
@@ -1709,7 +1754,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
                 infoText += "...";
                 infoSize = dc.GetTextExtent(infoText);
             }
-            
+
             int infoX = (size.GetWidth() - infoSize.GetWidth()) / 2;
             int infoY = typeY + typeSize.GetHeight() + 3;
             dc.DrawText(infoText, infoX, infoY);
@@ -1721,14 +1766,14 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
 {
     // Get the label text
     wxString label = GetMediaLabel();
-    
+
     // Draw media type label
     dc.SetTextForeground(m_labelColor);
     dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
-    
+
     int maxLabelWidth = size.GetWidth() - (PADDING * 2);
     wxSize labelSize = dc.GetTextExtent(label);
-    
+
     // Truncate if needed
     if (labelSize.GetWidth() > maxLabelWidth) {
         while (label.Length() > 3 && dc.GetTextExtent(label + "...").GetWidth() > maxLabelWidth) {
@@ -1737,18 +1782,18 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
         label += "...";
         labelSize = dc.GetTextExtent(label);
     }
-    
+
     int labelX = (size.GetWidth() - labelSize.GetWidth()) / 2;
     int labelY = size.GetHeight() - 18;
     dc.DrawText(label, labelX, labelY);
-    
+
     // Draw caption below label if available (in smaller text)
     if (!m_mediaInfo.caption.IsEmpty()) {
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT).Smaller().Italic());
-        
+
         wxString caption = m_mediaInfo.caption;
         wxSize captionSize = dc.GetTextExtent(caption);
-        
+
         // Truncate if too long
         if (captionSize.GetWidth() > maxLabelWidth) {
             while (caption.Length() > 3 && dc.GetTextExtent(caption + "...").GetWidth() > maxLabelWidth) {
@@ -1756,7 +1801,7 @@ void MediaPopup::DrawMediaLabel(wxDC& dc, const wxSize& size)
             }
             caption += "...";
         }
-        
+
         // Draw caption left-aligned below the centered label
         int captionX = PADDING + BORDER_WIDTH;
         int captionY = labelY - 14;  // Above the label
@@ -1780,22 +1825,22 @@ void MediaPopup::LoadImageAsync(const wxString& path)
     }
 
     m_pendingImagePath = path;
-    
+
     // Offload loading to a background thread to prevent UI freeze
     std::thread([this, path]() {
         wxImage image;
         bool success = LoadImageWithWebPSupport(path, image) && image.IsOk();
-        
+
         wxThreadEvent* event = new wxThreadEvent(wxEVT_IMAGE_LOADED);
         event->SetString(path); // Pass path to verify relevance
-        
+
         if (success) {
             event->SetPayload(image);
             event->SetInt(1);
         } else {
             event->SetInt(0);
         }
-        
+
         wxQueueEvent(this, event);
     }).detach();
 }
@@ -1803,7 +1848,7 @@ void MediaPopup::LoadImageAsync(const wxString& path)
 void MediaPopup::OnImageLoaded(wxThreadEvent& event)
 {
     wxString path = event.GetString();
-    
+
     // Ignore stale events (user switched to another media)
     if (!m_pendingImagePath.IsEmpty() && path != m_pendingImagePath) {
         return;
