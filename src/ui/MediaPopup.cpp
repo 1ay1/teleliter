@@ -1435,6 +1435,9 @@ void MediaPopup::UpdateSize()
     height = std::max(height, MIN_HEIGHT);
     
     SetSize(width, height);
+    
+    // Re-adjust position to ensure popup stays within screen bounds after size change
+    AdjustPositionToScreen(GetPosition());
 }
 
 void MediaPopup::OnPaint(wxPaintEvent& event)
