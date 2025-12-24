@@ -12,8 +12,8 @@
 wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 wxDEFINE_EVENT(wxEVT_VIDEO_LOADED, wxThreadEvent);
 
-// #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
-#define MPLOG(msg) do {} while(0)
+#define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
+// #define MPLOG(msg) do {} while(0)
 
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString& path)
@@ -83,6 +83,7 @@ MediaPopup::MediaPopup(wxWindow* parent)
 
     ApplyHexChatStyle();
     SetSize(MIN_WIDTH, MIN_HEIGHT);
+    SetMinSize(wxSize(MIN_WIDTH, MIN_HEIGHT));
 
     // Bind loading timer event
     Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
@@ -1386,7 +1387,10 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
           << " m_originalPosition=(" << m_originalPosition.x << "," << m_originalPosition.y << ")");
 
     // Calculate the target position
+    // Add a small offset so popup appears below the cursor, not overlapping it
+    const int CURSOR_OFFSET = 20;
     wxPoint targetPos = m_originalPosition;
+    bool isShowingBelow = false;
     
     if (m_originalPosition.x != 0 || m_originalPosition.y != 0) {
         // Get the display that contains this point
@@ -1431,76 +1435,78 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
             targetPos.x = screenRect.GetLeft();
         }
 
-        // Simple logic: if popup would go below screen bottom, show above cursor
-        int popupBottom = m_originalPosition.y + height;
+        // Calculate available space above and below cursor
+        int spaceBelow = effectiveScreenBottom - m_originalPosition.y;
+        int spaceAbove = m_originalPosition.y - screenRect.GetTop() - 5; // 5px margin from cursor
         
-        MPLOG("ApplySizeAndPosition: popupBottom=" << popupBottom << " effectiveScreenBottom=" << effectiveScreenBottom
-              << " wouldGoOff=" << (popupBottom > effectiveScreenBottom));
+        MPLOG("ApplySizeAndPosition: spaceBelow=" << spaceBelow << " spaceAbove=" << spaceAbove << " height=" << height);
         
-        if (popupBottom > effectiveScreenBottom) {
-            MPLOG("ApplySizeAndPosition: NOT ENOUGH SPACE - showing above cursor");
-            // Not enough space below - show above cursor
+        // Decide whether to show above or below based on available space
+        // Prefer showing below, but if it doesn't fit, show above
+        if (height + CURSOR_OFFSET <= spaceBelow) {
+            // Fits below - show below cursor with offset
+            targetPos.y = m_originalPosition.y + CURSOR_OFFSET;
+            MPLOG("ApplySizeAndPosition: fits below, showing at y=" << targetPos.y);
+            isShowingBelow = true;
+        } else if (height <= spaceAbove) {
+            // Doesn't fit below but fits above - show above cursor
             targetPos.y = m_originalPosition.y - height - 5;
-            
-            // If off-screen above, pin to top
+            MPLOG("ApplySizeAndPosition: fits above, showing at y=" << targetPos.y);
+            isShowingBelow = false;
+        } else if (spaceAbove > spaceBelow + CURSOR_OFFSET) {
+            // Doesn't fit either way, but more space above - show above
+            targetPos.y = m_originalPosition.y - height - 5;
+            // Pin to top if needed
             if (targetPos.y < screenRect.GetTop()) {
                 targetPos.y = screenRect.GetTop();
             }
+            MPLOG("ApplySizeAndPosition: more space above, showing at y=" << targetPos.y);
+            isShowingBelow = false;
         } else {
-            // Enough space below - show below cursor (default)
-            targetPos.y = m_originalPosition.y;
-            MPLOG("ApplySizeAndPosition: enough space below, showing at y=" << targetPos.y);
+            // More space below or equal - show below with offset (may be clipped but better than above)
+            targetPos.y = m_originalPosition.y + CURSOR_OFFSET;
+            MPLOG("ApplySizeAndPosition: defaulting to below, showing at y=" << targetPos.y);
+            isShowingBelow = true;
+        }
+        
+        // Ensure we don't go off-screen at the top
+        if (targetPos.y < screenRect.GetTop()) {
+            targetPos.y = screenRect.GetTop();
         }
     }
 
     MPLOG("ApplySizeAndPosition: FINAL target=(" << targetPos.x << "," << targetPos.y << "," << width << "," << height << ")");
     
-    // On GTK, popup windows are notoriously difficult to reposition.
-    // We use multiple approaches to ensure the position sticks:
-    
-    // 1. Always hide first - this is essential for GTK to accept new geometry
+    // On GTK, popup windows are notoriously difficult to reposition and resize.
+    // The most reliable sequence is to hide, set new geometry, and then show again,
+    // followed by a forced layout and refresh.
     Hide();
+
+    // On GTK, when showing below, the resize sometimes fails. A more aggressive
+    // repositioning sequence helps the window manager realize the geometry has changed.
+    if (isShowingBelow) {
+        MPLOG("ApplySizeAndPosition: using aggressive repositioning for 'below' case");
+        // Move to a temporary, invalid position to force a full re-evaluation
+        Move(-1000, -1000);
+        wxYield(); // Allow GTK to process the move
+    }
     
-    // 2. Use the atomic SetSize(x,y,w,h) form which sets position and size together
+    // Use the atomic SetSize(x,y,w,h) form which sets position and size together
     SetSize(targetPos.x, targetPos.y, width, height);
-    
-    // 3. Also call Move explicitly as backup
-    Move(targetPos.x, targetPos.y);
-    
-    // 4. Force a position with SetPosition as well
-    SetPosition(targetPos);
-    
-    // 5. Process pending events to let GTK apply the geometry
-    wxYield();
-    
-    // 6. Now show the window at the new position
+
+    // Now show the window at its new size and position
     Show();
     Raise();
     
-    // 7. Verify and retry if needed
+    // Force a layout and full refresh to ensure content is drawn correctly in the new size
+    Layout();
+    Refresh(true); // Erase background
+    Update();      // Force immediate repaint
+    
     wxPoint actualPos = GetPosition();
-    if (actualPos.y != targetPos.y) {
-        MPLOG("ApplySizeAndPosition: position mismatch! actual=(" << actualPos.x << "," << actualPos.y 
-              << ") target=(" << targetPos.x << "," << targetPos.y << ") - retrying");
-        
-        // Hide and try again with a fresh window state
-        Hide();
-        wxYield();
-        
-        // Set geometry again
-        SetSize(targetPos.x, targetPos.y, width, height);
-        Move(targetPos);
-        
-        wxYield();
-        
-        Show();
-        Raise();
-        
-        actualPos = GetPosition();
-    }
-
+    wxSize actualSize = GetSize();
     MPLOG("ApplySizeAndPosition: after all - pos=(" << actualPos.x << "," << actualPos.y << ")"
-          << " size=(" << GetSize().GetWidth() << "," << GetSize().GetHeight() << ")"
+          << " size=(" << actualSize.GetWidth() << "," << actualSize.GetHeight() << ")"
           << " IsShown=" << IsShown());
 }
 
