@@ -9,6 +9,7 @@
 #include <thread>
 
 wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
+wxDEFINE_EVENT(wxEVT_VIDEO_LOADED, wxThreadEvent);
 
 #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
 // #define MPLOG(msg) do {} while(0)
@@ -98,6 +99,9 @@ MediaPopup::MediaPopup(wxWindow* parent)
     
     // Bind image loaded event
     Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
+
+    // Bind video loaded event
+    Bind(wxEVT_VIDEO_LOADED, &MediaPopup::OnVideoLoaded, this);
 
     // Bind click event to open media
     Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
@@ -668,7 +672,7 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             SetPosition(pos);
             // PlayVideo will call Show() internally after setting up the media control
             // Don't call Show() again here to avoid duplicate window issues
-            PlayVideo(info.localPath, shouldLoop, shouldMute);
+            LoadVideoAsync(info.localPath, shouldLoop, shouldMute);
             return;
         } else if (IsSupportedImageFormat(info.localPath)) {
             LoadImageAsync(info.localPath);
@@ -721,7 +725,8 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
 #ifdef HAVE_FFMPEG
     // Use FFmpegPlayer instead of wxMediaCtrl for better click handling
     // wxMediaCtrl on macOS uses native AVPlayer that swallows mouse events
-    PlayVideoWithFFmpeg(path, loop, muted);
+    // Use async loading to prevent UI freeze
+    LoadVideoAsync(path, loop, muted);
     return;
 #elif defined(__WXGTK__)
     // No FFmpeg available on Linux, fall back to thumbnail
@@ -808,10 +813,67 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     Refresh();
 }
 
+void MediaPopup::LoadVideoAsync(const wxString& path, bool loop, bool muted)
+{
+#ifdef HAVE_FFMPEG
+    MPLOG("LoadVideoAsync: " << path.ToStdString());
+    
+    // Check if this video has failed to load recently
+    if (HasFailedRecently(path)) {
+        MPLOG("LoadVideoAsync: skipping recently failed video");
+        FallbackToThumbnail();
+        return;
+    }
+    
+    // Store pending video info
+    m_pendingVideoPath = path;
+    m_pendingVideoLoop = loop;
+    m_pendingVideoMuted = muted;
+    
+    // Show loading indicator immediately so UI is responsive
+    m_isLoading = true;
+    m_loadingFrame = 0;
+    m_loadingTimer.Start(150);
+    SetSize(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    Show();
+    Raise();
+    Refresh();
+    
+    // Defer the heavy FFmpeg loading using CallAfter
+    // This allows the UI to update before the blocking call
+    CallAfter([this]() {
+        if (m_pendingVideoPath.IsEmpty()) {
+            return;  // Cancelled
+        }
+        
+        wxString path = m_pendingVideoPath;
+        bool loop = m_pendingVideoLoop;
+        bool muted = m_pendingVideoMuted;
+        m_pendingVideoPath.Clear();
+        
+        // Now do the actual FFmpeg loading
+        PlayVideoWithFFmpeg(path, loop, muted);
+    });
+#else
+    // FFmpeg not available, fall back to thumbnail
+    FallbackToThumbnail();
+#endif
+}
+
+void MediaPopup::OnVideoLoaded(wxThreadEvent& event)
+{
+    // Reserved for future true async video loading
+    // Currently video loading uses CallAfter for deferred loading
+}
+
 void MediaPopup::PlayVideoWithFFmpeg(const wxString& path, bool loop, bool muted)
 {
 #ifdef HAVE_FFMPEG
     MPLOG("PlayVideoWithFFmpeg: " << path.ToStdString());
+    
+    // Stop loading indicator
+    m_isLoading = false;
+    m_loadingTimer.Stop();
     
     // Check if this video has failed to load recently
     if (HasFailedRecently(path)) {

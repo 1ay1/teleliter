@@ -99,6 +99,10 @@ private:
     void OnAsyncLoadTimer(wxTimerEvent& event);
     void OnImageLoaded(wxThreadEvent& event);
 
+    // Async video loading to prevent UI blocking
+    void LoadVideoAsync(const wxString& path, bool loop, bool muted);
+    void OnVideoLoaded(wxThreadEvent& event);
+
     // Track failed loads to avoid repeated attempts
     bool HasFailedRecently(const wxString& path) const;
     void MarkLoadFailed(const wxString& path);
@@ -151,6 +155,11 @@ private:
     wxString m_pendingImagePath;
     wxTimer m_asyncLoadTimer;
     bool m_asyncLoadPending;
+
+    // Async video loading state
+    wxString m_pendingVideoPath;
+    bool m_pendingVideoLoop;
+    bool m_pendingVideoMuted;
 
     // Track files that failed to load (to avoid repeated attempts)
     std::set<wxString> m_failedLoads;
