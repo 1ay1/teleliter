@@ -160,6 +160,9 @@ private:
     // Helper to ensure media is downloaded
     void EnsureMediaDownloaded(const MediaInfo& info);
     
+    // Helper to track read markers
+    void RecordReadMarker(long startPos, long endPos, int64_t messageId);
+    
     // Render a single message to the display (internal - assumes display is ready)
     void RenderMessageToDisplay(const MessageInfo& msg);
     
@@ -264,12 +267,13 @@ private:
     
     // Read receipts
     int64_t m_lastReadOutboxId = 0;
-    int64_t m_lastReadOutboxTime = 0;  // When we learned messages were read
+    std::map<int64_t, int64_t> m_messageReadTimes;  // messageId -> read timestamp
     
     // Track [R] marker positions for tooltips
     struct ReadMarkerSpan {
         long startPos;
         long endPos;
+        int64_t messageId;
     };
     std::vector<ReadMarkerSpan> m_readMarkerSpans;
     

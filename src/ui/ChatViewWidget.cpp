@@ -370,13 +370,20 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
             timestamp += "[S]";
         }
     }
+    
+    bool hasReadMarker = false;
+    if (msg.isOutgoing && m_lastReadOutboxId > 0 && msg.id <= m_lastReadOutboxId && msg.id != 0) {
+        hasReadMarker = true;
+    }
 
     wxString sender = msg.senderName.IsEmpty() ? "Unknown" : msg.senderName;
 
     // Handle forwarded messages
     if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendForwardMessage(timestamp, sender,
             msg.forwardedFrom, msg.text);
+        if (hasReadMarker) RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
         m_messageFormatter->SetLastMessage(sender, msg.date);
         m_lastDisplayedSender = sender;
         m_lastDisplayedTimestamp = msg.date;
@@ -385,8 +392,10 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
 
     // Handle reply messages
     if (msg.replyToMessageId != 0 && !msg.replyToText.IsEmpty()) {
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendReplyMessage(timestamp, sender,
             msg.replyToText, msg.text);
+        if (hasReadMarker) RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
         m_messageFormatter->SetLastMessage(sender, msg.date);
         m_lastDisplayedSender = sender;
         m_lastDisplayedTimestamp = msg.date;
@@ -413,6 +422,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -431,6 +441,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -448,6 +459,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -462,6 +474,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -478,6 +491,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -495,6 +509,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -512,6 +527,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         m_messageFormatter->AppendMediaMessage(timestamp, sender, info, msg.mediaCaption);
         long endPos = m_chatArea->GetLastPosition();
         AddMediaSpan(startPos, endPos, info, msg.id);
+        if (hasReadMarker) RecordReadMarker(startPos, endPos, msg.id);
         updateStateAfterMedia();
         return;
     }
@@ -519,7 +535,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
     // Check for action messages (/me)
     if (msg.text.StartsWith("/me ")) {
         wxString action = msg.text.Mid(4);
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendActionMessage(timestamp, sender, action);
+        if (hasReadMarker) RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
         m_messageFormatter->SetLastMessage(sender, msg.date);
         m_lastDisplayedSender = sender;
         m_lastDisplayedTimestamp = msg.date;
@@ -529,7 +547,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
     // Handle edited messages - just show (edited) marker
     // Note: TDLib doesn't provide original message text, so no hover popup
     if (msg.isEdited) {
+        long startPos = m_chatArea->GetLastPosition();
         m_messageFormatter->AppendEditedMessage(timestamp, sender, msg.text, nullptr, nullptr);
+        if (hasReadMarker) RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
         m_messageFormatter->SetLastMessage(sender, msg.date);
         m_lastDisplayedSender = sender;
         m_lastDisplayedTimestamp = msg.date;
@@ -549,6 +569,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
     }
 
     // Regular text message - always show full timestamp and sender (HexChat/WelcomeChat style)
+    long startPos = m_chatArea->GetLastPosition();
     if (isMentioned) {
         // Highlighted message - someone mentioned you
         m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text);
@@ -556,6 +577,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
         // Full message with nick and timestamp
         m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
     }
+    if (hasReadMarker) RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
 
     // Update grouping state
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -1663,11 +1685,25 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent& event)
     }
 }
 
+void ChatViewWidget::RecordReadMarker(long startPos, long endPos, int64_t messageId)
+{
+    m_readMarkerSpans.push_back({startPos, endPos, messageId});
+}
+
 void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime)
 {
     if (m_lastReadOutboxId != lastReadOutboxId) {
+        // If getting a new read update, mark messages in range as read at this time
+        if (lastReadOutboxId > m_lastReadOutboxId && readTime > 0) {
+            std::lock_guard<std::mutex> lock(m_messagesMutex);
+            for (const auto& msg : m_messages) {
+                if (msg.isOutgoing && msg.id > m_lastReadOutboxId && msg.id <= lastReadOutboxId) {
+                    m_messageReadTimes[msg.id] = readTime;
+                }
+            }
+        }
+        
         m_lastReadOutboxId = lastReadOutboxId;
-        m_lastReadOutboxTime = readTime;
         // Re-render messages to update read status indicators
         RefreshDisplay();
     }
@@ -1839,16 +1875,52 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         wxString lineText = ctrl->GetRange(lineStart, std::min(lineStart + 100, ctrl->GetLastPosition()));
         
         // Check if this line has [R] and cursor is near it
+        // Check if this line has [R] and cursor is near it
         int rPos = lineText.Find("[R]");
         if (rPos != wxNOT_FOUND && textPos >= lineStart + rPos && textPos <= lineStart + rPos + 3) {
+            // Find which message this [R] belongs to
+            int64_t msgId = 0;
+            for (const auto& span : m_readMarkerSpans) {
+                // Check if textPos is within the message span including the [R] marker
+                // We expand the check a bit to be safe
+                if (textPos >= span.startPos && textPos <= span.endPos + 4) {
+                   msgId = span.messageId;
+                   break;
+                }
+            }
+            
+            // Get read time for this specific message
+            int64_t readTime = 0;
+            if (msgId != 0) {
+                 auto it = m_messageReadTimes.find(msgId);
+                 if (it != m_messageReadTimes.end()) {
+                     readTime = it->second;
+                 }
+            }
+
             // Show read time in status bar for instant feedback
             wxString statusText;
-            if (m_lastReadOutboxTime > 0) {
-                std::time_t readTime = static_cast<std::time_t>(m_lastReadOutboxTime);
-                std::tm* tm = std::localtime(&readTime);
+            if (readTime > 0) {
+                std::time_t now = std::time(nullptr);
+                std::time_t rt = static_cast<std::time_t>(readTime);
+                double diff = std::difftime(now, rt);
+                
+                wxString relativeTime;
+                if (diff < 60) {
+                    relativeTime = "Read just now";
+                } else if (diff < 3600) {
+                    relativeTime = wxString::Format("Read %d mins ago", static_cast<int>(diff / 60));
+                } else if (diff < 86400) {
+                    relativeTime = wxString::Format("Read %d hours ago", static_cast<int>(diff / 3600));
+                } else {
+                    relativeTime = wxString::Format("Read %d days ago", static_cast<int>(diff / 86400));
+                }
+
+                std::tm* tm = std::localtime(&rt);
                 char timeStr[64];
-                std::strftime(timeStr, sizeof(timeStr), "Read at %H:%M:%S", tm);
-                statusText = timeStr;
+                std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", tm);
+                
+                statusText = wxString::Format("%s (%s)", relativeTime, timeStr);
             } else {
                 statusText = "Message read by recipient";
             }
