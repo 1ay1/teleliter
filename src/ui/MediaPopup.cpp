@@ -555,12 +555,17 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
     }
 
     // Stop all current playback and reset state
+    bool isSameFile = (m_mediaInfo.fileId != 0 && m_mediaInfo.fileId == info.fileId);
+    bool hadImage = m_hasImage;
+    
     StopAllPlayback();
 
     m_mediaInfo = info;
     m_hasError = false;
     m_errorMessage.Clear();
-    m_hasImage = false;
+    
+    // If upgrading the same file (e.g. thumbnail -> full), keep the old image until new one loads
+    m_hasImage = isSameFile ? hadImage : false;
     m_isDownloadingMedia = false;
 
     // For stickers, detect format and use appropriate renderer
@@ -1291,8 +1296,19 @@ void MediaPopup::SetImage(const wxImage& image)
     StopAllPlayback();
 
     m_isLoading = false;
-    if (!m_isDownloadingMedia) {
+    m_isLoading = false;
+    
+    // Check if we still need to download the main file
+    bool needsDownload = m_mediaInfo.fileId != 0 && 
+                         (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+
+    if (!m_isDownloadingMedia && !needsDownload) {
         m_loadingTimer.Stop();
+    } else {
+        // Ensure timer is running for spinner
+        if (!m_loadingTimer.IsRunning()) {
+            m_loadingTimer.Start(150);
+        }
     }
     m_hasError = false;
 
@@ -1395,7 +1411,8 @@ void MediaPopup::OnLoadingTimer(wxTimerEvent& event)
     }
 
     // Refresh when loading or downloading to animate the spinner
-    if (IsShown() && (m_isLoading || m_isDownloadingMedia)) {
+    // If the timer is running and we are visible, we should animate.
+    if (IsShown()) {
         Refresh();
     }
 }
@@ -1707,8 +1724,8 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
         int centerY = imgY + m_bitmap.GetHeight() / 2;
         int radius = 24;
 
-        // If downloading, show downloading overlay for ALL media types
-        if (m_isDownloadingMedia || (isShowingThumbnail && needsDownload)) {
+        // If downloading OR loading (upgrading quality), show overlay
+        if (m_isLoading || m_isDownloadingMedia || (isShowingThumbnail && needsDownload)) {
             // Draw semi-transparent dark overlay over the whole image
             dc.SetBrush(wxBrush(wxColour(0, 0, 0, 150)));
             dc.SetPen(*wxTRANSPARENT_PEN);

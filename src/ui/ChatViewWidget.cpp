@@ -588,20 +588,29 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         // Ensure we suppress undo to save memory/cpu
         if (m_chatArea && m_chatArea->GetDisplay()) {
             m_chatArea->GetDisplay()->BeginSuppressUndo();
+            m_chatArea->GetDisplay()->SetInsertionPointEnd();
+            
+            // Ensure we start on a new line if not already
+            // This prevents messages from being merged onto the same line
+            long lastPos = m_chatArea->GetDisplay()->GetLastPosition();
+            if (lastPos > 0) {
+                wxString lastChar = m_chatArea->GetDisplay()->GetRange(lastPos - 1, lastPos);
+                if (!lastChar.IsEmpty() && lastChar[0] != '\n' && lastChar[0] != '\r') {
+                    m_chatArea->GetDisplay()->WriteText("\n");
+                }
+            }
         }
         
         RenderMessageToDisplay(msg);
         
-        // Remove trailing newline if needed (hacky but keeps layout tight)
+        // Remove trailing newline to keep layout tight (no extra gap at bottom)
         if (m_chatArea && m_chatArea->GetDisplay()) {
             wxRichTextCtrl* display = m_chatArea->GetDisplay();
             long lastPos = display->GetLastPosition();
             if (lastPos > 0) {
                 wxString lastChar = display->GetRange(lastPos - 1, lastPos);
                 if (lastChar == "\n") {
-                   // display->Remove(lastPos - 1, lastPos); 
-                   // removing newline might merge paragraphs incorrectly in append mode
-                   // better to leave it or handle in MessageFormatter
+                    display->Remove(lastPos - 1, lastPos); 
                 }
             }
             display->EndSuppressUndo();
