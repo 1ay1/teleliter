@@ -11,6 +11,7 @@
 #include <set>
 #include <functional>
 #include <mutex>
+#include <shared_mutex>
 #include <atomic>
 #include <thread>
 #include <queue>
@@ -179,7 +180,7 @@ private:
     std::map<int64_t, ChatInfo> m_chats;
     std::map<int64_t, UserInfo> m_users;
     std::map<int64_t, std::vector<MessageInfo>> m_messages;
-    mutable std::mutex m_dataMutex;  // Protects m_chats, m_users, m_messages
+    mutable std::shared_mutex m_dataMutex;  // Protects m_chats, m_users, m_messages
     
     std::uint64_t m_currentQueryId;
     std::map<std::uint64_t, std::function<void(td_api::object_ptr<td_api::Object>)>> m_handlers;

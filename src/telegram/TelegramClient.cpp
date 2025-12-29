@@ -210,7 +210,7 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
             OnChatUpdate(u.chat_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatTitle>) {
             {
-                std::lock_guard<std::mutex> lock(m_dataMutex);
+                std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                 if (auto it = m_chats.find(u.chat_id_); it != m_chats.end()) {
                     it->second.title = wxString::FromUTF8(u.title_);
                 }
@@ -229,7 +229,7 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
         } else if constexpr (std::is_same_v<T, td_api::updateFile>) {
             OnFileUpdate(u.file_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatNotificationSettings>) {
-            std::lock_guard<std::mutex> lock(m_dataMutex);
+            std::unique_lock<std::shared_mutex> lock(m_dataMutex);
             if (auto it = m_chats.find(u.chat_id_); it != m_chats.end()) {
                 it->second.isMuted = u.notification_settings_->mute_for_ > 0;
             }
@@ -376,7 +376,7 @@ void TelegramClient::HandleAuthReady()
             
             // Store in users map too
             {
-                std::lock_guard<std::mutex> lock(m_dataMutex);
+                std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                 m_users[user->id_] = m_currentUser;
             }
             
@@ -563,13 +563,13 @@ void TelegramClient::LoadChats(int limit)
 
 std::map<int64_t, ChatInfo> TelegramClient::GetChats() const
 {
-    std::lock_guard<std::mutex> lock(m_dataMutex);
+    std::shared_lock<std::shared_mutex> lock(m_dataMutex);
     return m_chats;
 }
 
 ChatInfo TelegramClient::GetChat(int64_t chatId, bool* found) const
 {
-    std::lock_guard<std::mutex> lock(m_dataMutex);
+    std::shared_lock<std::shared_mutex> lock(m_dataMutex);
     auto it = m_chats.find(chatId);
     if (it != m_chats.end()) {
         if (found) *found = true;
@@ -642,7 +642,7 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit)
                     
                     // Store and display what we have
                     {
-                        std::lock_guard<std::mutex> lock(m_dataMutex);
+                        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                         m_messages[chatId] = msgList;
                     }
                     
@@ -712,7 +712,7 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int
             // Merge with existing messages, avoiding duplicates
             std::vector<MessageInfo> allMessages;
             {
-                std::lock_guard<std::mutex> lock(m_dataMutex);
+                std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                 auto& existing = m_messages[chatId];
                 
                 // Build a set of existing message IDs to avoid duplicates
@@ -804,7 +804,7 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int lim
             
             // Store messages (replace to avoid duplicates)
             {
-                std::lock_guard<std::mutex> lock(m_dataMutex);
+                std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                 m_messages[chatId] = msgList;
             }
             
@@ -931,7 +931,7 @@ void TelegramClient::RefetchMessage(int64_t chatId, int64_t messageId)
             
             // Update the cached message
             {
-                std::lock_guard<std::mutex> lock(m_dataMutex);
+                std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                 auto it = m_messages.find(chatId);
                 if (it != m_messages.end()) {
                     for (auto& cachedMsg : it->second) {
@@ -1241,7 +1241,7 @@ void TelegramClient::AutoDownloadChatMedia(int64_t chatId, int messageLimit)
     // Get cached messages for this chat
     std::vector<MessageInfo> messages;
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::shared_lock<std::shared_mutex> lock(m_dataMutex);
         auto it = m_messages.find(chatId);
         if (it != m_messages.end()) {
             // Get the most recent messages (up to limit)
@@ -1386,7 +1386,7 @@ void TelegramClient::CancelDownload(int32_t fileId)
 
 UserInfo TelegramClient::GetUser(int64_t userId, bool* found) const
 {
-    std::lock_guard<std::mutex> lock(m_dataMutex);
+    std::shared_lock<std::shared_mutex> lock(m_dataMutex);
     auto it = m_users.find(userId);
     if (it != m_users.end()) {
         if (found) *found = true;
@@ -1563,7 +1563,7 @@ void TelegramClient::MarkChatAsRead(int64_t chatId)
     // Get all message IDs from the cache
     std::vector<int64_t> messageIds;
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::shared_lock<std::shared_mutex> lock(m_dataMutex);
         auto& messages = m_messages[chatId];
         for (const auto& msg : messages) {
             if (msg.id > 0) {
@@ -1585,7 +1585,7 @@ void TelegramClient::MarkChatAsRead(int64_t chatId)
                 TDLOG("MarkChatAsRead: successfully marked messages as read for chatId=%lld", (long long)chatId);
                 // Update local state
                 {
-                    std::lock_guard<std::mutex> lock(m_dataMutex);
+                    std::unique_lock<std::shared_mutex> lock(m_dataMutex);
                     auto it = m_chats.find(chatId);
                     if (it != m_chats.end()) {
                         it->second.unreadCount = 0;
@@ -1616,7 +1616,7 @@ void TelegramClient::OnNewMessage(td_api::object_ptr<td_api::message>& message)
     
     // Add to messages cache
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         m_messages[msgInfo.chatId].push_back(msgInfo);
     }
     
@@ -1648,7 +1648,7 @@ void TelegramClient::OnMessageEdited(int64_t chatId, int64_t messageId,
     
     // Update in cache and get sender name
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         auto& messages = m_messages[chatId];
         for (auto& msg : messages) {
             if (msg.id == messageId) {
@@ -1729,7 +1729,7 @@ void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
     }
     
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         m_chats[info.id] = info;
     }
     
@@ -1770,7 +1770,7 @@ void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user>& user)
     }
     
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         m_users[info.id] = info;
         
         // Update chat info if this user has a private chat
@@ -1822,7 +1822,7 @@ void TelegramClient::OnUserStatusUpdate(int64_t userId, td_api::object_ptr<td_ap
     
     // Update cached user info
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         auto it = m_users.find(userId);
         if (it != m_users.end()) {
             it->second.isOnline = isOnline;
@@ -1906,7 +1906,7 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
 
 void TelegramClient::OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message)
 {
-    std::lock_guard<std::mutex> lock(m_dataMutex);
+    std::unique_lock<std::shared_mutex> lock(m_dataMutex);
     auto it = m_chats.find(chatId);
     if (it == m_chats.end()) return;
     
@@ -1922,7 +1922,7 @@ void TelegramClient::OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api
 void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessageId, int32_t unreadCount)
 {
     {
-        std::lock_guard<std::mutex> lock(m_dataMutex);
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         auto it = m_chats.find(chatId);
         if (it != m_chats.end()) {
             it->second.unreadCount = unreadCount;
@@ -1938,7 +1938,7 @@ void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessag
 
 void TelegramClient::OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position)
 {
-    std::lock_guard<std::mutex> lock(m_dataMutex);
+    std::unique_lock<std::shared_mutex> lock(m_dataMutex);
     auto it = m_chats.find(chatId);
     if (it == m_chats.end()) return;
     

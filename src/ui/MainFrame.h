@@ -126,6 +126,7 @@ private:
     void OnChatTreeItemActivated(wxTreeEvent& event);
     void OnMemberListItemActivated(wxListEvent& event);
     void OnMemberListRightClick(wxListEvent& event);
+    void OnCharHook(wxKeyEvent& event);
     
     // Welcome chat
     void ForwardInputToWelcomeChat(const wxString& input);

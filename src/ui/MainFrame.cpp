@@ -79,6 +79,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_LIST_ITEM_RIGHT_CLICK(ID_MEMBER_LIST, MainFrame::OnMemberListRightClick)
     EVT_TIMER(ID_REFRESH_TIMER, MainFrame::OnRefreshTimer)
     EVT_TIMER(ID_STATUS_TIMER, MainFrame::OnStatusTimer)
+    EVT_CHAR_HOOK(MainFrame::OnCharHook)
 wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
@@ -841,6 +842,15 @@ void MainFrame::OnToggleUnreadFirst(wxCommandEvent& event)
 void MainFrame::OnFullscreen(wxCommandEvent& event)
 {
     ShowFullScreen(!IsFullScreen(), wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR | wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION);
+}
+
+void MainFrame::OnCharHook(wxKeyEvent& event)
+{
+    if (event.GetKeyCode() == WXK_ESCAPE && IsFullScreen()) {
+        ShowFullScreen(false);
+    } else {
+        event.Skip();
+    }
 }
 
 void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent& event)

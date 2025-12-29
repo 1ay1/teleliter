@@ -552,12 +552,19 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
 
 void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
 {
-    if (!m_messageFormatter) return;
+    if (!m_messageFormatter || !m_chatArea) return;
 
     // Skip duplicates
     if (msg.id != 0 && HasMessage(msg.id)) {
         CVWLOG("DisplayMessage: skipping duplicate message id=" << msg.id);
         return;
+    }
+    
+    // Determine if we can append using the last displayed state
+    // If this message is newer/same time as the last displayed one, we can append
+    bool canAppend = false;
+    if (m_lastDisplayedTimestamp == 0 || msg.date >= m_lastDisplayedTimestamp) {
+        canAppend = true;
     }
     
     // Add to storage
@@ -574,8 +581,38 @@ void ChatViewWidget::DisplayMessage(const MessageInfo& msg)
         EnsureMediaDownloaded(info);
     }
     
-    // Schedule a debounced refresh to coalesce rapid message arrivals
-    ScheduleRefresh();
+    if (canAppend) {
+        // Append directly to the display without clearing
+        BeginBatchUpdate();
+        
+        // Ensure we suppress undo to save memory/cpu
+        if (m_chatArea && m_chatArea->GetDisplay()) {
+            m_chatArea->GetDisplay()->BeginSuppressUndo();
+        }
+        
+        RenderMessageToDisplay(msg);
+        
+        // Remove trailing newline if needed (hacky but keeps layout tight)
+        if (m_chatArea && m_chatArea->GetDisplay()) {
+            wxRichTextCtrl* display = m_chatArea->GetDisplay();
+            long lastPos = display->GetLastPosition();
+            if (lastPos > 0) {
+                wxString lastChar = display->GetRange(lastPos - 1, lastPos);
+                if (lastChar == "\n") {
+                   // display->Remove(lastPos - 1, lastPos); 
+                   // removing newline might merge paragraphs incorrectly in append mode
+                   // better to leave it or handle in MessageFormatter
+                }
+            }
+            display->EndSuppressUndo();
+        }
+        
+        EndBatchUpdate();
+        ScrollToBottomIfAtBottom();
+    } else {
+        // Out of order message - must resort and refresh
+        ScheduleRefresh();
+    }
 }
 
 void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo>& messages)
@@ -616,30 +653,45 @@ void ChatViewWidget::UpdateMessage(const MessageInfo& msg)
 {
     if (msg.id == 0) return;
     
-    CVWLOG("UpdateMessage: msgId=" << msg.id << " fileId=" << msg.mediaFileId 
-           << " thumbId=" << msg.mediaThumbnailFileId);
+    // CVWLOG("UpdateMessage: msgId=" << msg.id);
     
-    bool found = false;
+    bool neededRefresh = false;
     {
         std::lock_guard<std::mutex> lock(m_messagesMutex);
         for (auto& existingMsg : m_messages) {
             if (existingMsg.id == msg.id) {
-                // Update media fields that may have changed
+                // Check if meaningful changes occurred that require a redraw
+                // We don't care about internal ID changes if the content looks the same
+                if (existingMsg.mediaLocalPath != msg.mediaLocalPath ||
+                    existingMsg.mediaThumbnailPath != msg.mediaThumbnailPath ||
+                    existingMsg.text != msg.text ||
+                    existingMsg.isEdited != msg.isEdited) {
+                    
+                    neededRefresh = true;
+                    CVWLOG("UpdateMessage: meaningful change detected for msgId=" << msg.id);
+                } else if ((existingMsg.mediaFileId == 0 && msg.mediaFileId != 0) ||
+                           (existingMsg.mediaThumbnailFileId == 0 && msg.mediaThumbnailFileId != 0)) {
+                    // ID appeared where there was none (completion of initial load)
+                    neededRefresh = true;
+                }
+                
+                // Update all fields
                 existingMsg.mediaFileId = msg.mediaFileId;
                 existingMsg.mediaThumbnailFileId = msg.mediaThumbnailFileId;
                 existingMsg.mediaLocalPath = msg.mediaLocalPath;
                 existingMsg.mediaThumbnailPath = msg.mediaThumbnailPath;
                 existingMsg.mediaFileName = msg.mediaFileName;
                 existingMsg.mediaFileSize = msg.mediaFileSize;
-                found = true;
-                CVWLOG("UpdateMessage: updated existing message");
+                existingMsg.text = msg.text;
+                existingMsg.isEdited = msg.isEdited;
+                existingMsg.editDate = msg.editDate;
+                
                 break;
             }
         }
     }
     
-    if (found) {
-        // Refresh display to show updated media
+    if (neededRefresh) {
         ScheduleRefresh();
     }
 }
@@ -837,13 +889,11 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan& span) const
         info.caption = msg->mediaCaption;
         info.isDownloading = false;  // Will be set by caller if needed
         
-        // If still no file IDs, request a refetch from TDLib
-        if (info.fileId == 0 && info.thumbnailFileId == 0 && m_mainFrame) {
-            TelegramClient* client = m_mainFrame->GetTelegramClient();
-            if (client && msg->chatId != 0 && msg->id != 0) {
-                CVWLOG("GetMediaInfoForSpan: no file IDs, requesting refetch for msgId=" << msg->id);
-                client->RefetchMessage(msg->chatId, msg->id);
-            }
+        // If still no file IDs, it might be loading or failed
+        // We do NOT trigger refetch here as this is a const getter called frequently (e.g. on hover)
+        // triggering network requests here would be disastrous for performance
+        if (info.fileId == 0 && info.thumbnailFileId == 0) {
+            // CVWLOG("GetMediaInfoForSpan: no file IDs for msgId=" << msg->id);
         }
     } else {
         // Fallback to span's file IDs if message not found
