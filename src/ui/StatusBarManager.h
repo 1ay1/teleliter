@@ -49,9 +49,16 @@ public:
     // Get active transfer count (for external display)
     void SetActiveTransferCount(int count) { m_activeTransferCount = count; }
     
+    // Override status functionality (for tooltips etc.)
+    void SetOverrideStatus(const wxString& text) { m_overrideStatusText = text; UpdateStatusBar(); }
+    void ClearOverrideStatus() { m_overrideStatusText.clear(); UpdateStatusBar(); }
+    
 private:
     wxFrame* m_parent;
     wxStatusBar* m_statusBar;
+    
+    // Override status text (takes precedence over chat info)
+    wxString m_overrideStatusText;
     
     // Status bar widgets (connection label for colored status)
     wxStaticText* m_connectionLabel;

@@ -94,7 +94,10 @@ void StatusBarManager::UpdateStatusBar()
     if (!m_parent || !m_statusBar) return;
     
     // Field 0: Chat info (only update if no active transfer)
-    if (!m_hasActiveTransfers) {
+    // Field 0: Chat info (only update if no active transfer)
+    if (!m_overrideStatusText.IsEmpty()) {
+        m_parent->SetStatusText(m_overrideStatusText, 0);
+    } else if (!m_hasActiveTransfers) {
         wxString chatInfo;
         if (m_isLoggedIn) {
             if (m_currentChatId != 0) {

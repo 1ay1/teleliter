@@ -142,6 +142,9 @@ public:
     void SetLoading(bool loading);
     bool IsLoading() const { return m_isLoading; }
     
+    // Read receipts
+    void SetReadStatus(int64_t lastReadOutboxId, int64_t readTime = 0);
+    
     // Download progress bar
     void ShowDownloadProgress(const wxString& fileName, int percent);
     void HideDownloadProgress();
@@ -258,6 +261,17 @@ private:
     
     // Current username for highlight detection
     wxString m_currentUsername;
+    
+    // Read receipts
+    int64_t m_lastReadOutboxId = 0;
+    int64_t m_lastReadOutboxTime = 0;  // When we learned messages were read
+    
+    // Track [R] marker positions for tooltips
+    struct ReadMarkerSpan {
+        long startPos;
+        long endPos;
+    };
+    std::vector<ReadMarkerSpan> m_readMarkerSpans;
     
     // Context menu state
     long m_contextMenuPos;

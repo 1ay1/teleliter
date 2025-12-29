@@ -145,6 +145,10 @@ public:
     // Check and clear dirty flags atomically - call from UI refresh timer
     DirtyFlag GetAndClearDirtyFlags();
     
+    // Privacy Settings
+    void SetSendReadReceipts(bool enable) { m_sendReadReceipts = enable; }
+    bool GetSendReadReceipts() const { return m_sendReadReceipts; }
+    
     // Check if specific flag is dirty (without clearing)
     bool IsDirty(DirtyFlag flag) const;
     
@@ -219,6 +223,7 @@ private:
     bool ShouldAutoDownloadMedia(MediaType type, int64_t fileSize) const;
     void OnChatLastMessage(int64_t chatId, td_api::object_ptr<td_api::message>& message);
     void OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessageId, int32_t unreadCount);
+    void OnChatReadOutbox(int64_t chatId, int64_t maxMessageId); // New method
     void OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position);
     
     MessageInfo ConvertMessage(td_api::message* msg);
@@ -260,6 +265,9 @@ private:
     // Download progress updates - track actual bytes for status bar
     std::vector<FileDownloadProgress> m_downloadProgressUpdates;
     std::mutex m_downloadProgressMutex;
+    
+    // Privacy settings
+    bool m_sendReadReceipts = true;
     
     // Coalescing flag to prevent flooding UI with refresh events
     std::atomic<bool> m_uiRefreshPending{false};

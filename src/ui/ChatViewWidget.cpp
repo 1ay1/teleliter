@@ -286,6 +286,7 @@ void ChatViewWidget::RefreshDisplay()
     ClearMediaSpans();
     ClearEditSpans();
     ClearLinkSpans();
+    m_readMarkerSpans.clear();
     
     // Reset formatting state
     m_messageFormatter->ResetGroupingState();
@@ -358,6 +359,18 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo& msg)
     if (!m_messageFormatter) return;
 
     wxString timestamp = FormatTimestamp(msg.date);
+    
+    // Read receipts for outgoing messages: [R] = Read, [S] = Sent
+    if (msg.isOutgoing) {
+        if (msg.id == 0) {
+            timestamp += "...";
+        } else if (m_lastReadOutboxId > 0 && msg.id <= m_lastReadOutboxId) {
+            timestamp += "[R]";
+        } else {
+            timestamp += "[S]";
+        }
+    }
+
     wxString sender = msg.senderName.IsEmpty() ? "Unknown" : msg.senderName;
 
     // Handle forwarded messages
@@ -1650,6 +1663,15 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent& event)
     }
 }
 
+void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime)
+{
+    if (m_lastReadOutboxId != lastReadOutboxId) {
+        m_lastReadOutboxId = lastReadOutboxId;
+        m_lastReadOutboxTime = readTime;
+        // Re-render messages to update read status indicators
+        RefreshDisplay();
+    }
+}
 void ChatViewWidget::OnRightDown(wxMouseEvent& event)
 {
     wxPoint pos = event.GetPosition();
@@ -1809,6 +1831,42 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
     wxTextCtrlHitTestResult hit = ctrl->HitTest(pos, &textPos);
 
     if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
+        // Check for [R] marker - look at surrounding text for tooltip
+        // Get the line at this position
+        long x, y;
+        ctrl->PositionToXY(textPos, &x, &y);
+        long lineStart = ctrl->XYToPosition(0, y);
+        wxString lineText = ctrl->GetRange(lineStart, std::min(lineStart + 100, ctrl->GetLastPosition()));
+        
+        // Check if this line has [R] and cursor is near it
+        int rPos = lineText.Find("[R]");
+        if (rPos != wxNOT_FOUND && textPos >= lineStart + rPos && textPos <= lineStart + rPos + 3) {
+            // Show read time in status bar for instant feedback
+            wxString statusText;
+            if (m_lastReadOutboxTime > 0) {
+                std::time_t readTime = static_cast<std::time_t>(m_lastReadOutboxTime);
+                std::tm* tm = std::localtime(&readTime);
+                char timeStr[64];
+                std::strftime(timeStr, sizeof(timeStr), "Read at %H:%M:%S", tm);
+                statusText = timeStr;
+            } else {
+                statusText = "Message read by recipient";
+            }
+            
+            // Update status bar via MainFrame using override mechanism
+            if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
+                m_mainFrame->GetStatusBarManager()->SetOverrideStatus(statusText);
+            }
+            m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
+            event.Skip();
+            return;
+        }
+        
+        // Clear override if not on [R]
+        if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
+            m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
+        }
+        
         // Check for media span
         MediaSpan* span = GetMediaSpanAtPosition(textPos);
         if (span) {
@@ -1836,6 +1894,10 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
         // Default arrow cursor for regular text (not I-beam)
         m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     } else {
+        if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
+            m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
+        }
+        ctrl->UnsetToolTip();
         m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     }
 
@@ -1845,6 +1907,13 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent& event)
 void ChatViewWidget::OnMouseLeave(wxMouseEvent& event)
 {
     HideEditHistoryPopup();
+    
+    // Clear read receipt status text when leaving
+    // Clear read receipt status text when leaving
+    if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
+        m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
+    }
+    
     if (m_chatArea) {
         m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
     }

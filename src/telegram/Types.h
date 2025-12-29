@@ -39,11 +39,15 @@ struct ChatInfo {
     int64_t supergroupId;
     int64_t basicGroupId;
     
+    int64_t lastReadOutboxMessageId;
+    int64_t lastReadOutboxTime;  // Unix timestamp when we learned the message was read
+    
     ChatInfo() 
         : id(0), lastMessageDate(0), unreadCount(0), lastReadInboxMessageId(0),
           memberCount(0), isPinned(false), isMuted(false), order(0), isPrivate(false),
           isGroup(false), isSupergroup(false), isChannel(false), isBot(false),
-          userId(0), supergroupId(0), basicGroupId(0) {}
+          userId(0), supergroupId(0), basicGroupId(0), lastReadOutboxMessageId(0),
+          lastReadOutboxTime(0) {}
 };
 
 // Message info structure

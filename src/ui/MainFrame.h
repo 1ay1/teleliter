@@ -77,6 +77,7 @@ public:
     ChatViewWidget* GetChatViewWidget() { return m_chatViewWidget; }
     InputBoxWidget* GetInputBoxWidget() { return m_inputBoxWidget; }
     wxListCtrl* GetMemberList() { return m_memberList; }
+    StatusBarManager* GetStatusBarManager() { return m_statusBar; }
     
 private:
     // UI Setup
@@ -116,6 +117,7 @@ private:
     void OnToggleChatInfo(wxCommandEvent& event);
     void OnFullscreen(wxCommandEvent& event);
     void OnToggleUnreadFirst(wxCommandEvent& event);
+    void OnToggleReadReceipts(wxCommandEvent& event);
     
     // Timer event handlers
     void OnRefreshTimer(wxTimerEvent& event);

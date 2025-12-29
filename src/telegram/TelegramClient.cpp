@@ -141,7 +141,7 @@ void TelegramClient::ReceiveLoop()
             TDLOG("Client manager is null, exiting receive loop");
             break;
         }
-        auto response = m_clientManager->receive(1.0);  // 1 second timeout
+        auto response = m_clientManager->receive(0.1);  // 100ms timeout for faster updates
         if (response.object) {
             TDLOG("Received response, id=%d", response.object->get_id());
             ProcessResponse(std::move(response));
@@ -220,6 +220,8 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
             OnChatLastMessage(u.chat_id_, u.last_message_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatReadInbox>) {
             OnChatReadInbox(u.chat_id_, u.last_read_inbox_message_id_, u.unread_count_);
+        } else if constexpr (std::is_same_v<T, td_api::updateChatReadOutbox>) {
+            OnChatReadOutbox(u.chat_id_, u.last_read_outbox_message_id_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatPosition>) {
             OnChatPosition(u.chat_id_, u.position_);
         } else if constexpr (std::is_same_v<T, td_api::updateUser>) {
@@ -1554,6 +1556,12 @@ void TelegramClient::LoadChatMembers(int64_t chatId, int limit)
 
 void TelegramClient::MarkChatAsRead(int64_t chatId)
 {
+    // Privacy setting check
+    if (!m_sendReadReceipts) {
+        TDLOG("MarkChatAsRead: sendReadReceipts is disabled, skipping viewMessages");
+        return;
+    }
+
     bool found = false;
     ChatInfo chat = GetChat(chatId, &found);
     if (!found) {
@@ -1683,6 +1691,7 @@ void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat>& chat)
     info.title = wxString::FromUTF8(chat->title_);
     info.unreadCount = chat->unread_count_;
     info.lastReadInboxMessageId = chat->last_read_inbox_message_id_;
+    info.lastReadOutboxMessageId = chat->last_read_outbox_message_id_;
     
     // Parse positions
     for (auto& pos : chat->positions_) {
@@ -1925,15 +1934,27 @@ void TelegramClient::OnChatReadInbox(int64_t chatId, int64_t lastReadInboxMessag
         std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         auto it = m_chats.find(chatId);
         if (it != m_chats.end()) {
-            it->second.unreadCount = unreadCount;
             it->second.lastReadInboxMessageId = lastReadInboxMessageId;
-        } else {
-            return;  // Chat not found
+            it->second.unreadCount = unreadCount;
         }
     }
-    
     // REACTIVE MVC: Set dirty flag instead of posting callback
     SetDirty(DirtyFlag::ChatList);
+}
+
+void TelegramClient::OnChatReadOutbox(int64_t chatId, int64_t maxMessageId)
+{
+    {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto it = m_chats.find(chatId);
+        if (it != m_chats.end()) {
+             it->second.lastReadOutboxMessageId = maxMessageId;
+             it->second.lastReadOutboxTime = std::time(nullptr);  // Record when we learned it was read
+        }
+    }
+    // Set dirty flag and trigger immediate UI update
+    SetDirty(DirtyFlag::Messages);
+    NotifyUIRefresh();
 }
 
 void TelegramClient::OnChatPosition(int64_t chatId, td_api::object_ptr<td_api::chatPosition>& position)

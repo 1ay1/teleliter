@@ -11,6 +11,7 @@
 #include <wx/artprov.h>
 #include <wx/settings.h>
 #include <wx/filename.h>
+#include <wx/config.h>
 #include <ctime>
 
 // Helper function to format last seen time
@@ -131,6 +132,13 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
 
     // Start TDLib immediately in background so it's ready when user wants to login
     m_telegramClient->Start();
+    
+    // Load saved preferences
+    wxConfigBase* config = wxConfigBase::Get();
+    if (config) {
+        bool sendReadReceipts = config->ReadBool("/Privacy/SendReadReceipts", true);
+        m_telegramClient->SetSendReadReceipts(sendReadReceipts);
+    }
 
     // Connect status bar to telegram client
     m_statusBar->SetTelegramClient(m_telegramClient);
@@ -795,7 +803,46 @@ void MainFrame::OnSavedMessages(wxCommandEvent& event)
 
 void MainFrame::OnPreferences(wxCommandEvent& event)
 {
-    wxMessageBox("Preferences dialog will be implemented.", "Preferences", wxOK, this);
+    wxDialog dialog(this, wxID_ANY, "Preferences", wxDefaultPosition, wxSize(400, 200));
+    wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
+    
+    // Privacy section
+    wxStaticBoxSizer* privacySizer = new wxStaticBoxSizer(wxVERTICAL, &dialog, "Privacy");
+    
+    wxCheckBox* readReceiptsCheckbox = new wxCheckBox(&dialog, wxID_ANY, "Send Read Receipts");
+    if (m_telegramClient) {
+        readReceiptsCheckbox->SetValue(m_telegramClient->GetSendReadReceipts());
+    }
+    privacySizer->Add(readReceiptsCheckbox, 0, wxALL, 10);
+    
+    mainSizer->Add(privacySizer, 0, wxEXPAND | wxALL, 10);
+    
+    // Buttons
+    wxBoxSizer* buttonSizer = new wxBoxSizer(wxHORIZONTAL);
+    wxButton* okButton = new wxButton(&dialog, wxID_OK, "OK");
+    wxButton* cancelButton = new wxButton(&dialog, wxID_CANCEL, "Cancel");
+    buttonSizer->Add(okButton, 0, wxRIGHT, 5);
+    buttonSizer->Add(cancelButton, 0);
+    mainSizer->Add(buttonSizer, 0, wxALIGN_RIGHT | wxALL, 10);
+    
+    dialog.SetSizer(mainSizer);
+    dialog.Layout();
+    dialog.Centre();
+    
+    if (dialog.ShowModal() == wxID_OK) {
+        bool sendReadReceipts = readReceiptsCheckbox->GetValue();
+        
+        if (m_telegramClient) {
+            m_telegramClient->SetSendReadReceipts(sendReadReceipts);
+        }
+        
+        // Save to config
+        wxConfigBase* config = wxConfigBase::Get();
+        if (config) {
+            config->Write("/Privacy/SendReadReceipts", sendReadReceipts);
+            config->Flush();
+        }
+    }
 }
 
 void MainFrame::OnClearWindow(wxCommandEvent& event)
@@ -1310,6 +1357,15 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
 
     // Clear reloading state now that we have fresh messages
     m_chatViewWidget->SetReloading(false);
+    
+    // Set read status for outgoing message indicators
+    if (m_telegramClient) {
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+        if (found) {
+            m_chatViewWidget->SetReadStatus(chat.lastReadOutboxMessageId, chat.lastReadOutboxTime);
+        }
+    }
 
     // Clear existing messages and display all new ones in bulk
     // ChatViewWidget::DisplayMessages handles sorting internally
@@ -1770,7 +1826,14 @@ void MainFrame::ReactiveRefresh()
     }
     
     // Handle message updates for current chat
-    if ((flags & DirtyFlag::Messages) != DirtyFlag::None && m_currentChatId != 0) {
+    if ((flags & DirtyFlag::Messages) != DirtyFlag::None && m_currentChatId != 0 && m_chatViewWidget) {
+        // Update read status
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(m_currentChatId, &found);
+        if (found) {
+            m_chatViewWidget->SetReadStatus(chat.lastReadOutboxMessageId, chat.lastReadOutboxTime);
+        }
+
         // Get new messages
         auto newMessages = m_telegramClient->GetNewMessages(m_currentChatId);
         for (const auto& msg : newMessages) {

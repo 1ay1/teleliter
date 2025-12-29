@@ -912,11 +912,11 @@ void MediaPopup::LoadVideoAsync(const wxString& path, bool loop, bool muted)
     
     // Use single source of truth for size and position - this also shows the window
     if (m_mediaInfo.width > 0 && m_mediaInfo.height > 0) {
-        int maxWidth = PHOTO_MAX_WIDTH;
-        int maxHeight = PHOTO_MAX_HEIGHT;
+        int maxWidth = PHOTO_MAX_WIDTH - (PADDING * 2) - (BORDER_WIDTH * 2);
+        int maxHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
         if (m_mediaInfo.type != MediaType::Photo && m_mediaInfo.type != MediaType::Video && m_mediaInfo.type != MediaType::GIF) {
-            maxWidth = STICKER_MAX_WIDTH;
-            maxHeight = STICKER_MAX_HEIGHT;
+            maxWidth = STICKER_MAX_WIDTH - (PADDING * 2);
+            maxHeight = STICKER_MAX_HEIGHT - (PADDING * 2) - 20;
         }
 
         int vidWidth = m_mediaInfo.width;
