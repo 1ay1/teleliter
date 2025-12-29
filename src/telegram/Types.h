@@ -72,6 +72,8 @@ struct MessageInfo {
     int32_t mediaFileId;
     wxString mediaLocalPath;
     int64_t mediaFileSize;
+    int width;
+    int height;
     
     // For animated stickers - thumbnail for preview
     int32_t mediaThumbnailFileId;
@@ -88,7 +90,7 @@ struct MessageInfo {
           isEdited(false), hasPhoto(false), hasVideo(false),
           hasDocument(false), hasVoice(false), hasVideoNote(false),
           hasSticker(false), hasAnimation(false), mediaFileId(0),
-          mediaFileSize(0), mediaThumbnailFileId(0),
+          mediaFileSize(0), width(0), height(0), mediaThumbnailFileId(0),
           replyToMessageId(0), isForwarded(false) {}
 };
 

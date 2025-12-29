@@ -827,7 +827,10 @@ void ChatViewWidget::AddMediaSpan(long startPos, long endPos, const MediaInfo& i
     span.messageId = messageId;
     span.fileId = info.fileId;
     span.thumbnailFileId = info.thumbnailFileId;
+    span.thumbnailFileId = info.thumbnailFileId;
     span.type = info.type;
+    span.width = info.width;
+    span.height = info.height;
     
     size_t index = m_mediaSpans.size();
     m_mediaSpans.push_back(span);
@@ -880,6 +883,8 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan& span) const
     // The message may have been updated with file IDs since the span was created
     const MessageInfo* msg = GetMessageById(span.messageId);
     if (msg) {
+        info.width = msg->width;
+        info.height = msg->height;
         // Prefer message's file IDs over span's (message is updated, span is not)
         info.fileId = (msg->mediaFileId != 0) ? msg->mediaFileId : span.fileId;
         info.thumbnailFileId = (msg->mediaThumbnailFileId != 0) ? msg->mediaThumbnailFileId : span.thumbnailFileId;
@@ -895,10 +900,40 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan& span) const
         if (info.fileId == 0 && info.thumbnailFileId == 0) {
             // CVWLOG("GetMediaInfoForSpan: no file IDs for msgId=" << msg->id);
         }
+        
+        // Accurate downloading state check
+        if (m_mainFrame) {
+            TelegramClient* client = m_mainFrame->GetTelegramClient();
+            if (client) {
+                // Check if main file is downloading
+                if (info.fileId != 0 && info.localPath.IsEmpty()) {
+                    info.isDownloading = client->IsDownloading(info.fileId);
+                    
+                    // If we just claimed it's NOT downloading, but localPath is empty,
+                    // it might be completed but path update hasn't propagated?
+                    // Or it hasn't started.
+                    // If client says it's Completed, try to get the path now!
+                    if (!info.isDownloading) {
+                        DownloadState state = client->GetDownloadState(info.fileId);
+                        if (state == DownloadState::Completed) {
+                            // It's done! We might need to manually set localPath from client if possible
+                            // But client struct is private.
+                            // However, UpdateMediaPath should have been called.
+                            // If we are here, it means race condition:
+                            // Client has it, UI update pending.
+                            // We can lie and say isDownloading=false (which it is),
+                            // but MediaPopup will show spinner if path is empty.
+                        }
+                    }
+                }
+            }
+        }
     } else {
         // Fallback to span's file IDs if message not found
         info.fileId = span.fileId;
         info.thumbnailFileId = span.thumbnailFileId;
+        info.width = span.width;
+        info.height = span.height;
     }
     
     return info;

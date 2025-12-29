@@ -45,12 +45,14 @@ struct MediaSpan {
     int32_t fileId;           // File ID for quick lookup
     int32_t thumbnailFileId;  // Thumbnail file ID
     MediaType type;           // Media type
+    int width;
+    int height;
     
     bool Contains(long pos) const {
         return pos >= startPos && pos <= endPos;
     }
     
-    MediaSpan() : startPos(0), endPos(0), messageId(0), fileId(0), thumbnailFileId(0), type(MediaType::Photo) {}
+    MediaSpan() : startPos(0), endPos(0), messageId(0), fileId(0), thumbnailFileId(0), type(MediaType::Photo), width(0), height(0) {}
 };
 
 // Tracks edited message spans for showing edit history

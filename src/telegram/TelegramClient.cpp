@@ -2039,12 +2039,13 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     auto& thumbSize = c.photo_->sizes_.front();
                     auto& fullSize = c.photo_->sizes_.back();
                     
-                    // Track full size photo
-                    if (fullSize->photo_) {
-                        info.mediaFileId = fullSize->photo_->id_;
-                        info.mediaFileSize = fullSize->photo_->size_;
-                        
-                        if (IsFileAvailableLocally(fullSize->photo_.get())) {
+                        if (fullSize->photo_) {
+                            info.mediaFileId = fullSize->photo_->id_;
+                            info.mediaFileSize = fullSize->photo_->size_;
+                            info.width = fullSize->width_;
+                            info.height = fullSize->height_;
+                            
+                            if (IsFileAvailableLocally(fullSize->photo_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
                         } else if (ShouldDownloadFile(fullSize->photo_.get())) {
                             // Auto-download full photo
@@ -2073,6 +2074,8 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileId = c.video_->video_->id_;
                         info.mediaFileName = wxString::FromUTF8(c.video_->file_name_);
                         info.mediaFileSize = c.video_->video_->size_;
+                        info.width = c.video_->width_;
+                        info.height = c.video_->height_;
                         
                         // Check if actual video file is downloaded
                         if (IsFileAvailableLocally(c.video_->video_.get())) {
@@ -2116,6 +2119,9 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     if (c.video_note_->video_) {
                         info.mediaFileId = c.video_note_->video_->id_;
                         info.mediaFileSize = c.video_note_->video_->size_;
+                        // Video notes are usually square and somewhat small
+                        info.width = c.video_note_->length_;
+                        info.height = c.video_note_->length_;
                         
                         if (IsFileAvailableLocally(c.video_note_->video_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_note_->video_->local_->path_);
@@ -2139,6 +2145,8 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     info.mediaCaption = wxString::FromUTF8(c.sticker_->emoji_);
                     if (c.sticker_->sticker_) {
                         info.mediaFileId = c.sticker_->sticker_->id_;
+                        info.width = c.sticker_->width_;
+                        info.height = c.sticker_->height_;
                         
                         if (IsFileAvailableLocally(c.sticker_->sticker_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.sticker_->sticker_->local_->path_);
@@ -2198,6 +2206,8 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.mediaFileId = c.animation_->animation_->id_;
                         info.mediaFileName = wxString::FromUTF8(c.animation_->file_name_);
                         info.mediaFileSize = c.animation_->animation_->size_;
+                        info.width = c.animation_->width_;
+                        info.height = c.animation_->height_;
                         
                         if (IsFileAvailableLocally(c.animation_->animation_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.animation_->animation_->local_->path_);

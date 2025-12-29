@@ -702,18 +702,67 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
         return;
     }
 
-    // No local file - show downloading state
+    // No local file - check if it's ACTUALLY downloading
+    bool isTrulyDownloading = info.isDownloading;
+    
+    // If not marked as downloading in info, double check with TelegramClient if we have a frame
+    if (!isTrulyDownloading && info.fileId != 0) {
+        // Can't easily check client state from here without access to main frame or client
+        // But we can trust info.isDownloading if ChatViewWidget kept it up to date
+        // However, if localPath is empty but isDownloading is false, it might mean:
+        // 1. Not started yet 
+        // 2. Completed but we don't have the path yet (Race Condition)
+        // 3. Failed
+        
+        // We assume "not downloaded" if path is empty.
+        // But to avoid the "starts out showing downloading" glitch for already downloaded files,
+        // we should start with a PLACEHOLDER unless we are SURE it is downloading.
+        
+        // BETTER APPROACH: Use the thumbnail size for the placeholder to avoid jumping
+        // even if we show a spinner.
+    }
+
     if (info.isDownloading || info.fileId != 0) {
         MPLOG("ShowMedia: no local file, showing downloading state for fileId=" << info.fileId);
         m_isDownloadingMedia = true;
         m_isLoading = true;
         m_loadingFrame = 0;
         m_loadingTimer.Start(150);
+        
+        // If we are here, we have NO thumbnail file content.
+        // But we might have dimensions!
+        if (info.width > 0 && info.height > 0) {
+            // Calculate scaled dimensions just like SetImage does
+            int maxWidth = PHOTO_MAX_WIDTH;
+            int maxHeight = PHOTO_MAX_HEIGHT;
+            if (info.type != MediaType::Photo && info.type != MediaType::Video && info.type != MediaType::GIF) {
+                maxWidth = STICKER_MAX_WIDTH;
+                maxHeight = STICKER_MAX_HEIGHT;
+            }
+            
+            int imgWidth = info.width;
+            int imgHeight = info.height;
+
+            if (imgWidth > maxWidth || imgHeight > maxHeight) {
+                double scaleX = (double)maxWidth / imgWidth;
+                double scaleY = (double)maxHeight / imgHeight;
+                double scale = std::min(scaleX, scaleY);
+                imgWidth = (int)(imgWidth * scale);
+                imgHeight = (int)(imgHeight * scale);
+            }
+            
+            int popupWidth = imgWidth + PADDING * 2 + BORDER_WIDTH * 2;
+            int popupHeight = imgHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+            ApplySizeAndPosition(popupWidth, popupHeight);
+        } else {
+            // No dimensions, use default
+            ApplySizeAndPosition(180, 120);
+        }
     } else {
         MPLOG("ShowMedia: no local file and no fileId, showing placeholder");
+        ApplySizeAndPosition(180, 120);
     }
-
-    ApplySizeAndPosition(180, 120);
+    
     Refresh();
 }
 
@@ -763,7 +812,31 @@ void MediaPopup::PlayVideo(const wxString& path, bool loop, bool muted)
     int videoHeight = PHOTO_MAX_HEIGHT - (PADDING * 2) - (BORDER_WIDTH * 2) - 24;
     
     // Use single source of truth for size and position - this also shows the window
-    ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    if (m_mediaInfo.width > 0 && m_mediaInfo.height > 0) {
+        int maxWidth = PHOTO_MAX_WIDTH;
+        int maxHeight = PHOTO_MAX_HEIGHT;
+        if (m_mediaInfo.type != MediaType::Photo && m_mediaInfo.type != MediaType::Video && m_mediaInfo.type != MediaType::GIF) {
+            maxWidth = STICKER_MAX_WIDTH;
+            maxHeight = STICKER_MAX_HEIGHT;
+        }
+
+        int vidWidth = m_mediaInfo.width;
+        int vidHeight = m_mediaInfo.height;
+
+        if (vidWidth > maxWidth || vidHeight > maxHeight) {
+             double scaleX = (double)maxWidth / vidWidth;
+             double scaleY = (double)maxHeight / vidHeight;
+             double scale = std::min(scaleX, scaleY);
+             vidWidth = (int)(vidWidth * scale);
+             vidHeight = (int)(vidHeight * scale);
+        }
+        
+        int popupWidth = vidWidth + PADDING * 2 + BORDER_WIDTH * 2;
+        int popupHeight = vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+        ApplySizeAndPosition(popupWidth, popupHeight);
+    } else {
+        ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    }
 
     // Create media control if needed
     CreateMediaCtrl();
@@ -833,7 +906,31 @@ void MediaPopup::LoadVideoAsync(const wxString& path, bool loop, bool muted)
     m_loadingTimer.Start(150);
     
     // Use single source of truth for size and position - this also shows the window
-    ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    if (m_mediaInfo.width > 0 && m_mediaInfo.height > 0) {
+        int maxWidth = PHOTO_MAX_WIDTH;
+        int maxHeight = PHOTO_MAX_HEIGHT;
+        if (m_mediaInfo.type != MediaType::Photo && m_mediaInfo.type != MediaType::Video && m_mediaInfo.type != MediaType::GIF) {
+            maxWidth = STICKER_MAX_WIDTH;
+            maxHeight = STICKER_MAX_HEIGHT;
+        }
+
+        int vidWidth = m_mediaInfo.width;
+        int vidHeight = m_mediaInfo.height;
+
+        if (vidWidth > maxWidth || vidHeight > maxHeight) {
+             double scaleX = (double)maxWidth / vidWidth;
+             double scaleY = (double)maxHeight / vidHeight;
+             double scale = std::min(scaleX, scaleY);
+             vidWidth = (int)(vidWidth * scale);
+             vidHeight = (int)(vidHeight * scale);
+        }
+        
+        int popupWidth = vidWidth + PADDING * 2 + BORDER_WIDTH * 2;
+        int popupHeight = vidHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+        ApplySizeAndPosition(popupWidth, popupHeight);
+    } else {
+        ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
+    }
     Refresh();
 
     // Defer the heavy FFmpeg loading using CallAfter
@@ -1427,7 +1524,7 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
               << " screenBottom=" << screenRect.GetBottom()
               << " effectiveScreenBottom=" << effectiveScreenBottom);
 
-        // Adjust horizontal
+    // Adjust horizontal
         if (targetPos.x + width > screenRect.GetRight()) {
             targetPos.x = screenRect.GetRight() - width;
         }
@@ -1442,36 +1539,42 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
         MPLOG("ApplySizeAndPosition: spaceBelow=" << spaceBelow << " spaceAbove=" << spaceAbove << " height=" << height);
         
         // Decide whether to show above or below based on available space
-        // Prefer showing below, but if it doesn't fit, show above
         if (height + CURSOR_OFFSET <= spaceBelow) {
-            // Fits below - show below cursor with offset
+            // Fits below
             targetPos.y = m_originalPosition.y + CURSOR_OFFSET;
-            MPLOG("ApplySizeAndPosition: fits below, showing at y=" << targetPos.y);
             isShowingBelow = true;
         } else if (height <= spaceAbove) {
-            // Doesn't fit below but fits above - show above cursor
+            // Fits above
             targetPos.y = m_originalPosition.y - height - 5;
-            MPLOG("ApplySizeAndPosition: fits above, showing at y=" << targetPos.y);
-            isShowingBelow = false;
-        } else if (spaceAbove > spaceBelow + CURSOR_OFFSET) {
-            // Doesn't fit either way, but more space above - show above
-            targetPos.y = m_originalPosition.y - height - 5;
-            // Pin to top if needed
-            if (targetPos.y < screenRect.GetTop()) {
-                targetPos.y = screenRect.GetTop();
-            }
-            MPLOG("ApplySizeAndPosition: more space above, showing at y=" << targetPos.y);
             isShowingBelow = false;
         } else {
-            // More space below or equal - show below with offset (may be clipped but better than above)
-            targetPos.y = m_originalPosition.y + CURSOR_OFFSET;
-            MPLOG("ApplySizeAndPosition: defaulting to below, showing at y=" << targetPos.y);
-            isShowingBelow = true;
+            // Doesn't fit perfectly in either. Pick the one with MORE space.
+            if (spaceAbove > spaceBelow) {
+                 // Show above, clamping top to screen edge
+                 targetPos.y = screenRect.GetTop() + 5; // minimal margin from top
+                 isShowingBelow = false;
+                 // If it STILL doesn't fit, we might need to clamp height, but for now just clamp position
+            } else {
+                 // Show below, clamping bottom to effective bottom not strictly enforced yet
+                 targetPos.y = m_originalPosition.y + CURSOR_OFFSET;
+                 isShowingBelow = true;
+            }
         }
         
-        // Ensure we don't go off-screen at the top
+        // Final sanity check for vertical bounds
         if (targetPos.y < screenRect.GetTop()) {
             targetPos.y = screenRect.GetTop();
+        }
+        // If the bottom goes off-screen, shift it up if possible
+        if (targetPos.y + height > effectiveScreenBottom) {
+             int overshoot = (targetPos.y + height) - effectiveScreenBottom;
+             // Only shift up if we don't go off the top
+             if (targetPos.y - overshoot >= screenRect.GetTop()) {
+                 targetPos.y -= overshoot;
+             } else {
+                 // If we have to clip, simply align to top to show as much as possible
+                 targetPos.y = screenRect.GetTop();
+             }
         }
     }
 
