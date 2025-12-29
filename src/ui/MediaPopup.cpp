@@ -755,12 +755,12 @@ void MediaPopup::ShowMedia(const MediaInfo& info, const wxPoint& pos)
             int popupHeight = imgHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
             ApplySizeAndPosition(popupWidth, popupHeight);
         } else {
-            // No dimensions, use default
-            ApplySizeAndPosition(180, 120);
+            // No dimensions, use default max size
+            ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
         }
     } else {
         MPLOG("ShowMedia: no local file and no fileId, showing placeholder");
-        ApplySizeAndPosition(180, 120);
+        ApplySizeAndPosition(PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT);
     }
     
     Refresh();
@@ -1291,7 +1291,9 @@ void MediaPopup::SetImage(const wxImage& image)
     StopAllPlayback();
 
     m_isLoading = false;
-    m_loadingTimer.Stop();
+    if (!m_isDownloadingMedia) {
+        m_loadingTimer.Stop();
+    }
     m_hasError = false;
 
     // Use larger size for photos/videos, smaller for stickers/emojis
@@ -1633,9 +1635,9 @@ void MediaPopup::UpdateSize()
         width = 200;
         height = 150;
     } else {
-        // Placeholder size - make it a nice square for the icon
-        width = 180;
-        height = 120;
+        // Placeholder size - use full preview size
+        width = PHOTO_MAX_WIDTH;
+        height = PHOTO_MAX_HEIGHT;
     }
 
     // Ensure minimum size
@@ -1796,7 +1798,7 @@ void MediaPopup::OnPaint(wxPaintEvent& event)
 
         // Draw "Downloading..." text below
         dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
-        dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
+        dc.SetTextForeground(m_textColor);
         wxString statusText = "Downloading...";
         wxSize statusSize = dc.GetTextExtent(statusText);
         int statusX = (size.GetWidth() - statusSize.GetWidth()) / 2;
