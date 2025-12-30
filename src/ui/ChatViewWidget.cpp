@@ -1259,9 +1259,12 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
          !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
 
     if (!localPathChanged && !thumbnailPathChanged) {
-      // Same media, no path changes, don't reload
-      CVWLOG("ShowMediaPopup: same media already showing/tracked, no path "
-             "changes, skipping");
+      // Same media, no path changes.
+      // BUT we still need to update position because user might have clicked
+      // same link in a different message!
+      CVWLOG("ShowMediaPopup: same media already showing/tracked, updating "
+             "position only");
+      m_mediaPopup->ShowMedia(info, position);
       return;
     }
     CVWLOG("ShowMediaPopup: same media but paths changed, allowing reload. "
