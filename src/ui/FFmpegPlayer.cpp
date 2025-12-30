@@ -46,6 +46,7 @@ FFmpegPlayer::FFmpegPlayer()
       m_audioStreamIndex(-1),
       m_audioBufferReadPos(0),
       m_audioBufferWritePos(0),
+      m_audioBytesPlayed(0),
       m_sdlAudioInitialized(false),
       m_sdlAudioDeviceId(0),
       m_rgbBuffer(nullptr),
@@ -172,6 +173,7 @@ bool FFmpegPlayer::LoadFile(const wxString& path)
     m_isAudioOnly = false;
     m_hasAudio = false;
     m_hitEOF = false;
+    m_audioBytesPlayed = 0;
 
     // Open the input file
     std::string pathStr = path.ToStdString();
@@ -473,6 +475,7 @@ void FFmpegPlayer::AudioCallback(void* userdata, uint8_t* stream, int len)
             memcpy(stream + firstPart, player->m_audioBuffer.data(), toCopy - firstPart);
         }
         player->m_audioBufferReadPos = (readPos + toCopy) % AUDIO_BUFFER_SIZE;
+        player->m_audioBytesPlayed += toCopy;
     }
 
     // Fill remaining with silence
@@ -530,6 +533,7 @@ void FFmpegPlayer::SeekToStart()
     m_currentFrame = 0;
     m_currentTime = 0.0;
     m_hitEOF = false;
+    m_audioBytesPlayed = 0;
 }
 
 void FFmpegPlayer::ReadAndRoutePackets()
@@ -593,18 +597,54 @@ void FFmpegPlayer::ReadAndRoutePackets()
 
 void FFmpegPlayer::Seek(double timeSeconds)
 {
-    if (!m_formatCtx || m_videoStreamIndex < 0) return;
+    if (!m_formatCtx) return;
+    
+    // Use video stream if available, otherwise audio stream
+    int streamIndex = m_videoStreamIndex >= 0 ? m_videoStreamIndex : m_audioStreamIndex;
+    if (streamIndex < 0) return;
 
     // Convert time to stream timebase
-    AVStream* stream = m_formatCtx->streams[m_videoStreamIndex];
+    AVStream* stream = m_formatCtx->streams[streamIndex];
     int64_t timestamp = static_cast<int64_t>(timeSeconds * stream->time_base.den / stream->time_base.num);
 
-    av_seek_frame(m_formatCtx, m_videoStreamIndex, timestamp, AVSEEK_FLAG_BACKWARD);
+    av_seek_frame(m_formatCtx, streamIndex, timestamp, AVSEEK_FLAG_BACKWARD);
 
     // Flush the codec buffers
     if (m_codecCtx) {
         avcodec_flush_buffers(m_codecCtx);
     }
+    if (m_audioCodecCtx) {
+        avcodec_flush_buffers(m_audioCodecCtx);
+    }
+
+    // Clear packet queues
+    {
+        std::lock_guard<std::mutex> lock(m_videoPacketMutex);
+        while (!m_videoPacketQueue.empty()) {
+            AVPacket* pkt = m_videoPacketQueue.front();
+            m_videoPacketQueue.pop();
+            av_packet_free(&pkt);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_audioPacketMutex);
+        while (!m_audioPacketQueue.empty()) {
+            AVPacket* pkt = m_audioPacketQueue.front();
+            m_audioPacketQueue.pop();
+            av_packet_free(&pkt);
+        }
+    }
+
+    // Reset EOF flag so we can read packets again
+    m_hitEOF = false;
+
+    // Clear audio buffer so we start fresh
+    m_audioBufferReadPos = 0;
+    m_audioBufferWritePos = 0;
+    
+    // Reset bytes played counter based on seek position
+    // 48000 Hz * 2 channels * 2 bytes per sample = 192000 bytes per second
+    m_audioBytesPlayed = static_cast<size_t>(timeSeconds * 192000.0);
 
     m_currentTime = timeSeconds;
     m_currentFrame = static_cast<size_t>(timeSeconds * m_frameRate);

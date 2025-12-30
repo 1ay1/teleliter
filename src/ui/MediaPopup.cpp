@@ -107,6 +107,7 @@ void MediaPopup::StopAllPlayback() {
   m_isPlayingVoice = false;
   m_voiceProgress = 0.0;
   m_videoLoadPending = false;
+  m_currentVoicePath.Clear();
 
   m_isLoading = false;
   m_isDownloadingMedia = false;
@@ -192,13 +193,15 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     m_decodedWaveform = DecodeWaveform(info.waveform, 40);
     m_voiceDuration = info.duration > 0 ? info.duration : 0.0;
     m_voiceProgress = 0.0;
+    MPLOG("Voice note: duration=" << info.duration << " m_voiceDuration=" << m_voiceDuration);
     
     // Set up the popup size for voice note display
     ApplySizeAndPosition(VOICE_WIDTH, VOICE_HEIGHT);
     
     if (hasLocalFile) {
-      // Start playing immediately
-      PlayVoiceNote(info.localPath);
+      // Don't auto-play - wait for user to click play button
+      m_isPlayingVoice = false;
+      Refresh();
     } else {
       // Show loading state while downloading
       m_isLoading = true;
@@ -1142,10 +1145,18 @@ void MediaPopup::PlayVoiceNote(const wxString& path) {
   m_isLoading = false;
   m_loadingTimer.Stop();
   
+  // Stop any existing playback first
+  if (m_ffmpegPlayer) {
+    m_ffmpegPlayer->Stop();
+  }
+  
   // Use FFmpegPlayer for audio playback (cross-platform via SDL2)
   if (!m_ffmpegPlayer) {
     m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
   }
+  
+  // Track which file we're playing
+  m_currentVoicePath = path;
   
   m_ffmpegPlayer->SetLoop(false);
   m_ffmpegPlayer->SetMuted(false);  // Voice notes should be audible!
@@ -1176,8 +1187,13 @@ void MediaPopup::PlayVoiceNote(const wxString& path) {
 }
 
 void MediaPopup::ToggleVoicePlayback() {
-  if (!m_ffmpegPlayer) {
-    // Try to start playback if we have a local file
+  // Check if we need to load a different file
+  bool needsLoad = !m_ffmpegPlayer || 
+                   m_currentVoicePath.IsEmpty() ||
+                   m_currentVoicePath != m_mediaInfo.localPath;
+  
+  if (needsLoad) {
+    // Load and play the new file
     if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath)) {
       PlayVoiceNote(m_mediaInfo.localPath);
     }
@@ -1298,7 +1314,7 @@ void MediaPopup::DrawVoiceWaveform(wxDC& dc, const wxSize& size) {
     dc.DrawRoundedRectangle(barX, barY, actualBarWidth, barHeight, 1);
   }
   
-  // Draw time
+  // Draw time - always show current / total format
   int currentSecs = static_cast<int>(m_voiceProgress * m_voiceDuration);
   int totalSecs = static_cast<int>(m_voiceDuration);
   wxString timeStr = wxString::Format("%d:%02d / %d:%02d",

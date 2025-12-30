@@ -123,6 +123,7 @@ private:
     double m_voiceDuration;      // Duration in seconds
     wxTimer m_voiceProgressTimer;
     std::vector<int> m_decodedWaveform;  // Decoded waveform samples (0-31)
+    wxString m_currentVoicePath;  // Path of currently loaded voice file
 
     // Async image loading state
     wxString m_pendingImagePath;

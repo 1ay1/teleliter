@@ -49,7 +49,14 @@ public:
     int GetHeight() const { return m_height; }
     double GetFrameRate() const { return m_frameRate; }
     double GetDuration() const { return m_duration; }
-    double GetCurrentTime() const { return m_currentTime; }
+    double GetCurrentTime() const { 
+        // For audio-only files, calculate time from bytes played
+        // 48000 Hz * 2 channels * 2 bytes per sample = 192000 bytes per second
+        if (m_isAudioOnly && m_audioBytesPlayed > 0) {
+            return static_cast<double>(m_audioBytesPlayed) / 192000.0;
+        }
+        return m_currentTime; 
+    }
     
     // Playback control
     void Play();
@@ -154,6 +161,7 @@ private:
     std::vector<uint8_t> m_audioBuffer;
     std::atomic<size_t> m_audioBufferReadPos;
     std::atomic<size_t> m_audioBufferWritePos;
+    std::atomic<size_t> m_audioBytesPlayed;  // Total bytes played for time tracking
     std::mutex m_audioMutex;
     static const size_t AUDIO_BUFFER_SIZE = 192000;  // ~1 second at 48kHz stereo 16-bit
     

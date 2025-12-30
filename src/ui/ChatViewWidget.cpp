@@ -1053,6 +1053,8 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
   if (msg) {
     info.width = msg->width;
     info.height = msg->height;
+    info.duration = msg->mediaDuration;
+    info.waveform = msg->mediaWaveform;
     // Prefer message's file IDs over span's (message is updated, span is not)
     info.fileId = (msg->mediaFileId != 0) ? msg->mediaFileId : span.fileId;
     info.thumbnailFileId = (msg->mediaThumbnailFileId != 0)
