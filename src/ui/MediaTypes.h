@@ -2,6 +2,7 @@
 #define MEDIATYPES_H
 
 #include <wx/wx.h>
+#include <vector>
 
 // Media types for popup display
 enum class MediaType {
@@ -34,7 +35,11 @@ struct MediaInfo {
     int32_t thumbnailFileId;
     wxString thumbnailPath;
     
-    MediaInfo() : type(MediaType::Photo), fileId(0), isDownloading(false), width(0), height(0), thumbnailFileId(0) {}
+    // For voice/video notes - duration and waveform
+    int32_t duration;                    // Duration in seconds
+    std::vector<uint8_t> waveform;       // Waveform data (5-bit values packed)
+    
+    MediaInfo() : type(MediaType::Photo), fileId(0), isDownloading(false), width(0), height(0), thumbnailFileId(0), duration(0) {}
 };
 
 // Tracks media spans in the chat display

@@ -83,6 +83,10 @@ struct MessageInfo {
     int32_t mediaThumbnailFileId;
     wxString mediaThumbnailPath;
     
+    // For voice/video notes - duration and waveform
+    int32_t mediaDuration;          // Duration in seconds
+    std::vector<uint8_t> mediaWaveform;  // Waveform data (5-bit values packed)
+    
     int64_t replyToMessageId;
     wxString replyToText;
     
@@ -95,7 +99,7 @@ struct MessageInfo {
           hasDocument(false), hasVoice(false), hasVideoNote(false),
           hasSticker(false), hasAnimation(false), mediaFileId(0),
           mediaFileSize(0), width(0), height(0), mediaThumbnailFileId(0),
-          replyToMessageId(0), isForwarded(false) {}
+          mediaDuration(0), replyToMessageId(0), isForwarded(false) {}
 };
 
 // User info structure

@@ -126,7 +126,8 @@ void ChatViewWidget::ClearTopicText() {
 
 void ChatViewWidget::CreateNewMessageButton() {
   m_newMessageButton =
-      new wxButton(this, ID_NEW_MESSAGE_BUTTON, "v New Messages",
+      new wxButton(this, ID_NEW_MESSAGE_BUTTON, 
+                   wxString::FromUTF8("↓ New Messages"),
                    wxDefaultPosition, wxDefaultSize);
 
   // Use native button styling
@@ -187,6 +188,12 @@ void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo &info) {
         int priority = 5;
         if (info.type == MediaType::Photo || info.type == MediaType::Sticker) {
           priority = 10;
+        } else if (info.type == MediaType::Voice || info.type == MediaType::VideoNote) {
+          priority = 12;  // High priority for voice/video notes
+        } else if (info.type == MediaType::GIF) {
+          priority = 8;
+        } else if (info.type == MediaType::Video) {
+          priority = 6;
         }
 
         wxString displayName =
@@ -495,6 +502,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.caption = msg.mediaCaption;
     info.thumbnailFileId = msg.mediaThumbnailFileId;
     info.thumbnailPath = msg.mediaThumbnailPath;
+    info.duration = msg.mediaDuration;
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
@@ -532,6 +540,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.type = MediaType::Voice;
     info.fileId = msg.mediaFileId;
     info.localPath = msg.mediaLocalPath;
+    info.duration = msg.mediaDuration;
+    info.waveform = msg.mediaWaveform;
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "",
@@ -551,6 +561,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.localPath = msg.mediaLocalPath;
     info.thumbnailFileId = msg.mediaThumbnailFileId;
     info.thumbnailPath = msg.mediaThumbnailPath;
+    info.duration = msg.mediaDuration;
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
@@ -686,7 +697,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo &msg) {
   AddMessage(msg);
 
   // Trigger download for media if needed
-  if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation) {
+  if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation || 
+      msg.hasVoice || msg.hasVideoNote || msg.hasVideo) {
     MediaInfo info;
     info.fileId = msg.mediaFileId;
     info.localPath = msg.mediaLocalPath;
@@ -694,8 +706,14 @@ void ChatViewWidget::DisplayMessage(const MessageInfo &msg) {
       info.type = MediaType::Photo;
     else if (msg.hasSticker)
       info.type = MediaType::Sticker;
-    else
+    else if (msg.hasAnimation)
       info.type = MediaType::GIF;
+    else if (msg.hasVoice)
+      info.type = MediaType::Voice;
+    else if (msg.hasVideoNote)
+      info.type = MediaType::VideoNote;
+    else if (msg.hasVideo)
+      info.type = MediaType::Video;
     EnsureMediaDownloaded(info);
   }
 
@@ -760,7 +778,8 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
       }
 
       // Trigger download for media if needed
-      if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation) {
+      if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation ||
+          msg.hasVoice || msg.hasVideoNote || msg.hasVideo) {
         MediaInfo info;
         info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
@@ -768,8 +787,14 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
           info.type = MediaType::Photo;
         else if (msg.hasSticker)
           info.type = MediaType::Sticker;
-        else
+        else if (msg.hasAnimation)
           info.type = MediaType::GIF;
+        else if (msg.hasVoice)
+          info.type = MediaType::Voice;
+        else if (msg.hasVideoNote)
+          info.type = MediaType::VideoNote;
+        else if (msg.hasVideo)
+          info.type = MediaType::Video;
         EnsureMediaDownloaded(info);
       }
     }
@@ -925,9 +950,16 @@ void ChatViewWidget::ShowNewMessageIndicator() {
   if (!m_newMessageButton)
     return;
 
-  // Update button text with count
-  wxString label = wxString::Format("v %d New Message%s", m_newMessageCount,
-                                    m_newMessageCount == 1 ? "" : "s");
+  // Update button text with count and down arrow emoji
+  wxString arrow = wxString::FromUTF8("↓");
+  wxString label;
+  if (m_newMessageCount == 1) {
+    label = wxString::Format("%s 1 New Message", arrow);
+  } else if (m_newMessageCount < 100) {
+    label = wxString::Format("%s %d New Messages", arrow, m_newMessageCount);
+  } else {
+    label = wxString::Format("%s 99+ New Messages", arrow);
+  }
   m_newMessageButton->SetLabel(label);
 
   // Position button at bottom center of chat display
@@ -1656,6 +1688,12 @@ void ChatViewWidget::OpenMedia(const MediaInfo &info) {
           break;
         case MediaType::GIF:
           displayName = "GIF";
+          break;
+        case MediaType::Voice:
+          displayName = "Voice Message";
+          break;
+        case MediaType::VideoNote:
+          displayName = "Video Note";
           break;
         case MediaType::File:
           displayName = "File";

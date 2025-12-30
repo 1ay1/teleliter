@@ -160,11 +160,12 @@ if(APPLE)
         find_library(AVFORMAT_LIBRARY avformat PATHS "${FFMPEG_PREFIX}/lib" NO_DEFAULT_PATH)
         find_library(AVCODEC_LIBRARY avcodec PATHS "${FFMPEG_PREFIX}/lib" NO_DEFAULT_PATH)
         find_library(SWSCALE_LIBRARY swscale PATHS "${FFMPEG_PREFIX}/lib" NO_DEFAULT_PATH)
+        find_library(SWRESAMPLE_LIBRARY swresample PATHS "${FFMPEG_PREFIX}/lib" NO_DEFAULT_PATH)
         find_library(AVUTIL_LIBRARY avutil PATHS "${FFMPEG_PREFIX}/lib" NO_DEFAULT_PATH)
 
-        if(AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND AVUTIL_LIBRARY)
+        if(AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY AND AVUTIL_LIBRARY)
             set(FFMPEG_FOUND TRUE)
-            set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${AVUTIL_LIBRARY})
+            set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY} ${AVUTIL_LIBRARY})
             message(STATUS "Found FFmpeg libraries: ${FFMPEG_LIBRARIES}")
             add_definitions(-DHAVE_FFMPEG)
         endif()
@@ -176,7 +177,7 @@ if(APPLE)
 elseif(UNIX)
     # Linux
     if(PkgConfig_FOUND)
-        pkg_check_modules(FFMPEG libavformat libavcodec libswscale libavutil)
+        pkg_check_modules(FFMPEG libavformat libavcodec libswscale libswresample libavutil)
         if(FFMPEG_FOUND)
             message(STATUS "Found FFmpeg: ${FFMPEG_LIBRARIES}")
             add_definitions(-DHAVE_FFMPEG)
@@ -197,22 +198,69 @@ elseif(UNIX)
         find_library(SWSCALE_LIBRARY swscale
             PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
         )
+        find_library(SWRESAMPLE_LIBRARY swresample
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
         find_library(AVUTIL_LIBRARY avutil
             PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
         )
 
-        if(AVFORMAT_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND AVUTIL_LIBRARY)
+        if(AVFORMAT_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY AND AVUTIL_LIBRARY)
             set(FFMPEG_FOUND TRUE)
             set(FFMPEG_INCLUDE_DIRS ${AVFORMAT_INCLUDE_DIR})
-            set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${AVUTIL_LIBRARY})
+            set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY} ${AVUTIL_LIBRARY})
             message(STATUS "Found FFmpeg (manual): ${FFMPEG_LIBRARIES}")
             add_definitions(-DHAVE_FFMPEG)
         endif()
     endif()
 
     if(NOT FFMPEG_FOUND)
-        message(FATAL_ERROR "FFmpeg not found - FFmpeg is required for media playback. Install with: apt install libavformat-dev libavcodec-dev libswscale-dev libavutil-dev")
+        message(FATAL_ERROR "FFmpeg not found - FFmpeg is required for media playback. Install with: apt install libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libavutil-dev")
     endif()
+endif()
+
+# Find SDL2 for audio playback
+set(SDL2_FOUND FALSE)
+
+if(APPLE)
+    execute_process(
+        COMMAND brew --prefix sdl2
+        OUTPUT_VARIABLE SDL2_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(SDL2_PREFIX)
+        message(STATUS "Found SDL2 in Homebrew: ${SDL2_PREFIX}")
+        set(SDL2_INCLUDE_DIRS "${SDL2_PREFIX}/include/SDL2")
+        find_library(SDL2_LIBRARY SDL2 PATHS "${SDL2_PREFIX}/lib" NO_DEFAULT_PATH)
+        if(SDL2_LIBRARY)
+            set(SDL2_FOUND TRUE)
+            set(SDL2_LIBRARIES ${SDL2_LIBRARY})
+        endif()
+    endif()
+elseif(UNIX)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SDL2 sdl2)
+    endif()
+    if(NOT SDL2_FOUND)
+        find_path(SDL2_INCLUDE_DIRS SDL.h
+            PATHS /usr/include/SDL2 /usr/local/include/SDL2
+        )
+        find_library(SDL2_LIBRARY SDL2
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
+        )
+        if(SDL2_INCLUDE_DIRS AND SDL2_LIBRARY)
+            set(SDL2_FOUND TRUE)
+            set(SDL2_LIBRARIES ${SDL2_LIBRARY})
+        endif()
+    endif()
+endif()
+
+if(SDL2_FOUND)
+    message(STATUS "Found SDL2: ${SDL2_LIBRARIES}")
+    add_definitions(-DHAVE_SDL2)
+else()
+    message(WARNING "SDL2 not found - audio playback will be disabled. Install with: brew install sdl2 (macOS) or apt install libsdl2-dev (Linux)")
 endif()
 
 # Source files
@@ -244,6 +292,7 @@ target_include_directories(teleliter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${WEBP_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
+    ${SDL2_INCLUDE_DIRS}
 )
 
 # Link libraries - order matters for static linking
@@ -255,6 +304,7 @@ target_link_libraries(teleliter
     ZLIB::ZLIB
     ${WEBP_LIBRARIES}
     ${FFMPEG_LIBRARIES}
+    ${SDL2_LIBRARIES}
     m
 )
 

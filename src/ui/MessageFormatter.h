@@ -188,6 +188,11 @@ private:
     // For multi-line messages, adds status ticks after first line
     void WriteTextWithLineHandling(const wxString& text, MessageStatus status = MessageStatus::None,
                                     bool statusHighlight = false);
+    
+    // Helper to generate ASCII waveform from TDLib waveform data
+    // waveformData contains 5-bit values packed into bytes
+    // targetLength is the desired output length in characters
+    static wxString GenerateAsciiWaveform(const std::vector<uint8_t>& waveformData, int targetLength);
 };
 
 #endif // MESSAGEFORMATTER_H

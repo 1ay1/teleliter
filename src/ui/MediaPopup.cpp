@@ -55,9 +55,14 @@ MediaPopup::MediaPopup(wxWindow *parent)
       m_loadingTimer(this, LOADING_TIMER_ID),
       m_loadingFrame(0),
       m_isPlayingFFmpeg(false),
+      m_videoLoadPending(false),
       m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID),
       m_loopVideo(false),
       m_videoMuted(true),
+      m_isPlayingVoice(false),
+      m_voiceProgress(0.0),
+      m_voiceDuration(0.0),
+      m_voiceProgressTimer(this, VOICE_PROGRESS_TIMER_ID),
       m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID),
       m_asyncLoadPending(false),
       m_parentBottom(-1) {
@@ -70,6 +75,7 @@ MediaPopup::MediaPopup(wxWindow *parent)
   Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnFFmpegAnimTimer, this, FFMPEG_ANIM_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
+  Bind(wxEVT_TIMER, &MediaPopup::OnVoiceProgressTimer, this, VOICE_PROGRESS_TIMER_ID);
   Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
   Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
 }
@@ -79,19 +85,28 @@ MediaPopup::~MediaPopup() {
   m_loadingTimer.Stop();
   m_asyncLoadTimer.Stop();
   m_ffmpegAnimTimer.Stop();
+  m_voiceProgressTimer.Stop();
   m_ffmpegPlayer.reset();
   ClearFailedLoads();
 }
 
 void MediaPopup::StopAllPlayback() {
+  MPLOG("StopAllPlayback called, m_isPlayingFFmpeg=" << m_isPlayingFFmpeg 
+        << " m_isPlayingVoice=" << m_isPlayingVoice
+        << " m_videoLoadPending=" << m_videoLoadPending);
+  
   m_ffmpegAnimTimer.Stop();
   m_loadingTimer.Stop();
   m_asyncLoadTimer.Stop();
+  m_voiceProgressTimer.Stop();
 
   if (m_ffmpegPlayer) {
     m_ffmpegPlayer->Stop();
   }
   m_isPlayingFFmpeg = false;
+  m_isPlayingVoice = false;
+  m_voiceProgress = 0.0;
+  m_videoLoadPending = false;
 
   m_isLoading = false;
   m_isDownloadingMedia = false;
@@ -133,6 +148,15 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
 
   m_originalPosition = pos;
 
+  bool isSameFile = (m_mediaInfo.fileId != 0 && m_mediaInfo.fileId == info.fileId);
+  
+  // If already playing or loading the same file, don't interrupt playback
+  if (isSameFile && (m_isPlayingFFmpeg || m_isPlayingVoice || m_videoLoadPending)) {
+    MPLOG("ShowMedia: already playing/loading same file, not interrupting");
+    AdjustPositionToScreen(pos);
+    return;
+  }
+
   if (IsShown() && IsSameMedia(m_mediaInfo, info)) {
     bool localPathChanged =
         (m_mediaInfo.localPath != info.localPath && !info.localPath.IsEmpty() &&
@@ -147,10 +171,12 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     }
   }
 
-  bool isSameFile = (m_mediaInfo.fileId != 0 && m_mediaInfo.fileId == info.fileId);
   bool hadImage = m_hasImage;
 
-  StopAllPlayback();
+  // Only stop playback if switching to a different file
+  if (!isSameFile) {
+    StopAllPlayback();
+  }
 
   m_mediaInfo = info;
   m_hasError = false;
@@ -159,6 +185,29 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   m_isDownloadingMedia = false;
 
   bool hasLocalFile = !info.localPath.IsEmpty() && wxFileExists(info.localPath);
+
+  // Handle voice notes specially - show waveform and play audio
+  if (info.type == MediaType::Voice) {
+    // Decode waveform for visualization
+    m_decodedWaveform = DecodeWaveform(info.waveform, 40);
+    m_voiceDuration = info.duration > 0 ? info.duration : 0.0;
+    m_voiceProgress = 0.0;
+    
+    // Set up the popup size for voice note display
+    ApplySizeAndPosition(VOICE_WIDTH, VOICE_HEIGHT);
+    
+    if (hasLocalFile) {
+      // Start playing immediately
+      PlayVoiceNote(info.localPath);
+    } else {
+      // Show loading state while downloading
+      m_isLoading = true;
+      m_loadingFrame = 0;
+      m_loadingTimer.Start(150);
+      Refresh();
+    }
+    return;
+  }
 
   // Handle video/animation formats with FFmpeg
   if (hasLocalFile && IsVideoFormat(info.localPath)) {
@@ -221,11 +270,18 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
     return;
   }
 
+  // Don't restart if already playing or loading the same file
+  if ((m_isPlayingFFmpeg || m_videoLoadPending) && m_videoPath == path) {
+    MPLOG("PlayVideo: already playing/loading same file, not restarting");
+    return;
+  }
+
   StopAllPlayback();
 
   m_videoPath = path;
   m_loopVideo = loop;
   m_videoMuted = muted;
+  m_videoLoadPending = true;  // Mark that we're loading a video
 
   // Show loading state while initializing
   m_isLoading = true;
@@ -245,6 +301,7 @@ void MediaPopup::PlayMediaWithFFmpeg(const wxString &path, bool loop, bool muted
 
   m_isLoading = false;
   m_loadingTimer.Stop();
+  m_videoLoadPending = false;  // No longer pending, we're actually loading now
 
   if (HasFailedRecently(path)) {
     FallbackToThumbnail();
@@ -537,6 +594,13 @@ wxString MediaPopup::GetMediaIcon() const {
 
 void MediaPopup::OnLeftDown(wxMouseEvent &event) {
   MPLOG("MediaPopup clicked");
+  
+  // For voice notes, toggle play/pause on click
+  if (m_mediaInfo.type == MediaType::Voice) {
+    ToggleVoicePlayback();
+    return;
+  }
+  
   if (m_clickCallback) {
     m_clickCallback(m_mediaInfo);
   }
@@ -695,6 +759,12 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
   dc.SetBrush(wxBrush(m_bgColor));
   dc.SetPen(wxPen(m_borderColor, BORDER_WIDTH));
   dc.DrawRectangle(0, 0, size.GetWidth(), size.GetHeight());
+
+  // Special rendering for voice notes
+  if (m_mediaInfo.type == MediaType::Voice) {
+    DrawVoiceWaveform(dc, size);
+    return;
+  }
 
   int contentX = PADDING + BORDER_WIDTH;
   int contentY = PADDING + BORDER_WIDTH;
@@ -1002,4 +1072,256 @@ void MediaPopup::MarkLoadFailed(const wxString &path) {
 
 void MediaPopup::ClearFailedLoads() {
   m_failedLoads.clear();
+}
+
+// Decode TDLib waveform data (5-bit values packed into bytes)
+std::vector<int> MediaPopup::DecodeWaveform(const std::vector<uint8_t>& waveformData, int targetLength) {
+  std::vector<int> samples;
+  
+  if (waveformData.empty()) {
+    // Return a flat waveform if no data
+    return std::vector<int>(targetLength, 16);
+  }
+  
+  // Unpack 5-bit values from bytes
+  int bitPos = 0;
+  size_t byteIdx = 0;
+  
+  while (byteIdx < waveformData.size()) {
+    int value = 0;
+    int bitsRemaining = 5;
+    int shift = 0;
+    
+    while (bitsRemaining > 0 && byteIdx < waveformData.size()) {
+      int bitsInCurrentByte = 8 - bitPos;
+      int bitsToTake = std::min(bitsRemaining, bitsInCurrentByte);
+      
+      int mask = (1 << bitsToTake) - 1;
+      int extracted = (waveformData[byteIdx] >> bitPos) & mask;
+      value |= (extracted << shift);
+      
+      shift += bitsToTake;
+      bitsRemaining -= bitsToTake;
+      bitPos += bitsToTake;
+      
+      if (bitPos >= 8) {
+        bitPos = 0;
+        byteIdx++;
+      }
+    }
+    
+    samples.push_back(value);
+  }
+  
+  if (samples.empty()) {
+    return std::vector<int>(targetLength, 16);
+  }
+  
+  // Resample to target length
+  std::vector<int> resampled(targetLength);
+  for (int i = 0; i < targetLength; i++) {
+    size_t srcIdx = (i * samples.size()) / targetLength;
+    if (srcIdx >= samples.size()) srcIdx = samples.size() - 1;
+    resampled[i] = samples[srcIdx];
+  }
+  
+  return resampled;
+}
+
+void MediaPopup::PlayVoiceNote(const wxString& path) {
+  MPLOG("PlayVoiceNote: " << path.ToStdString());
+  
+  if (HasFailedRecently(path)) {
+    MPLOG("PlayVoiceNote: skipping recently failed file");
+    m_hasError = true;
+    m_errorMessage = "Failed to load";
+    Refresh();
+    return;
+  }
+  
+  m_isLoading = false;
+  m_loadingTimer.Stop();
+  
+  // Use FFmpegPlayer for audio playback (cross-platform via SDL2)
+  if (!m_ffmpegPlayer) {
+    m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
+  }
+  
+  m_ffmpegPlayer->SetLoop(false);
+  m_ffmpegPlayer->SetMuted(false);  // Voice notes should be audible!
+  
+  if (!m_ffmpegPlayer->LoadFile(path)) {
+    MPLOG("PlayVoiceNote: failed to load: " << path.ToStdString());
+    MarkLoadFailed(path);
+    m_hasError = true;
+    m_errorMessage = "Failed to load audio";
+    Refresh();
+    return;
+  }
+  
+  // Get duration from FFmpeg if we don't have it
+  double duration = m_ffmpegPlayer->GetDuration();
+  if (duration > 0) {
+    m_voiceDuration = duration;
+  }
+  
+  m_ffmpegPlayer->Play();
+  m_isPlayingVoice = true;
+  m_voiceProgress = 0.0;
+  
+  // Start progress timer (update ~20 times per second for smooth progress)
+  m_voiceProgressTimer.Start(50);
+  
+  Refresh();
+}
+
+void MediaPopup::ToggleVoicePlayback() {
+  if (!m_ffmpegPlayer) {
+    // Try to start playback if we have a local file
+    if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath)) {
+      PlayVoiceNote(m_mediaInfo.localPath);
+    }
+    return;
+  }
+  
+  if (m_isPlayingVoice) {
+    // Pause playback
+    m_ffmpegPlayer->Pause();
+    m_voiceProgressTimer.Stop();
+    m_isPlayingVoice = false;
+  } else {
+    // Resume or restart
+    if (m_voiceProgress >= 0.99) {
+      // Restart from beginning
+      m_voiceProgress = 0.0;
+      m_ffmpegPlayer->Seek(0.0);
+    }
+    m_ffmpegPlayer->Play();
+    m_voiceProgressTimer.Start(50);
+    m_isPlayingVoice = true;
+  }
+  
+  Refresh();
+}
+
+void MediaPopup::OnVoiceProgressTimer(wxTimerEvent& event) {
+  if (!m_ffmpegPlayer || !m_isPlayingVoice) {
+    m_voiceProgressTimer.Stop();
+    return;
+  }
+  
+  // Keep audio buffer filled (for audio-only files)
+  if (m_ffmpegPlayer->IsAudioOnly()) {
+    m_ffmpegPlayer->AdvanceFrame();
+  }
+  
+  // Get current position from FFmpeg
+  double currentTime = m_ffmpegPlayer->GetCurrentTime();
+  
+  if (m_voiceDuration > 0) {
+    m_voiceProgress = currentTime / m_voiceDuration;
+    if (m_voiceProgress > 1.0) m_voiceProgress = 1.0;
+  }
+  
+  // Check if playback finished
+  if (!m_ffmpegPlayer->IsPlaying() || m_voiceProgress >= 0.99) {
+    m_isPlayingVoice = false;
+    m_voiceProgress = 1.0;
+    m_voiceProgressTimer.Stop();
+  }
+  
+  Refresh();
+}
+
+void MediaPopup::DrawVoiceWaveform(wxDC& dc, const wxSize& size) {
+  int contentWidth = size.GetWidth() - PADDING * 2 - BORDER_WIDTH * 2;
+  int contentHeight = size.GetHeight() - PADDING * 2 - BORDER_WIDTH * 2;
+  
+  // Layout:
+  // [Play/Pause Icon] [Waveform Bars] [Time]
+  int iconSize = 24;
+  int timeWidth = 50;
+  int waveformX = PADDING + BORDER_WIDTH + iconSize + 8;
+  int waveformWidth = contentWidth - iconSize - timeWidth - 16;
+  int waveformHeight = contentHeight - 20;
+  int waveformY = PADDING + BORDER_WIDTH + 10;
+  
+  // Draw play/pause icon
+  wxColour accentColor(0x00, 0x88, 0xCC);  // Nice blue
+  dc.SetBrush(wxBrush(accentColor));
+  dc.SetPen(*wxTRANSPARENT_PEN);
+  
+  int iconX = PADDING + BORDER_WIDTH + 4;
+  int iconY = (size.GetHeight() - iconSize) / 2;
+  
+  if (m_isPlayingVoice) {
+    // Draw pause icon (two vertical bars)
+    int barWidth = 6;
+    int gap = 4;
+    dc.DrawRectangle(iconX, iconY, barWidth, iconSize);
+    dc.DrawRectangle(iconX + barWidth + gap, iconY, barWidth, iconSize);
+  } else {
+    // Draw play icon (triangle)
+    wxPoint triangle[3];
+    triangle[0] = wxPoint(iconX, iconY);
+    triangle[1] = wxPoint(iconX, iconY + iconSize);
+    triangle[2] = wxPoint(iconX + iconSize, iconY + iconSize / 2);
+    dc.DrawPolygon(3, triangle);
+  }
+  
+  // Draw waveform bars
+  int numBars = m_decodedWaveform.empty() ? 40 : static_cast<int>(m_decodedWaveform.size());
+  int barWidth = std::max(2, (waveformWidth - numBars) / numBars);
+  int gap = 1;
+  int actualBarWidth = barWidth - gap;
+  if (actualBarWidth < 2) actualBarWidth = 2;
+  
+  // Calculate progress position
+  int progressBar = static_cast<int>(m_voiceProgress * numBars);
+  
+  for (int i = 0; i < numBars && i * (actualBarWidth + gap) < waveformWidth; i++) {
+    int barX = waveformX + i * (actualBarWidth + gap);
+    
+    // Get bar height from waveform data (0-31 range)
+    int value = m_decodedWaveform.empty() ? 16 : m_decodedWaveform[i % m_decodedWaveform.size()];
+    int barHeight = std::max(4, (value * waveformHeight) / 31);
+    int barY = waveformY + (waveformHeight - barHeight) / 2;
+    
+    // Color based on progress
+    if (i < progressBar) {
+      dc.SetBrush(wxBrush(accentColor));  // Played portion
+    } else {
+      dc.SetBrush(wxBrush(m_labelColor));  // Unplayed portion
+    }
+    
+    // Draw rounded bar
+    dc.DrawRoundedRectangle(barX, barY, actualBarWidth, barHeight, 1);
+  }
+  
+  // Draw time
+  int currentSecs = static_cast<int>(m_voiceProgress * m_voiceDuration);
+  int totalSecs = static_cast<int>(m_voiceDuration);
+  wxString timeStr = wxString::Format("%d:%02d / %d:%02d",
+                                       currentSecs / 60, currentSecs % 60,
+                                       totalSecs / 60, totalSecs % 60);
+  
+  dc.SetTextForeground(m_textColor);
+  wxFont font = dc.GetFont();
+  font.SetPointSize(9);
+  dc.SetFont(font);
+  
+  wxSize textSize = dc.GetTextExtent(timeStr);
+  int timeX = size.GetWidth() - PADDING - BORDER_WIDTH - textSize.GetWidth() - 4;
+  int timeY = (size.GetHeight() - textSize.GetHeight()) / 2;
+  dc.DrawText(timeStr, timeX, timeY);
+  
+  // Draw label at bottom
+  wxString label = "Voice Message";
+  if (m_isLoading) {
+    label = "Loading...";
+  }
+  dc.SetTextForeground(m_labelColor);
+  textSize = dc.GetTextExtent(label);
+  dc.DrawText(label, (size.GetWidth() - textSize.GetWidth()) / 2,
+              size.GetHeight() - PADDING - textSize.GetHeight());
 }

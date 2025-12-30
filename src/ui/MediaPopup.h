@@ -17,6 +17,7 @@ class FFmpegPlayer;
 static const int LOADING_TIMER_ID = 10001;
 static const int FFMPEG_ANIM_TIMER_ID = 10006;
 static const int ASYNC_LOAD_TIMER_ID = 10005;
+static const int VOICE_PROGRESS_TIMER_ID = 10007;
 
 // Maximum number of failed load attempts before giving up on a file
 static const int MAX_LOAD_FAILURES = 3;
@@ -41,6 +42,11 @@ public:
 
     // Stop all playback - call before switching media or hiding
     void StopAllPlayback();
+    
+    // Voice note specific controls
+    void PlayVoiceNote(const wxString& path);
+    void ToggleVoicePlayback();
+    bool IsPlayingVoice() const { return m_isPlayingVoice; }
 
     const MediaInfo& GetMediaInfo() const { return m_mediaInfo; }
 
@@ -67,6 +73,9 @@ private:
     void FallbackToThumbnail();
     void PlayMediaWithFFmpeg(const wxString& path, bool loop, bool muted);
     void DrawMediaLabel(wxDC& dc, const wxSize& size);
+    void DrawVoiceWaveform(wxDC& dc, const wxSize& size);
+    void OnVoiceProgressTimer(wxTimerEvent& event);
+    std::vector<int> DecodeWaveform(const std::vector<uint8_t>& waveformData, int targetLength);
     bool IsSameMedia(const MediaInfo& a, const MediaInfo& b) const;
 
     // Async image loading to prevent UI blocking
@@ -99,6 +108,7 @@ private:
     // FFmpeg player for all video/animation
     std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
     bool m_isPlayingFFmpeg;
+    bool m_videoLoadPending;  // True while waiting for CallAfter to start playback
     wxTimer m_ffmpegAnimTimer;
     wxString m_videoPath;
     bool m_loopVideo;
@@ -106,6 +116,13 @@ private:
 
     // Click callback
     std::function<void(const MediaInfo&)> m_clickCallback;
+    
+    // Voice note playback state
+    bool m_isPlayingVoice;
+    double m_voiceProgress;      // 0.0 to 1.0
+    double m_voiceDuration;      // Duration in seconds
+    wxTimer m_voiceProgressTimer;
+    std::vector<int> m_decodedWaveform;  // Decoded waveform samples (0-31)
 
     // Async image loading state
     wxString m_pendingImagePath;
@@ -128,6 +145,10 @@ private:
     // Size constraints for photos/videos (compact preview)
     static constexpr int PHOTO_MAX_WIDTH = 300;
     static constexpr int PHOTO_MAX_HEIGHT = 240;
+    
+    // Size constraints for voice notes
+    static constexpr int VOICE_WIDTH = 280;
+    static constexpr int VOICE_HEIGHT = 80;
 
     static constexpr int MIN_WIDTH = 100;
     static constexpr int MIN_HEIGHT = 60;

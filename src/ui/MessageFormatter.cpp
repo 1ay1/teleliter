@@ -55,6 +55,78 @@ wxString MessageFormatter::GetMediaEmoji(MediaType type)
     }
 }
 
+wxString MessageFormatter::GenerateAsciiWaveform(const std::vector<uint8_t>& waveformData, int targetLength)
+{
+    if (waveformData.empty() || targetLength <= 0) {
+        return wxString();
+    }
+    
+    // TDLib waveform: 5-bit values (0-31) packed into bytes
+    // Each byte contains bits for multiple samples
+    // We need to unpack them first
+    std::vector<int> samples;
+    
+    int bitPos = 0;
+    size_t byteIdx = 0;
+    
+    while (byteIdx < waveformData.size()) {
+        // Extract 5-bit value starting at bitPos
+        int value = 0;
+        int bitsRemaining = 5;
+        int shift = 0;
+        
+        while (bitsRemaining > 0 && byteIdx < waveformData.size()) {
+            int bitsInCurrentByte = 8 - bitPos;
+            int bitsToTake = std::min(bitsRemaining, bitsInCurrentByte);
+            
+            int mask = (1 << bitsToTake) - 1;
+            int extracted = (waveformData[byteIdx] >> bitPos) & mask;
+            value |= (extracted << shift);
+            
+            shift += bitsToTake;
+            bitsRemaining -= bitsToTake;
+            bitPos += bitsToTake;
+            
+            if (bitPos >= 8) {
+                bitPos = 0;
+                byteIdx++;
+            }
+        }
+        
+        samples.push_back(value);
+    }
+    
+    if (samples.empty()) {
+        return wxString();
+    }
+    
+    // Resample to target length
+    std::vector<int> resampled(targetLength);
+    for (int i = 0; i < targetLength; i++) {
+        // Map target index to source index
+        size_t srcIdx = (i * samples.size()) / targetLength;
+        if (srcIdx >= samples.size()) srcIdx = samples.size() - 1;
+        resampled[i] = samples[srcIdx];
+    }
+    
+    // Unicode block characters for waveform visualization
+    // These represent different heights: ▁▂▃▄▅▆▇█
+    static const wchar_t* blocks[] = {
+        L"▁", L"▂", L"▃", L"▄", L"▅", L"▆", L"▇", L"█"
+    };
+    
+    wxString result;
+    for (int val : resampled) {
+        // Map 0-31 to 0-7 (8 levels)
+        int level = (val * 7) / 31;
+        if (level < 0) level = 0;
+        if (level > 7) level = 7;
+        result += wxString(blocks[level]);
+    }
+    
+    return result;
+}
+
 void MessageFormatter::CalculateUsernameWidth(const std::vector<wxString>& usernames)
 {
     int maxLen = MIN_USERNAME_WIDTH;
@@ -626,7 +698,13 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
             mediaLabel = "[Photo]";
             break;
         case MediaType::Video:
-            mediaLabel = "[Video]";
+            if (media.duration > 0) {
+                int mins = media.duration / 60;
+                int secs = media.duration % 60;
+                mediaLabel = wxString::Format("[Video %d:%02d]", mins, secs);
+            } else {
+                mediaLabel = "[Video]";
+            }
             break;
         case MediaType::Sticker:
             mediaLabel = "[Sticker]";
@@ -635,10 +713,30 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
             mediaLabel = "[GIF]";
             break;
         case MediaType::Voice:
-            mediaLabel = "[Voice]";
+            {
+                // Format duration as M:SS
+                int mins = media.duration / 60;
+                int secs = media.duration % 60;
+                wxString durationStr = wxString::Format("%d:%02d", mins, secs);
+                
+                // Generate ASCII waveform from waveform data
+                wxString waveformStr = GenerateAsciiWaveform(media.waveform, 20);
+                
+                if (!waveformStr.IsEmpty()) {
+                    mediaLabel = wxString::Format("[Voice %s] %s", durationStr, waveformStr);
+                } else {
+                    mediaLabel = wxString::Format("[Voice %s]", durationStr);
+                }
+            }
             break;
         case MediaType::VideoNote:
-            mediaLabel = "[Video Message]";
+            if (media.duration > 0) {
+                int mins = media.duration / 60;
+                int secs = media.duration % 60;
+                mediaLabel = wxString::Format("[Video Message %d:%02d]", mins, secs);
+            } else {
+                mediaLabel = "[Video Message]";
+            }
             break;
         case MediaType::File:
             mediaLabel = "[File: " + media.fileName + "]";

@@ -2091,6 +2091,9 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     info.mediaCaption = wxString::FromUTF8(c.caption_->text_);
                 }
                 if (c.video_) {
+                    // Extract duration
+                    info.mediaDuration = c.video_->duration_;
+                    
                     if (c.video_->video_) {
                         info.mediaFileId = c.video_->video_->id_;
                         info.mediaFileName = wxString::FromUTF8(c.video_->file_name_);
@@ -2130,13 +2133,29 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 if (c.caption_) {
                     info.mediaCaption = wxString::FromUTF8(c.caption_->text_);
                 }
-                if (c.voice_note_ && c.voice_note_->voice_) {
-                    info.mediaFileId = c.voice_note_->voice_->id_;
-                    info.mediaFileSize = c.voice_note_->voice_->size_;
+                if (c.voice_note_) {
+                    // Extract duration
+                    info.mediaDuration = c.voice_note_->duration_;
+                    
+                    // Extract waveform (5-bit values packed into bytes)
+                    if (!c.voice_note_->waveform_.empty()) {
+                        info.mediaWaveform.assign(
+                            c.voice_note_->waveform_.begin(),
+                            c.voice_note_->waveform_.end()
+                        );
+                    }
+                    
+                    if (c.voice_note_->voice_) {
+                        info.mediaFileId = c.voice_note_->voice_->id_;
+                        info.mediaFileSize = c.voice_note_->voice_->size_;
+                    }
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVideoNote>) {
                 info.hasVideoNote = true;
                 if (c.video_note_) {
+                    // Extract duration
+                    info.mediaDuration = c.video_note_->duration_;
+                    
                     if (c.video_note_->video_) {
                         info.mediaFileId = c.video_note_->video_->id_;
                         info.mediaFileSize = c.video_note_->video_->size_;

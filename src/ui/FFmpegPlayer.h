@@ -7,6 +7,10 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include <queue>
 
 // Forward declarations for FFmpeg types
 extern "C" {
@@ -15,6 +19,7 @@ struct AVCodecContext;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
+struct SwrContext;
 }
 
 // Callback for frame updates
@@ -26,23 +31,34 @@ public:
     FFmpegPlayer();
     ~FFmpegPlayer();
     
-    // Load a video file (supports MP4, WebM, AVI, MKV, MOV, etc.)
+    // Load a media file (supports video: MP4, WebM, AVI, MKV, MOV, etc.
+    // and audio: OGG, MP3, WAV, etc.)
     bool LoadFile(const wxString& path);
     
-    // Check if video is loaded
+    // Check if media is loaded
     bool IsLoaded() const { return m_isLoaded; }
+    
+    // Check if this is audio-only (no video stream)
+    bool IsAudioOnly() const { return m_isAudioOnly; }
+    
+    // Check if audio is available
+    bool HasAudio() const { return m_hasAudio; }
     
     // Get video info
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
     double GetFrameRate() const { return m_frameRate; }
     double GetDuration() const { return m_duration; }
+    double GetCurrentTime() const { return m_currentTime; }
     
     // Playback control
     void Play();
     void Stop();
     void Pause();
     bool IsPlaying() const { return m_isPlaying; }
+    
+    // Seeking
+    void Seek(double timeSeconds);
     
     // Advance to next frame (for external timer control)
     // Returns true if animation should continue, false if ended
@@ -74,10 +90,19 @@ public:
     int GetRenderWidth() const { return m_renderWidth > 0 ? m_renderWidth : m_width; }
     int GetRenderHeight() const { return m_renderHeight > 0 ? m_renderHeight : m_height; }
     
+    // Audio callback for SDL2 (static because SDL needs C callback)
+    static void AudioCallback(void* userdata, uint8_t* stream, int len);
+    
 private:
     bool InitDecoder();
+    bool InitAudioDecoder();
+    bool InitSDLAudio();
     void CleanupDecoder();
+    void CleanupAudio();
     bool DecodeNextFrame();
+    bool DecodeAudioFrame();
+    void FillAudioBuffer();
+    void ReadAndRoutePackets();  // Unified demuxer that routes packets to correct queue
     wxBitmap ConvertFrameToBitmap();
     void SeekToStart();
     
@@ -98,13 +123,17 @@ private:
     bool m_isLoaded;
     bool m_isPlaying;
     bool m_loop;
+    bool m_hitEOF;  // Track when we've read all packets from the file
     size_t m_currentFrame;
+    double m_currentTime;  // Current playback position in seconds
     
     // Audio state
     double m_volume;
     bool m_muted;
+    bool m_isAudioOnly;
+    bool m_hasAudio;
     
-    // FFmpeg contexts
+    // FFmpeg contexts (video)
     AVFormatContext* m_formatCtx;
     AVCodecContext* m_codecCtx;
     AVFrame* m_frame;
@@ -112,8 +141,32 @@ private:
     AVPacket* m_packet;
     SwsContext* m_swsCtx;
     
-    // Stream index
+    // FFmpeg contexts (audio)
+    AVCodecContext* m_audioCodecCtx;
+    AVFrame* m_audioFrame;
+    SwrContext* m_swrCtx;
+    
+    // Stream indices
     int m_videoStreamIndex;
+    int m_audioStreamIndex;
+    
+    // Audio buffer for SDL
+    std::vector<uint8_t> m_audioBuffer;
+    std::atomic<size_t> m_audioBufferReadPos;
+    std::atomic<size_t> m_audioBufferWritePos;
+    std::mutex m_audioMutex;
+    static const size_t AUDIO_BUFFER_SIZE = 192000;  // ~1 second at 48kHz stereo 16-bit
+    
+    // Packet queues to avoid losing packets when demuxing
+    std::queue<AVPacket*> m_videoPacketQueue;
+    std::queue<AVPacket*> m_audioPacketQueue;
+    std::mutex m_videoPacketMutex;
+    std::mutex m_audioPacketMutex;
+    static const size_t MAX_PACKET_QUEUE_SIZE = 64;
+    
+    // SDL audio state
+    bool m_sdlAudioInitialized;
+    uint32_t m_sdlAudioDeviceId;
     
     // RGB buffer for conversion
     uint8_t* m_rgbBuffer;
