@@ -27,25 +27,37 @@ public:
     // Message formatting methods (HexChat-style)
     // These delegate to ChatArea but add link detection and media span tracking
     void AppendMessage(const wxString& timestamp, const wxString& sender,
-                       const wxString& message);
+                       const wxString& message, MessageStatus status = MessageStatus::None,
+                       bool statusHighlight = false);
     void AppendActionMessage(const wxString& timestamp, const wxString& sender,
-                             const wxString& action);
+                             const wxString& action, MessageStatus status = MessageStatus::None,
+                             bool statusHighlight = false);
     void AppendServiceMessage(const wxString& timestamp, const wxString& message);
     void AppendNoticeMessage(const wxString& timestamp, const wxString& source,
                              const wxString& message);
     void AppendUserJoinedMessage(const wxString& timestamp, const wxString& user);
     void AppendUserLeftMessage(const wxString& timestamp, const wxString& user);
     void AppendMediaMessage(const wxString& timestamp, const wxString& sender,
-                            const MediaInfo& media, const wxString& caption = "");
+                            const MediaInfo& media, const wxString& caption = "",
+                            MessageStatus status = MessageStatus::None,
+                            bool statusHighlight = false);
     void AppendReplyMessage(const wxString& timestamp, const wxString& sender,
-                            const wxString& replyTo, const wxString& message);
+                            const wxString& replyTo, const wxString& message,
+                            MessageStatus status = MessageStatus::None,
+                            bool statusHighlight = false);
     void AppendForwardMessage(const wxString& timestamp, const wxString& sender,
-                              const wxString& forwardFrom, const wxString& message);
+                              const wxString& forwardFrom, const wxString& message,
+                              MessageStatus status = MessageStatus::None,
+                              bool statusHighlight = false);
     void AppendEditedMessage(const wxString& timestamp, const wxString& sender,
                              const wxString& message,
-                             long* editSpanStart = nullptr, long* editSpanEnd = nullptr);
+                             long* editSpanStart = nullptr, long* editSpanEnd = nullptr,
+                             MessageStatus status = MessageStatus::None,
+                             bool statusHighlight = false);
     void AppendHighlightMessage(const wxString& timestamp, const wxString& sender,
-                                const wxString& message);
+                                const wxString& message,
+                                MessageStatus status = MessageStatus::None,
+                                bool statusHighlight = false);
     
     // HexChat-style unread marker line
     void AppendUnreadMarker();

@@ -5,6 +5,14 @@
 #include <wx/richtext/richtextctrl.h>
 #include <wx/settings.h>
 
+// Message delivery/read status for outgoing messages
+enum class MessageStatus {
+    None,       // Not an outgoing message (or no status to show)
+    Sending,    // Message is being sent (...)
+    Sent,       // Message sent to server (✓)
+    Read        // Message read by recipient (✓✓)
+};
+
 // Reusable chat display area with consistent HexChat-style formatting
 // Used by WelcomeChat, ChatViewWidget, and any other chat-like views
 // This class provides the exact same formatting as WelcomeChat
@@ -58,9 +66,13 @@ public:
 
     // ===== High-level message formatting (HexChat style) =====
     
-    // Write timestamp prefix: "[HH:MM] "
+    // Write timestamp prefix: "[HH:MM] " with optional status marker
     void WriteTimestamp();
     void WriteTimestamp(const wxString& timestamp);
+    void WriteTimestamp(const wxString& timestamp, MessageStatus status, bool highlight = false);
+    
+    // Write just the status marker (✓, ✓✓, or ...)
+    void WriteStatusMarker(MessageStatus status, bool highlight = false);
 
     // Info message: [HH:MM] * message (blue)
     void AppendInfo(const wxString& message);
@@ -108,6 +120,11 @@ public:
     wxColour GetActionColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
     wxColour GetLinkColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT); }
     wxColour GetSelfColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT); }
+    
+    // Status marker colors
+    wxColour GetSentColor() const { return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT); }
+    const wxColour& GetReadColor() const { return m_readColor; }
+    const wxColour& GetReadHighlightColor() const { return m_readHighlightColor; }
 
     // User colors for sender name coloring
     void SetUserColors(const wxColour colors[16]);
@@ -136,6 +153,8 @@ protected:
     // Semantic colors that have no system equivalent
     wxColour m_errorColor;
     wxColour m_successColor;
+    wxColour m_readColor;           // Green for read status (✓✓)
+    wxColour m_readHighlightColor;  // Brighter green for recently read
 
     // User colors (16 colors for sender names)
     wxColour m_userColors[16];

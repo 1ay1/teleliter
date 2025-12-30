@@ -25,6 +25,7 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_downloadLabel(nullptr), m_downloadGauge(nullptr),
       m_downloadHideTimer(this), m_refreshTimer(this), m_refreshPending(false),
       m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
+      m_highlightTimer(this, HIGHLIGHT_TIMER_ID),
       m_isReloading(false), m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1) {
   // Bind timer events
@@ -33,6 +34,8 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_downloadHideTimer.GetId());
   Bind(wxEVT_TIMER, &ChatViewWidget::OnRefreshTimer, this,
        m_refreshTimer.GetId());
+  Bind(wxEVT_TIMER, &ChatViewWidget::OnHighlightTimer, this,
+       HIGHLIGHT_TIMER_ID);
 
   // Bind size event for repositioning the new message button
   Bind(wxEVT_SIZE, &ChatViewWidget::OnSize, this);
@@ -243,6 +246,30 @@ void ChatViewWidget::ScheduleRefresh() {
   m_refreshTimer.StartOnce(REFRESH_DEBOUNCE_MS);
 }
 
+void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
+  // Remove expired highlights (older than HIGHLIGHT_DURATION_SECONDS)
+  int64_t now = wxGetUTCTime();
+  bool hasActiveHighlights = false;
+  
+  auto it = m_recentlyReadMessages.begin();
+  while (it != m_recentlyReadMessages.end()) {
+    if (now - it->second >= HIGHLIGHT_DURATION_SECONDS) {
+      it = m_recentlyReadMessages.erase(it);
+    } else {
+      hasActiveHighlights = true;
+      ++it;
+    }
+  }
+  
+  // If we removed any highlights, refresh to show normal colors
+  if (!hasActiveHighlights) {
+    m_highlightTimer.Stop();
+  }
+  
+  // Always refresh to update the highlight state
+  ScheduleRefresh();
+}
+
 void ChatViewWidget::OnRefreshTimer(wxTimerEvent &event) {
   m_refreshPending = false;
   RefreshDisplay();
@@ -353,22 +380,29 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
   wxString timestamp = FormatTimestamp(msg.date);
 
-  // Read receipts for outgoing messages: [R] = Read, [S] = Sent
+  // Determine message status for outgoing messages
+  MessageStatus status = MessageStatus::None;
+  bool statusHighlight = false;
+  
   if (msg.isOutgoing) {
     if (msg.id == 0) {
-      timestamp += "...";
+      status = MessageStatus::Sending;
     } else if (m_lastReadOutboxId > 0 && msg.id <= m_lastReadOutboxId) {
-      timestamp += "[R]";
+      status = MessageStatus::Read;
+      // Check if this message was recently read (for highlight animation)
+      auto it = m_recentlyReadMessages.find(msg.id);
+      if (it != m_recentlyReadMessages.end()) {
+        int64_t now = wxGetUTCTime();
+        if (now - it->second < 3) {  // Highlight for 3 seconds
+          statusHighlight = true;
+        }
+      }
     } else {
-      timestamp += "[S]";
+      status = MessageStatus::Sent;
     }
   }
 
-  bool hasReadMarker = false;
-  if (msg.isOutgoing && m_lastReadOutboxId > 0 &&
-      msg.id <= m_lastReadOutboxId && msg.id != 0) {
-    hasReadMarker = true;
-  }
+  bool hasReadMarker = (status == MessageStatus::Read);
 
   wxString sender = msg.senderName.IsEmpty() ? "Unknown" : msg.senderName;
 
@@ -376,7 +410,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   if (msg.isForwarded && !msg.forwardedFrom.IsEmpty()) {
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendForwardMessage(timestamp, sender,
-                                             msg.forwardedFrom, msg.text);
+                                             msg.forwardedFrom, msg.text,
+                                             status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -389,7 +424,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   if (msg.replyToMessageId != 0 && !msg.replyToText.IsEmpty()) {
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendReplyMessage(timestamp, sender, msg.replyToText,
-                                           msg.text);
+                                           msg.text, status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -416,7 +451,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption);
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -437,7 +472,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption);
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -457,7 +492,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption);
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -473,7 +508,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.localPath = msg.mediaLocalPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
+    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "",
+                                           status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -491,7 +527,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.thumbnailPath = msg.mediaThumbnailPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
+    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -510,7 +547,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.thumbnailPath = msg.mediaThumbnailPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "");
+    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -530,7 +568,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption);
+                                           msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -543,7 +581,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   if (msg.text.StartsWith("/me ")) {
     wxString action = msg.text.Mid(4);
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendActionMessage(timestamp, sender, action);
+    m_messageFormatter->AppendActionMessage(timestamp, sender, action,
+                                            status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -557,7 +596,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   if (msg.isEdited) {
     long startPos = m_chatArea->GetLastPosition();
     m_messageFormatter->AppendEditedMessage(timestamp, sender, msg.text,
-                                            nullptr, nullptr);
+                                            nullptr, nullptr, status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -583,10 +622,12 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   long startPos = m_chatArea->GetLastPosition();
   if (isMentioned) {
     // Highlighted message - someone mentioned you
-    m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text);
+    m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text,
+                                               status, statusHighlight);
   } else {
     // Full message with nick and timestamp
-    m_messageFormatter->AppendMessage(timestamp, sender, msg.text);
+    m_messageFormatter->AppendMessage(timestamp, sender, msg.text,
+                                      status, statusHighlight);
   }
   if (hasReadMarker)
     RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
@@ -790,8 +831,14 @@ void ChatViewWidget::ClearMessages() {
   // Clear per-message read times and read status (switching chats)
   m_messageReadTimes.clear();
   m_readMarkerSpans.clear();
+  m_recentlyReadMessages.clear();
   m_lastReadOutboxId = 0;
   m_lastReadOutboxTime = 0;
+  
+  // Stop highlight timer if running
+  if (m_highlightTimer.IsRunning()) {
+    m_highlightTimer.Stop();
+  }
 
   // Clear display
   if (m_chatArea) {
@@ -1711,20 +1758,19 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
 
 void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
                                       int64_t messageId) {
-  // Calculate the exact position of [R] in the timestamp
+  // Calculate the exact position of ✓✓ in the timestamp
   // Timestamp format from FormatTimestamp: "HH:MM:SS" (8 chars)
-  // With [R] appended: "HH:MM:SS[R]" (11 chars)
-  // WriteTimestamp outputs "[" + timestamp + "] " 
-  // So output is "[HH:MM:SS[R]] " (14 chars)
+  // WriteTimestamp outputs "[" + timestamp + "]" + status + " "
+  // So output is "[HH:MM:SS]✓✓ " 
   // Position 0: '['
   // Position 1-8: "HH:MM:SS"
-  // Position 9-11: "[R]"
-  // Position 12: ']'
-  // Position 13: ' '
+  // Position 9: ']'
+  // Position 10-11: "✓✓" (2 unicode chars, but may be 2 positions in text ctrl)
+  // Position 12: ' '
   
-  // Record just the [R] span (3 characters) for precise tooltip
-  long rMarkerStart = startPos + 9;   // Position of '[' in [R]
-  long rMarkerEnd = startPos + 12;    // Position after ']' in [R]
+  // Record the ✓✓ span for precise tooltip
+  long rMarkerStart = startPos + 10;  // Position of first ✓
+  long rMarkerEnd = startPos + 12;    // Position after second ✓
   
   // Make sure we don't exceed the actual text bounds
   if (rMarkerEnd > endPos) {
@@ -1761,15 +1807,21 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
 
   // Record read times for all newly read messages
   // Messages between old m_lastReadOutboxId and new lastReadOutboxId are now read
-  if (readTime > 0) {
+  int64_t now = wxGetUTCTime();
+  bool hasNewlyReadMessages = false;
+  
+  {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     for (const auto& msg : m_messages) {
       if (msg.isOutgoing && msg.id > 0 && 
           msg.id > m_lastReadOutboxId && msg.id <= lastReadOutboxId) {
         // This message was just marked as read - record the time
         if (m_messageReadTimes.find(msg.id) == m_messageReadTimes.end()) {
-          m_messageReadTimes[msg.id] = readTime;
+          m_messageReadTimes[msg.id] = readTime > 0 ? readTime : now;
         }
+        // Track for highlight animation
+        m_recentlyReadMessages[msg.id] = now;
+        hasNewlyReadMessages = true;
       }
     }
   }
@@ -1780,9 +1832,12 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
     m_lastReadOutboxTime = readTime;
   }
 
-  // We could update all displayed messages here, but that's expensive
-  // Instead, we just trigger a refresh which will re-render everything
-  // correctly with [R] markers
+  // Start highlight timer to clear highlights after a few seconds
+  if (hasNewlyReadMessages && !m_highlightTimer.IsRunning()) {
+    m_highlightTimer.Start(1000);  // Check every second
+  }
+
+  // Trigger refresh to show the new read markers with highlights
   ScheduleRefresh();
 }
 
@@ -1928,7 +1983,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
       if (charPos >= span.startPos && charPos < span.endPos) {
         display->SetCursor(wxCursor(wxCURSOR_ARROW));
 
-        wxString tooltip = "Read by recipient";
+        wxString tooltip = "Seen";
         // Use the per-message read time stored in the span
         if (span.readTime > 0) {
           int64_t readTime = span.readTime;
@@ -1936,27 +1991,21 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
           wxDateTime readDt((time_t)readTime);
           wxTimeSpan diff = now - readDt;
 
-          wxString relativeTime;
           long total_seconds = diff.GetSeconds().GetValue();
           int mins = total_seconds / 60;
           if (mins < 1) {
-            relativeTime = "just now";
+            tooltip = "Seen just now";
           } else if (mins < 60) {
-            relativeTime = wxString::Format(
-                "%d min%s ago", mins, mins == 1 ? "" : "s");
+            tooltip = wxString::Format("Seen %dm ago", mins);
           } else {
             int hours = mins / 60;
             if (hours < 24) {
-              relativeTime = wxString::Format(
-                  "%d hour%s ago", hours, hours == 1 ? "" : "s");
+              tooltip = wxString::Format("Seen %dh ago", hours);
             } else {
               int days = hours / 24;
-              relativeTime = wxString::Format("%d day%s ago", days,
-                                              days == 1 ? "" : "s");
+              tooltip = wxString::Format("Seen %dd ago", days);
             }
           }
-          tooltip = wxString::Format("Read %s (%s)", relativeTime,
-                                     readDt.Format("%Y-%m-%d %H:%M:%S"));
         }
 
         display->SetToolTip(tooltip);

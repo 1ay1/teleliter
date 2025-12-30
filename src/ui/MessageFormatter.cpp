@@ -192,15 +192,16 @@ void MessageFormatter::WriteTextWithLinks(const wxString& text)
 }
 
 void MessageFormatter::AppendMessage(const wxString& timestamp, const wxString& sender,
-                                      const wxString& message)
+                                      const wxString& message, MessageStatus status,
+                                      bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     // Reset styles at start to prevent any leaking from previous operations
     m_chatArea->ResetStyles();
     
-    // [HH:MM] <user> message
-    m_chatArea->WriteTimestamp(timestamp);
+    // [HH:MM]✓✓ <user> message
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);
@@ -234,12 +235,13 @@ void MessageFormatter::AppendServiceMessage(const wxString& timestamp, const wxS
 }
 
 void MessageFormatter::AppendActionMessage(const wxString& timestamp, const wxString& sender,
-                                           const wxString& action)
+                                           const wxString& action, MessageStatus status,
+                                           bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     m_chatArea->BeginTextColour(m_chatArea->GetActionColor());
     m_chatArea->WriteText("* ");
     m_chatArea->BeginBold();
@@ -266,12 +268,13 @@ void MessageFormatter::AppendNoticeMessage(const wxString& timestamp, const wxSt
 }
 
 void MessageFormatter::AppendHighlightMessage(const wxString& timestamp, const wxString& sender,
-                                              const wxString& message)
+                                              const wxString& message, MessageStatus status,
+                                              bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     // Highlighted message (when you are mentioned)
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);
@@ -317,12 +320,13 @@ void MessageFormatter::AppendUserLeftMessage(const wxString& timestamp, const wx
 }
 
 void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxString& sender,
-                                          const MediaInfo& media, const wxString& caption)
+                                          const MediaInfo& media, const wxString& caption,
+                                          MessageStatus status, bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);
@@ -388,12 +392,13 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
 }
 
 void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxString& sender,
-                                          const wxString& replyTo, const wxString& message)
+                                          const wxString& replyTo, const wxString& message,
+                                          MessageStatus status, bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);
@@ -428,12 +433,13 @@ void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxStr
 }
 
 void MessageFormatter::AppendForwardMessage(const wxString& timestamp, const wxString& sender,
-                                            const wxString& forwardFrom, const wxString& message)
+                                            const wxString& forwardFrom, const wxString& message,
+                                            MessageStatus status, bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);
@@ -513,12 +519,13 @@ void MessageFormatter::RemoveUnreadMarker()
 
 void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxString& sender,
                                            const wxString& message,
-                                           long* editSpanStart, long* editSpanEnd)
+                                           long* editSpanStart, long* editSpanEnd,
+                                           MessageStatus status, bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp);
+    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
     
     wxColour userColor = m_chatArea->GetUserColor(sender);
     m_chatArea->BeginTextColour(userColor);

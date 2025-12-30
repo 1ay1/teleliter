@@ -178,6 +178,9 @@ private:
   // Timer callback for debounced refresh
   void OnRefreshTimer(wxTimerEvent &event);
 
+  // Timer callback for highlight animation (fade effect on newly read messages)
+  void OnHighlightTimer(wxTimerEvent &event);
+
   // Event handlers
   void OnMouseMove(wxMouseEvent &event);
   void OnMouseLeave(wxMouseEvent &event);
@@ -253,6 +256,12 @@ private:
   bool m_wasAtBottom;
   int m_newMessageCount;
   bool m_isLoading;
+
+  // Highlight timer for fade animation on newly read messages
+  wxTimer m_highlightTimer;
+  static const int HIGHLIGHT_DURATION_SECONDS = 3;
+  static const int HIGHLIGHT_TIMER_ID = wxID_HIGHEST + 300;
+
   bool m_isReloading; // True when reloading messages due to out-of-order
                       // detection
   int m_batchUpdateDepth;
@@ -280,6 +289,11 @@ private:
   // Per-message read times - records when each message was marked as read
   // Key: messageId, Value: Unix timestamp when we learned it was read
   std::map<int64_t, int64_t> m_messageReadTimes;
+
+  // Recently read messages for highlight animation (fade effect)
+  // Key: messageId, Value: Unix timestamp when it was marked as read
+  // Used to show bright green ✓✓ for ~3 seconds after read receipt arrives
+  std::map<int64_t, int64_t> m_recentlyReadMessages;
 
   // Track [R] marker positions for tooltips
   struct ReadMarkerSpan {

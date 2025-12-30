@@ -23,6 +23,8 @@ void ChatArea::SetupColors() {
   // All other colors will use native defaults
   m_errorColor = wxColour(0xCC, 0x00, 0x00);   // Red for errors
   m_successColor = wxColour(0x00, 0x80, 0x00); // Green for success
+  m_readColor = wxColour(0x00, 0xAA, 0x00);    // Green for read status (✓✓)
+  m_readHighlightColor = wxColour(0x00, 0xFF, 0x44); // Bright green for recently read
 
   // User colors for sender names - need distinct colors for different users
   m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
@@ -144,11 +146,52 @@ wxString ChatArea::GetCurrentTimestamp() {
 void ChatArea::WriteTimestamp() { WriteTimestamp(GetCurrentTimestamp()); }
 
 void ChatArea::WriteTimestamp(const wxString &timestamp) {
+  WriteTimestamp(timestamp, MessageStatus::None, false);
+}
+
+void ChatArea::WriteTimestamp(const wxString &timestamp, MessageStatus status, bool highlight) {
   if (!m_chatDisplay)
     return;
   m_chatDisplay->BeginTextColour(GetTimestampColor());
-  m_chatDisplay->WriteText("[" + timestamp + "] ");
+  m_chatDisplay->WriteText("[" + timestamp + "]");
   m_chatDisplay->EndTextColour();
+  
+  // Write status marker if applicable
+  if (status != MessageStatus::None) {
+    WriteStatusMarker(status, highlight);
+  }
+  
+  m_chatDisplay->WriteText(" ");
+}
+
+void ChatArea::WriteStatusMarker(MessageStatus status, bool highlight) {
+  if (!m_chatDisplay)
+    return;
+  
+  switch (status) {
+    case MessageStatus::Sending:
+      m_chatDisplay->BeginTextColour(GetTimestampColor());
+      m_chatDisplay->WriteText("...");
+      m_chatDisplay->EndTextColour();
+      break;
+    case MessageStatus::Sent:
+      m_chatDisplay->BeginTextColour(GetSentColor());
+      m_chatDisplay->WriteText("\u2713");  // ✓
+      m_chatDisplay->EndTextColour();
+      break;
+    case MessageStatus::Read:
+      if (highlight) {
+        m_chatDisplay->BeginTextColour(m_readHighlightColor);
+      } else {
+        m_chatDisplay->BeginTextColour(m_readColor);
+      }
+      m_chatDisplay->WriteText("\u2713\u2713");  // ✓✓
+      m_chatDisplay->EndTextColour();
+      break;
+    case MessageStatus::None:
+    default:
+      break;
+  }
 }
 
 void ChatArea::AppendInfo(const wxString &message) {
