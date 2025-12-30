@@ -10,10 +10,12 @@ ChatArea::ChatArea(wxWindow *parent, wxWindowID id)
 }
 
 void ChatArea::SetupColors() {
-  // Use native system font
-  // Force a monospace font using the TELETYPE family for all platforms
-  // This ensures ASCII art renders correctly and gives the desired HexChat look
-  m_chatFont = wxFont(wxFontInfo(12).Family(wxFONTFAMILY_TELETYPE));
+  // Default to system fixed font - actual font will be set from settings via
+  // SetChatFont()
+  m_chatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+  if (m_chatFont.GetPointSize() <= 0) {
+    m_chatFont.SetPointSize(12);
+  }
 
   // Only set colors that are actually needed for semantic meaning
   // All other colors will use native defaults
