@@ -234,16 +234,15 @@ void MainFrame::SetupColors() {
 }
 
 void MainFrame::SetupFonts() {
-  // Default fonts - native system fonts
+  // Default fonts - native system fonts for UI, explicit monospace for chat
   wxFont defaultUIFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-  wxFont defaultChatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+  // Always default to a monospace font for chat (Teletype family)
+  wxFont defaultChatFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                         wxFONTWEIGHT_NORMAL);
 
   // Ensure default fonts have reasonable sizes
   if (defaultUIFont.GetPointSize() <= 0) {
     defaultUIFont.SetPointSize(12);
-  }
-  if (defaultChatFont.GetPointSize() <= 0) {
-    defaultChatFont.SetPointSize(12);
   }
 
   // Load saved fonts from config, or use defaults
@@ -878,7 +877,8 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
   // Use current chat font or system default
   wxFont chatFontForPicker = m_chatFont;
   if (!chatFontForPicker.IsOk()) {
-    chatFontForPicker = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+    chatFontForPicker = wxFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                               wxFONTWEIGHT_NORMAL);
   }
 
   wxFontPickerCtrl *chatFontPicker = new wxFontPickerCtrl(
@@ -913,7 +913,8 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
                                      uiFontPicker](wxCommandEvent &) {
     // Reset to system defaults
     wxFont defaultUIFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-    wxFont defaultChatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+    wxFont defaultChatFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                           wxFONTWEIGHT_NORMAL);
     chatFontPicker->SetSelectedFont(defaultChatFont);
     uiFontPicker->SetSelectedFont(defaultUIFont);
   });

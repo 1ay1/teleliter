@@ -10,12 +10,10 @@ ChatArea::ChatArea(wxWindow *parent, wxWindowID id)
 }
 
 void ChatArea::SetupColors() {
-  // Default to system fixed font - actual font will be set from settings via
-  // SetChatFont()
-  m_chatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
-  if (m_chatFont.GetPointSize() <= 0) {
-    m_chatFont.SetPointSize(12);
-  }
+  // Default to monospace font (Teletype) - actual font will be set from
+  // settings via SetChatFont()
+  m_chatFont = wxFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                      wxFONTWEIGHT_NORMAL);
 
   // Only set colors that are actually needed for semantic meaning
   // All other colors will use native defaults
@@ -238,7 +236,7 @@ void ChatArea::WriteTimestamp(const wxString &timestamp, MessageStatus status,
   m_chatDisplay->BeginTextColour(GetTimestampColor());
   m_chatDisplay->WriteText("[" + timestamp + "] ");
   m_chatDisplay->EndTextColour();
-  
+
   // Note: status parameters kept for API compatibility but not used here
   // Status ticks are now appended at end of message by MessageFormatter
 }
