@@ -1504,7 +1504,7 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
 
     // Calculate the target position
     // Add a small offset so popup appears below the cursor, not overlapping it
-    const int CURSOR_OFFSET = 20;
+    const int CURSOR_OFFSET = 15;
     wxPoint targetPos = m_originalPosition;
     bool isShowingBelow = false;
     
@@ -1554,7 +1554,10 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
               << " screenBottom=" << screenRect.GetBottom()
               << " effectiveScreenBottom=" << effectiveScreenBottom);
 
-    // Adjust horizontal
+        // Center horizontally on cursor
+        targetPos.x -= width / 2;
+
+        // Adjust horizontal to keep on screen
         if (targetPos.x + width > screenRect.GetRight()) {
             targetPos.x = screenRect.GetRight() - width;
         }
