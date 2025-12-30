@@ -1624,6 +1624,8 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
         Move(-1000, -1000);
         wxYield(); // Allow GTK to process the move
     }
+#else
+    wxUnusedVar(isShowingBelow);
 #endif
     
     // Use the atomic SetSize(x,y,w,h) form which sets position and size together
