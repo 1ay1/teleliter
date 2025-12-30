@@ -236,15 +236,11 @@ void ChatArea::WriteTimestamp(const wxString &timestamp, MessageStatus status,
   if (!m_chatDisplay)
     return;
   m_chatDisplay->BeginTextColour(GetTimestampColor());
-  m_chatDisplay->WriteText("[" + timestamp + "]");
+  m_chatDisplay->WriteText("[" + timestamp + "] ");
   m_chatDisplay->EndTextColour();
-
-  // Write status marker if applicable
-  if (status != MessageStatus::None) {
-    WriteStatusMarker(status, highlight);
-  }
-
-  m_chatDisplay->WriteText(" ");
+  
+  // Note: status parameters kept for API compatibility but not used here
+  // Status ticks are now appended at end of message by MessageFormatter
 }
 
 void ChatArea::WriteStatusMarker(MessageStatus status, bool highlight) {
@@ -254,12 +250,12 @@ void ChatArea::WriteStatusMarker(MessageStatus status, bool highlight) {
   switch (status) {
   case MessageStatus::Sending:
     m_chatDisplay->BeginTextColour(GetTimestampColor());
-    m_chatDisplay->WriteText("...");
+    m_chatDisplay->WriteText(".."); // 2 chars
     m_chatDisplay->EndTextColour();
     break;
   case MessageStatus::Sent:
     m_chatDisplay->BeginTextColour(GetSentColor());
-    m_chatDisplay->WriteText("\u2713"); // ✓
+    m_chatDisplay->WriteText(" \u2713"); // space + ✓ = 2 chars
     m_chatDisplay->EndTextColour();
     break;
   case MessageStatus::Read:
@@ -268,7 +264,7 @@ void ChatArea::WriteStatusMarker(MessageStatus status, bool highlight) {
     } else {
       m_chatDisplay->BeginTextColour(m_readColor);
     }
-    m_chatDisplay->WriteText("\u2713\u2713"); // ✓✓
+    m_chatDisplay->WriteText("\u2713\u2713"); // ✓✓ = 2 chars
     m_chatDisplay->EndTextColour();
     break;
   case MessageStatus::None:

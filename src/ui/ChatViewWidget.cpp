@@ -316,6 +316,15 @@ void ChatViewWidget::RefreshDisplay() {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     SortMessages();
 
+    // Calculate optimal username width for alignment
+    std::vector<wxString> usernames;
+    for (const auto &msg : m_messages) {
+      if (!msg.senderName.IsEmpty()) {
+        usernames.push_back(msg.senderName);
+      }
+    }
+    m_messageFormatter->CalculateUsernameWidth(usernames);
+
     // Update tracking from sorted messages
     m_displayedMessageIds.clear();
     for (const auto &msg : m_messages) {
@@ -379,6 +388,23 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     return;
 
   wxString timestamp = FormatTimestamp(msg.date);
+
+  // Check if we need a date separator (day changed)
+  if (m_messageFormatter->NeedsDateSeparator(msg.date)) {
+    m_messageFormatter->AppendDateSeparatorForTime(msg.date);
+    // Reset grouping after date separator
+    m_messageFormatter->ResetGroupingState();
+    m_lastDisplayedSender.Clear();
+    m_lastDisplayedTimestamp = 0;
+  } else if (m_lastDisplayedTimestamp == 0 && msg.date > 0) {
+    // First message - show date separator if it's not today
+    time_t t = static_cast<time_t>(msg.date);
+    wxDateTime msgDate(t);
+    wxDateTime today = wxDateTime::Now().GetDateOnly();
+    if (msgDate.GetDateOnly() != today) {
+      m_messageFormatter->AppendDateSeparatorForTime(msg.date);
+    }
+  }
 
   // Determine message status for outgoing messages
   MessageStatus status = MessageStatus::None;
@@ -617,11 +643,11 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     }
   }
 
-  // Regular text message - always show full timestamp and sender
-  // (HexChat/WelcomeChat style)
+  // Regular text message
   long startPos = m_chatArea->GetLastPosition();
+  
   if (isMentioned) {
-    // Highlighted message - someone mentioned you
+    // Highlighted message - someone mentioned you (always full format)
     m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text,
                                                status, statusHighlight);
   } else {
@@ -629,6 +655,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     m_messageFormatter->AppendMessage(timestamp, sender, msg.text,
                                       status, statusHighlight);
   }
+  
   if (hasReadMarker)
     RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
 
@@ -1758,28 +1785,26 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
 
 void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
                                       int64_t messageId) {
-  // Calculate the exact position of ✓✓ in the timestamp
-  // Timestamp format from FormatTimestamp: "HH:MM:SS" (8 chars)
-  // WriteTimestamp outputs "[" + timestamp + "]" + status + " "
-  // So output is "[HH:MM:SS]✓✓ " 
-  // Position 0: '['
-  // Position 1-8: "HH:MM:SS"
-  // Position 9: ']'
-  // Position 10-11: "✓✓" (2 unicode chars, but may be 2 positions in text ctrl)
-  // Position 12: ' '
+  // Use the formatter's tracked status marker positions for accurate tooltip placement
+  long rMarkerStart = m_messageFormatter->GetLastStatusMarkerStart();
+  long rMarkerEnd = m_messageFormatter->GetLastStatusMarkerEnd();
   
-  // Record the ✓✓ span for precise tooltip
-  long rMarkerStart = startPos + 10;  // Position of first ✓
-  long rMarkerEnd = startPos + 12;    // Position after second ✓
-  
-  // Make sure we don't exceed the actual text bounds
-  if (rMarkerEnd > endPos) {
-    rMarkerEnd = endPos;
-  }
-  if (rMarkerStart >= rMarkerEnd) {
-    // Fallback to full span if calculation is off
-    rMarkerStart = startPos;
-    rMarkerEnd = endPos;
+  // If formatter didn't record valid positions, fall back to end of message
+  if (rMarkerStart < 0 || rMarkerEnd < 0 || rMarkerStart >= rMarkerEnd) {
+    // Fallback: ticks are at end of message before newline
+    // Format: ... ✓✓\n  (space + 2 ticks + newline = 4 chars from end)
+    rMarkerStart = endPos - 3;  // Position of first ✓
+    rMarkerEnd = endPos - 1;    // Position after second ✓ (before newline)
+    
+    // Make sure we don't go before start of message
+    if (rMarkerStart < startPos) {
+      rMarkerStart = startPos;
+    }
+    if (rMarkerEnd <= rMarkerStart) {
+      // Fallback to full span if calculation is off
+      rMarkerStart = startPos;
+      rMarkerEnd = endPos;
+    }
   }
   
   ReadMarkerSpan span;

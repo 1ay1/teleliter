@@ -4,14 +4,25 @@
 #include <wx/datetime.h>
 #include <wx/settings.h>
 
+// Define static constants
+const int MessageFormatter::GROUP_TIME_WINDOW_SECONDS;
+const int MessageFormatter::DEFAULT_USERNAME_WIDTH;
+const int MessageFormatter::MIN_USERNAME_WIDTH;
+const int MessageFormatter::MAX_USERNAME_WIDTH;
+
 MessageFormatter::MessageFormatter(ChatArea* chatArea)
     : m_chatArea(chatArea ? chatArea : nullptr),
       m_lastMediaSpanStart(0),
       m_lastMediaSpanEnd(0),
+      m_lastStatusMarkerStart(-1),
+      m_lastStatusMarkerEnd(-1),
       m_unreadMarkerStart(-1),
       m_unreadMarkerEnd(-1),
       m_lastTimestamp(0),
-      m_lastDateDay(0)
+      m_lastDateDay(0),
+      m_usernameWidth(DEFAULT_USERNAME_WIDTH),
+      m_typingIndicatorStart(-1),
+      m_typingIndicatorEnd(-1)
 {
     // Additional colors not provided by ChatArea - use system colors
     m_mediaColor = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
@@ -26,6 +37,131 @@ void MessageFormatter::ResetGroupingState()
     m_lastSender.Clear();
     m_lastTimestamp = 0;
     m_lastDateDay = 0;
+    m_typingIndicatorStart = -1;
+    m_typingIndicatorEnd = -1;
+}
+
+wxString MessageFormatter::GetMediaEmoji(MediaType type)
+{
+    switch (type) {
+        case MediaType::Photo:     return wxString::FromUTF8("📷");
+        case MediaType::Video:     return wxString::FromUTF8("🎬");
+        case MediaType::Sticker:   return wxString::FromUTF8("🏷️");
+        case MediaType::GIF:       return wxString::FromUTF8("🎞️");
+        case MediaType::Voice:     return wxString::FromUTF8("🎤");
+        case MediaType::VideoNote: return wxString::FromUTF8("🎥");
+        case MediaType::File:      return wxString::FromUTF8("📎");
+        default:                   return wxString::FromUTF8("📁");
+    }
+}
+
+void MessageFormatter::CalculateUsernameWidth(const std::vector<wxString>& usernames)
+{
+    int maxLen = MIN_USERNAME_WIDTH;
+    for (const auto& name : usernames) {
+        int len = static_cast<int>(name.length());
+        if (len > maxLen) maxLen = len;
+    }
+    m_usernameWidth = std::min(maxLen, MAX_USERNAME_WIDTH);
+}
+
+bool MessageFormatter::NeedsDateSeparator(int64_t timestamp) const
+{
+    if (m_lastDateDay == 0) return false;
+    if (timestamp <= 0) return false;
+    
+    time_t t = static_cast<time_t>(timestamp);
+    wxDateTime dt(t);
+    long newDay = dt.GetJulianDayNumber();
+    
+    return newDay != m_lastDateDay;
+}
+
+void MessageFormatter::WriteAlignedUsername(const wxString& sender)
+{
+    // Right-align username within fixed width column
+    wxString displayName = sender;
+    if (displayName.length() > static_cast<size_t>(m_usernameWidth)) {
+        displayName = displayName.Left(m_usernameWidth - 1) + wxString::FromUTF8("…");
+    }
+    
+    // Pad on the left to right-align
+    int padding = m_usernameWidth - static_cast<int>(displayName.length());
+    if (padding > 0) {
+        m_chatArea->WriteText(wxString(' ', padding));
+    }
+    
+    wxColour userColor = m_chatArea->GetUserColor(sender);
+    m_chatArea->BeginTextColour(userColor);
+    m_chatArea->WriteText("<");
+    m_chatArea->BeginBold();
+    m_chatArea->WriteText(displayName);
+    m_chatArea->EndBold();
+    m_chatArea->WriteText("> ");
+    m_chatArea->EndTextColour();
+}
+
+void MessageFormatter::WriteStatusSuffix(MessageStatus status, bool statusHighlight)
+{
+    // Reset marker positions
+    m_lastStatusMarkerStart = -1;
+    m_lastStatusMarkerEnd = -1;
+    
+    if (status == MessageStatus::None) return;
+    
+    m_chatArea->WriteText(" ");
+    
+    // Record position before writing the marker
+    long markerStart = m_chatArea->GetLastPosition();
+    
+    switch (status) {
+    case MessageStatus::Sending:
+        m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+        m_chatArea->WriteText("..");
+        m_chatArea->EndTextColour();
+        break;
+    case MessageStatus::Sent:
+        m_chatArea->BeginTextColour(m_chatArea->GetSentColor());
+        m_chatArea->WriteText(wxString::FromUTF8("✓"));
+        m_chatArea->EndTextColour();
+        break;
+    case MessageStatus::Read:
+        if (statusHighlight) {
+            m_chatArea->BeginTextColour(m_chatArea->GetReadHighlightColor());
+        } else {
+            m_chatArea->BeginTextColour(m_chatArea->GetReadColor());
+        }
+        m_chatArea->WriteText(wxString::FromUTF8("✓✓"));
+        m_chatArea->EndTextColour();
+        // Record read marker position for tooltip
+        m_lastStatusMarkerStart = markerStart;
+        m_lastStatusMarkerEnd = m_chatArea->GetLastPosition();
+        break;
+    default:
+        break;
+    }
+}
+
+void MessageFormatter::WriteContinuationPrefix()
+{
+    // Indent to align with message text (after timestamp and username)
+    // Format: [HH:MM:SS] <username> message
+    // Timestamp: 11 chars, username area: m_usernameWidth + 3 for "< >"
+    int totalIndent = 11 + m_usernameWidth + 3;
+    m_chatArea->WriteText(wxString(' ', totalIndent));
+}
+
+void MessageFormatter::WriteTextWithLineHandling(const wxString& text, MessageStatus status, bool statusHighlight)
+{
+    // Simply write text (including any newlines) and add ticks at the end
+    // No special multi-line handling - just show message as-is with ticks at end
+    
+    if (text.IsEmpty()) return;
+    
+    WriteTextWithLinks(text);
+    m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
+    m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
 }
 
 void MessageFormatter::SetLastMessage(const wxString& sender, int64_t timestamp)
@@ -48,6 +184,10 @@ bool MessageFormatter::ShouldGroupWithPrevious(const wxString& sender, int64_t t
         return false;
     }
     if (m_lastTimestamp == 0 || timestamp == 0) {
+        return false;
+    }
+    // Don't group across date boundaries
+    if (!IsSameDay(m_lastTimestamp, timestamp)) {
         return false;
     }
     // Group if within time window
@@ -89,10 +229,19 @@ wxString MessageFormatter::GetDateString(int64_t unixTime)
 
 void MessageFormatter::AppendDateSeparator(const wxString& dateText)
 {
-    // Date separator - use system gray text color
+    if (!m_chatArea) return;
+    
+    m_chatArea->ResetStyles();
+    
+    // Date separator with box-drawing characters for HexChat style
+    // ─────────────────── January 15, 2025 ───────────────────
+    wxString separator = wxString::FromUTF8("───────────────────");
+    
     m_chatArea->BeginTextColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
-    m_chatArea->WriteText("--- " + dateText + " ---\n");
+    m_chatArea->WriteText(separator + " " + dateText + " " + separator + "\n");
     m_chatArea->EndTextColour();
+    
+    m_chatArea->ResetStyles();
 }
 
 void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime)
@@ -110,16 +259,152 @@ void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime)
     }
 }
 
-void MessageFormatter::AppendContinuationMessage(const wxString& message)
+void MessageFormatter::AppendContinuationMessage(const wxString& timestamp,
+                                                  const wxString& message,
+                                                  MessageStatus status,
+                                                  bool statusHighlight)
 {
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    // Indented message without timestamp/nick (for grouped messages)
-    m_chatArea->WriteText("            ");  // Same width as "[HH:MM:SS] "
+    
+    // Write continuation prefix with proper alignment
+    WriteContinuationPrefix();
+    
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();
+    
+    // Append status ticks at the end
+    WriteStatusSuffix(status, statusHighlight);
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->WriteText("\n");
+}
+
+void MessageFormatter::AppendContinuationMediaMessage(const wxString& timestamp,
+                                                       const MediaInfo& media,
+                                                       const wxString& caption,
+                                                       MessageStatus status,
+                                                       bool statusHighlight)
+{
+    if (!m_chatArea) return;
+    
+    m_chatArea->ResetStyles();
+    
+    // Write continuation prefix
+    WriteContinuationPrefix();
+    
+    m_lastMediaSpanStart = m_chatArea->GetLastPosition();
+    
+    // Media indicator with emoji
+    wxString emoji = GetMediaEmoji(media.type);
+    m_chatArea->WriteText(emoji + " ");
+    
+    m_chatArea->BeginTextColour(m_mediaColor);
+    m_chatArea->BeginUnderline();
+    
+    wxString mediaLabel;
+    switch (media.type) {
+        case MediaType::Photo:     mediaLabel = "[Photo]"; break;
+        case MediaType::Video:     mediaLabel = "[Video]"; break;
+        case MediaType::Sticker:   mediaLabel = "[Sticker]"; break;
+        case MediaType::GIF:       mediaLabel = "[GIF]"; break;
+        case MediaType::Voice:     mediaLabel = "[Voice]"; break;
+        case MediaType::VideoNote: mediaLabel = "[Video Message]"; break;
+        case MediaType::File:      mediaLabel = "[File: " + media.fileName + "]"; break;
+        default:                   mediaLabel = "[Media]"; break;
+    }
+    
+    m_chatArea->WriteText(mediaLabel);
+    m_chatArea->EndUnderline();
+    m_chatArea->EndTextColour();
+    
+    if (media.type == MediaType::Sticker && !media.emoji.IsEmpty()) {
+        m_chatArea->WriteText(" " + media.emoji);
+    }
+    
+    m_lastMediaSpanEnd = m_chatArea->GetLastPosition();
+    
+    if (!caption.IsEmpty() && media.type != MediaType::Sticker) {
+        m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
+        m_chatArea->WriteText(" " + caption);
+        m_chatArea->EndTextColour();
+    }
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->WriteText("\n");
+}
+
+void MessageFormatter::AppendTypingIndicator(const wxString& username)
+{
+    if (!m_chatArea) return;
+    
+    // Remove existing typing indicator first
+    RemoveTypingIndicator();
+    
+    m_typingIndicatorStart = m_chatArea->GetLastPosition();
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+    m_chatArea->BeginItalic();
+    m_chatArea->WriteText("           * " + username + " is typing...\n");
+    m_chatArea->EndItalic();
+    m_chatArea->EndTextColour();
+    
+    m_typingIndicatorEnd = m_chatArea->GetLastPosition();
+}
+
+void MessageFormatter::RemoveTypingIndicator()
+{
+    if (!m_chatArea || m_typingIndicatorStart < 0 || m_typingIndicatorEnd < 0) return;
+    
+    wxRichTextCtrl* display = m_chatArea->GetDisplay();
+    if (!display) return;
+    
+    display->Remove(m_typingIndicatorStart, m_typingIndicatorEnd);
+    
+    m_typingIndicatorStart = -1;
+    m_typingIndicatorEnd = -1;
+}
+
+void MessageFormatter::AppendReactions(const std::map<wxString, std::vector<wxString>>& reactions)
+{
+    if (!m_chatArea || reactions.empty()) return;
+    
+    m_chatArea->ResetStyles();
+    
+    // Indent to align with message content
+    wxString indent = "           ";  // Timestamp width
+    indent += wxString(' ', m_usernameWidth + 3);  // Username column
+    
+    m_chatArea->WriteText(indent);
+    m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+    m_chatArea->WriteText(wxString::FromUTF8("└─ "));
+    m_chatArea->EndTextColour();
+    
+    bool first = true;
+    for (const auto& [emoji, users] : reactions) {
+        if (!first) {
+            m_chatArea->WriteText("  ");
+        }
+        first = false;
+        
+        m_chatArea->WriteText(emoji + " ");
+        
+        // Show first few usernames
+        m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+        if (users.size() <= 2) {
+            for (size_t i = 0; i < users.size(); ++i) {
+                if (i > 0) m_chatArea->WriteText(", ");
+                m_chatArea->WriteText(users[i]);
+            }
+        } else {
+            m_chatArea->WriteText(users[0] + " +" + wxString::Format("%zu", users.size() - 1));
+        }
+        m_chatArea->EndTextColour();
+    }
+    
     m_chatArea->ResetStyles();
     m_chatArea->WriteText("\n");
 }
@@ -200,21 +485,17 @@ void MessageFormatter::AppendMessage(const wxString& timestamp, const wxString& 
     // Reset styles at start to prevent any leaking from previous operations
     m_chatArea->ResetStyles();
     
-    // [HH:MM]✓✓ <user> message
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    // [HH:MM:SS] <username> message ✓✓
+    m_chatArea->WriteTimestamp(timestamp);
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Write username
+    WriteAlignedUsername(sender);
     
+    // Write message text (may contain newlines) then ticks at end
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
     
     // Always write newline with reset styles to ensure it's not swallowed
     m_chatArea->ResetStyles();
@@ -273,24 +554,23 @@ void MessageFormatter::AppendHighlightMessage(const wxString& timestamp, const w
 {
     if (!m_chatArea) return;
     
-    // Highlighted message (when you are mentioned)
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    m_chatArea->ResetStyles();
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Highlighted message (when you are mentioned)
+    m_chatArea->WriteTimestamp(timestamp);
+    
+    // Write username
+    WriteAlignedUsername(sender);
     
     m_chatArea->BeginTextColour(m_highlightColor);
     m_chatArea->BeginBold();
     WriteTextWithLinks(message);
     m_chatArea->EndBold();
-    m_chatArea->WriteText("\n");
     m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->WriteText("\n");
 }
 
 void MessageFormatter::AppendUserJoinedMessage(const wxString& timestamp, const wxString& user)
@@ -326,16 +606,14 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    m_chatArea->WriteTimestamp(timestamp);
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Write username
+    WriteAlignedUsername(sender);
+    
+    // Media emoji indicator
+    wxString emoji = GetMediaEmoji(media.type);
+    m_chatArea->WriteText(emoji + " ");
     
     m_lastMediaSpanStart = m_chatArea->GetLastPosition();
     
@@ -388,6 +666,10 @@ void MessageFormatter::AppendMediaMessage(const wxString& timestamp, const wxStr
         m_chatArea->EndTextColour();
     }
     
+    // Add status ticks for outgoing messages
+    WriteStatusSuffix(status, statusHighlight);
+    
+    m_chatArea->ResetStyles();
     m_chatArea->WriteText("\n");
 }
 
@@ -398,36 +680,39 @@ void MessageFormatter::AppendReplyMessage(const wxString& timestamp, const wxStr
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    m_chatArea->WriteTimestamp(timestamp);
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Write username
+    WriteAlignedUsername(sender);
     
-    // Reply quote in italics with a vertical bar prefix
-    m_chatArea->BeginTextColour(m_replyColor);
-    m_chatArea->BeginItalic();
-    // Truncate long reply text
-    wxString truncatedReply = replyTo;
-    if (truncatedReply.length() > 50) {
-        truncatedReply = truncatedReply.Left(47) + "...";
-    }
-    m_chatArea->WriteText("| " + truncatedReply);
-    m_chatArea->EndItalic();
-    m_chatArea->EndTextColour();
-    
-    m_chatArea->WriteText("\n");
-    
-    // The actual reply message on next line with indent
-    m_chatArea->WriteText("        ");
+    // Write the message first
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->WriteText("\n");
+    
+    // Reply context on next line with arrow indicator
+    wxString indent = "           ";  // Timestamp width
+    indent += wxString(' ', m_usernameWidth + 3);  // Username column
+    
+    m_chatArea->WriteText(indent);
+    m_chatArea->BeginTextColour(m_replyColor);
+    m_chatArea->WriteText(wxString::FromUTF8("↳ re: \""));
+    
+    // Truncate long reply text
+    wxString truncatedReply = replyTo;
+    if (truncatedReply.length() > 40) {
+        truncatedReply = truncatedReply.Left(37) + "...";
+    }
+    m_chatArea->BeginItalic();
+    m_chatArea->WriteText(truncatedReply);
+    m_chatArea->EndItalic();
+    m_chatArea->WriteText("\"");
+    m_chatArea->EndTextColour();
+    
     m_chatArea->ResetStyles();
     m_chatArea->WriteText("\n");
 }
@@ -439,34 +724,28 @@ void MessageFormatter::AppendForwardMessage(const wxString& timestamp, const wxS
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    m_chatArea->WriteTimestamp(timestamp);
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Write username
+    WriteAlignedUsername(sender);
     
-    // Forward indicator with arrow
+    // Forward indicator
     m_chatArea->BeginTextColour(m_forwardColor);
     m_chatArea->BeginItalic();
-    m_chatArea->WriteText(">> Forwarded from ");
+    m_chatArea->WriteText(wxString::FromUTF8("⤴ Fwd from "));
     m_chatArea->BeginBold();
     m_chatArea->WriteText(forwardFrom);
     m_chatArea->EndBold();
+    m_chatArea->WriteText(": ");
     m_chatArea->EndItalic();
     m_chatArea->EndTextColour();
     
-    m_chatArea->WriteText("\n");
-    
-    // The forwarded content on next line with indent
-    m_chatArea->WriteText("        ");
+    // Message on same line
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
+    
     m_chatArea->ResetStyles();
     m_chatArea->WriteText("\n");
 }
@@ -525,25 +804,20 @@ void MessageFormatter::AppendEditedMessage(const wxString& timestamp, const wxSt
     if (!m_chatArea) return;
     
     m_chatArea->ResetStyles();
-    m_chatArea->WriteTimestamp(timestamp, status, statusHighlight);
+    m_chatArea->WriteTimestamp(timestamp);
     
-    wxColour userColor = m_chatArea->GetUserColor(sender);
-    m_chatArea->BeginTextColour(userColor);
-    m_chatArea->WriteText("<");
-    m_chatArea->BeginBold();
-    m_chatArea->WriteText(sender);
-    m_chatArea->EndBold();
-    m_chatArea->WriteText("> ");
-    m_chatArea->EndTextColour();
+    // Write username
+    WriteAlignedUsername(sender);
     
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
     WriteTextWithLinks(message);
     m_chatArea->EndTextColour();
+    WriteStatusSuffix(status, statusHighlight);
     
-    // Simple (edited) marker
+    // Simple (edited) marker with pencil emoji
     m_chatArea->BeginTextColour(m_editedColor);
     m_chatArea->BeginItalic();
-    m_chatArea->WriteText(" [edited]");
+    m_chatArea->WriteText(wxString::FromUTF8(" ✏️edited"));
     m_chatArea->EndItalic();
     m_chatArea->EndTextColour();
     

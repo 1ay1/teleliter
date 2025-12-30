@@ -143,108 +143,7 @@ else()
     message(WARNING "libwebp not found - WebP sticker images will not be displayed. Install with: apt install libwebp-dev (Linux) or brew install webp (macOS)")
 endif()
 
-# Find libvpx for VP9 video decoding (WebM video stickers)
-set(VPX_FOUND FALSE)
-
-# Try to find manually first with full path
-find_path(VPX_INCLUDE_DIRS vpx/vpx_decoder.h
-    PATHS /usr/include /usr/local/include /opt/homebrew/include /opt/local/include
-)
-find_library(VPX_LIBRARY NAMES vpx libvpx
-    PATHS /usr/lib /usr/local/lib /opt/homebrew/lib /opt/local/lib
-)
-if(VPX_INCLUDE_DIRS AND VPX_LIBRARY)
-    set(VPX_FOUND TRUE)
-    set(VPX_LIBRARIES ${VPX_LIBRARY})
-    # Get the library directory for link_directories
-    get_filename_component(VPX_LIBRARY_DIR ${VPX_LIBRARY} DIRECTORY)
-endif()
-
-if(VPX_FOUND)
-    message(STATUS "Found libvpx: ${VPX_LIBRARIES}")
-    message(STATUS "libvpx library dir: ${VPX_LIBRARY_DIR}")
-    add_definitions(-DHAVE_VPX)
-else()
-    message(WARNING "libvpx not found - WebM video stickers will show static thumbnails. Install with: brew install libvpx (macOS) or apt install libvpx-dev (Linux)")
-endif()
-
-# Find libwebm for WebM container parsing
-set(WEBM_FOUND FALSE)
-# Check Homebrew location
-set(HOMEBREW_WEBM_PATH "/opt/homebrew/opt/libwebm")
-if(EXISTS "${HOMEBREW_WEBM_PATH}/include/mkvparser/mkvparser.h")
-    set(WEBM_INCLUDE_DIRS "${HOMEBREW_WEBM_PATH}/include")
-    set(WEBM_LIBRARY "${HOMEBREW_WEBM_PATH}/lib/libwebm.a")
-    if(EXISTS "${WEBM_LIBRARY}")
-        set(WEBM_FOUND TRUE)
-        set(WEBM_LIBRARIES ${WEBM_LIBRARY})
-        message(STATUS "Found libwebm in Homebrew: ${WEBM_LIBRARY}")
-    endif()
-endif()
-
-if(NOT WEBM_FOUND)
-    find_path(WEBM_INCLUDE_DIRS mkvparser/mkvparser.h
-        PATHS /usr/include/webm /usr/include /usr/local/include /opt/homebrew/include
-    )
-    find_library(WEBM_LIBRARY webm
-        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib
-    )
-    if(WEBM_INCLUDE_DIRS AND WEBM_LIBRARY)
-        set(WEBM_FOUND TRUE)
-        set(WEBM_LIBRARIES ${WEBM_LIBRARY})
-    endif()
-endif()
-
-if(WEBM_FOUND)
-    message(STATUS "Found libwebm: ${WEBM_LIBRARIES}")
-    add_definitions(-DHAVE_WEBM)
-else()
-    message(WARNING "libwebm not found - WebM video stickers will show static thumbnails. Install with: brew install libwebm (macOS)")
-endif()
-
-# Find rlottie for animated sticker (.tgs) support
-set(RLOTTIE_FOUND FALSE)
-# Check in ~/.local first
-set(LOCAL_RLOTTIE_PATH "$ENV{HOME}/.local")
-if(EXISTS "${LOCAL_RLOTTIE_PATH}/include/rlottie/rlottie.h")
-    set(RLOTTIE_INCLUDE_DIRS "${LOCAL_RLOTTIE_PATH}/include/rlottie")
-    set(RLOTTIE_LIBRARY_DIR "${LOCAL_RLOTTIE_PATH}/lib")
-    find_library(RLOTTIE_LIBRARY rlottie PATHS ${RLOTTIE_LIBRARY_DIR} NO_DEFAULT_PATH)
-    if(RLOTTIE_LIBRARY)
-        set(RLOTTIE_FOUND TRUE)
-        set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
-        message(STATUS "Found rlottie in ~/.local: ${RLOTTIE_LIBRARY}")
-    endif()
-endif()
-
-# Try pkg-config as fallback
-if(NOT RLOTTIE_FOUND AND PkgConfig_FOUND)
-    pkg_check_modules(RLOTTIE rlottie)
-endif()
-
-# Try to find manually
-if(NOT RLOTTIE_FOUND)
-    find_path(RLOTTIE_INCLUDE_DIRS rlottie.h
-        PATHS /usr/include /usr/local/include /opt/homebrew/include
-        PATH_SUFFIXES rlottie
-    )
-    find_library(RLOTTIE_LIBRARY rlottie
-        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib
-    )
-    if(RLOTTIE_INCLUDE_DIRS AND RLOTTIE_LIBRARY)
-        set(RLOTTIE_FOUND TRUE)
-        set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
-    endif()
-endif()
-
-if(RLOTTIE_FOUND)
-    message(STATUS "Found rlottie: ${RLOTTIE_LIBRARIES}")
-    add_definitions(-DHAVE_RLOTTIE)
-else()
-    message(WARNING "rlottie not found - Animated stickers (.tgs) will show static thumbnails. Build rlottie from: https://github.com/Samsung/rlottie")
-endif()
-
-# Find FFmpeg libraries for video playback
+# Find FFmpeg libraries for all media playback (single source of truth)
 set(FFMPEG_FOUND FALSE)
 
 if(APPLE)
@@ -272,7 +171,7 @@ if(APPLE)
     endif()
 
     if(NOT FFMPEG_FOUND)
-        message(WARNING "FFmpeg not found - Video preview popups will show thumbnails on macOS. Install with: brew install ffmpeg")
+        message(FATAL_ERROR "FFmpeg not found - FFmpeg is required for media playback. Install with: brew install ffmpeg")
     endif()
 elseif(UNIX)
     # Linux
@@ -312,7 +211,7 @@ elseif(UNIX)
     endif()
 
     if(NOT FFMPEG_FOUND)
-        message(WARNING "FFmpeg not found - Video preview popups will show thumbnails on Linux. Install with: apt install libavformat-dev libavcodec-dev libswscale-dev libavutil-dev")
+        message(FATAL_ERROR "FFmpeg not found - FFmpeg is required for media playback. Install with: apt install libavformat-dev libavcodec-dev libswscale-dev libavutil-dev")
     endif()
 endif()
 
@@ -330,8 +229,6 @@ set(SOURCES
     src/ui/ChatListWidget.cpp
     src/ui/ChatViewWidget.cpp
     src/ui/InputBoxWidget.cpp
-    src/ui/LottiePlayer.cpp
-    src/ui/WebmPlayer.cpp
     src/ui/FFmpegPlayer.cpp
     src/telegram/TransferManager.cpp
     src/telegram/TelegramClient.cpp
@@ -346,9 +243,6 @@ target_include_directories(teleliter PRIVATE
     ${TDLIB_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${WEBP_INCLUDE_DIRS}
-    ${RLOTTIE_INCLUDE_DIRS}
-    ${VPX_INCLUDE_DIRS}
-    ${WEBM_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
 )
 
@@ -360,9 +254,6 @@ target_link_libraries(teleliter
     OpenSSL::Crypto
     ZLIB::ZLIB
     ${WEBP_LIBRARIES}
-    ${RLOTTIE_LIBRARIES}
-    ${VPX_LIBRARIES}
-    ${WEBM_LIBRARIES}
     ${FFMPEG_LIBRARIES}
     m
 )

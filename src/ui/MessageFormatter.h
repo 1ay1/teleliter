@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <functional>
 #include <ctime>
+#include <map>
 #include "MediaTypes.h"
 #include "ChatArea.h"
 
@@ -71,21 +72,49 @@ public:
     // Check if marker is present
     bool HasUnreadMarker() const { return m_unreadMarkerStart >= 0; }
     
-    // Date separator (HexChat style: "--- Today ---", "--- Monday, Jan 15 ---")
+    // Date separator (HexChat style: ─────────── January 15, 2025 ───────────)
     void AppendDateSeparator(const wxString& dateText);
     void AppendDateSeparatorForTime(int64_t unixTime);
     
-    // Continuation message (same sender, no user/timestamp shown, just indented)
-    void AppendContinuationMessage(const wxString& message);
+    // Continuation message (same sender within time window - compact format)
+    void AppendContinuationMessage(const wxString& timestamp, const wxString& message,
+                                   MessageStatus status = MessageStatus::None,
+                                   bool statusHighlight = false);
+    
+    // Continuation media message
+    void AppendContinuationMediaMessage(const wxString& timestamp, const MediaInfo& media,
+                                        const wxString& caption = "",
+                                        MessageStatus status = MessageStatus::None,
+                                        bool statusHighlight = false);
+    
+    // Typing indicator
+    void AppendTypingIndicator(const wxString& username);
+    void RemoveTypingIndicator();
+    
+    // Reactions display (shown below a message)
+    void AppendReactions(const std::map<wxString, std::vector<wxString>>& reactions);
     
     // Check if we should group with previous message (same sender within time window)
     bool ShouldGroupWithPrevious(const wxString& sender, int64_t timestamp) const;
+    
+    // Check if date separator is needed between two timestamps
+    bool NeedsDateSeparator(int64_t timestamp) const;
     
     // Update last sender/timestamp for grouping decisions
     void SetLastMessage(const wxString& sender, int64_t timestamp);
     
     // Reset grouping state (e.g., when clearing messages or changing date)
     void ResetGroupingState();
+    
+    // Username alignment width (for visual consistency)
+    void SetUsernameWidth(int width) { m_usernameWidth = width; }
+    int GetUsernameWidth() const { return m_usernameWidth; }
+    
+    // Calculate optimal username width from a list of usernames
+    void CalculateUsernameWidth(const std::vector<wxString>& usernames);
+    
+    // Get media type emoji for display
+    static wxString GetMediaEmoji(MediaType type);
     
     // Get date string for a timestamp (for date separator logic)
     static wxString GetDateString(int64_t unixTime);
@@ -97,6 +126,10 @@ public:
     // Get the last media span start/end positions (for hover tracking)
     long GetLastMediaSpanStart() const { return m_lastMediaSpanStart; }
     long GetLastMediaSpanEnd() const { return m_lastMediaSpanEnd; }
+    
+    // Get the last status marker (tick) positions (for tooltip tracking)
+    long GetLastStatusMarkerStart() const { return m_lastStatusMarkerStart; }
+    long GetLastStatusMarkerEnd() const { return m_lastStatusMarkerEnd; }
     
     // Write text with clickable links detected and formatted
     void WriteTextWithLinks(const wxString& text);
@@ -115,6 +148,10 @@ private:
     long m_lastMediaSpanStart;
     long m_lastMediaSpanEnd;
     
+    // Last status marker (tick) positions
+    long m_lastStatusMarkerStart;
+    long m_lastStatusMarkerEnd;
+    
     // Unread marker position tracking
     long m_unreadMarkerStart;
     long m_unreadMarkerEnd;
@@ -126,7 +163,31 @@ private:
     wxString m_lastSender;
     int64_t m_lastTimestamp;
     int64_t m_lastDateDay;  // Day number for date separator logic
-    static const int GROUP_TIME_WINDOW_SECONDS = 300;  // 5 minutes
+    static const int GROUP_TIME_WINDOW_SECONDS = 120;  // 2 minutes for tighter grouping
+    
+    // Username alignment
+    int m_usernameWidth;  // Width in characters for username column
+    static const int DEFAULT_USERNAME_WIDTH = 12;
+    static const int MIN_USERNAME_WIDTH = 8;
+    static const int MAX_USERNAME_WIDTH = 16;
+    
+    // Typing indicator tracking
+    long m_typingIndicatorStart;
+    long m_typingIndicatorEnd;
+    
+    // Helper to write username in angle brackets
+    void WriteAlignedUsername(const wxString& sender);
+    
+    // Helper to write status ticks at end of message
+    void WriteStatusSuffix(MessageStatus status, bool statusHighlight = false);
+    
+    // Helper to write continuation line prefix (spacing to align with messages)
+    void WriteContinuationPrefix();
+    
+    // Helper to write text with proper multi-line handling
+    // For multi-line messages, adds status ticks after first line
+    void WriteTextWithLineHandling(const wxString& text, MessageStatus status = MessageStatus::None,
+                                    bool statusHighlight = false);
 };
 
 #endif // MESSAGEFORMATTER_H
