@@ -1522,17 +1522,28 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
         // This is more reliable than guessing taskbar height
         int effectiveScreenBottom = screenRect.GetBottom();
         
-        // Get parent window to use its bottom as boundary
-        wxWindow* parent = GetParent();
-        if (parent) {
-            wxPoint parentPos = parent->GetScreenPosition();
-            wxSize parentSize = parent->GetSize();
-            int parentBottom = parentPos.y + parentSize.GetHeight();
-            // Use the smaller of screen bottom and parent bottom
-            effectiveScreenBottom = std::min(effectiveScreenBottom, parentBottom);
-            MPLOG("ApplySizeAndPosition: parentPos=(" << parentPos.x << "," << parentPos.y << ")"
-                  << " parentSize=(" << parentSize.GetWidth() << "," << parentSize.GetHeight() << ")"
-                  << " parentBottom=" << parentBottom);
+        // Determine the limiting bottom coordinate
+        int limitBottom = -1;
+        
+        if (m_parentBottom > 0) {
+            limitBottom = m_parentBottom;
+            MPLOG("ApplySizeAndPosition: using explicit m_parentBottom=" << m_parentBottom);
+        } else {
+            // Fallback to parent window bounds
+            wxWindow* parent = GetParent();
+            if (parent) {
+                wxPoint parentPos = parent->GetScreenPosition();
+                wxSize parentSize = parent->GetSize();
+                limitBottom = parentPos.y + parentSize.GetHeight();
+                MPLOG("ApplySizeAndPosition: parentPos=(" << parentPos.x << "," << parentPos.y << ")"
+                      << " parentSize=(" << parentSize.GetWidth() << "," << parentSize.GetHeight() << ")"
+                      << " parentBottom=" << limitBottom);
+            }
+        }
+        
+        if (limitBottom > 0) {
+            // Use the smaller of screen bottom and limit bottom
+            effectiveScreenBottom = std::min(effectiveScreenBottom, limitBottom);
         }
         
         // Add a small margin to ensure popup doesn't touch the edge
@@ -1602,6 +1613,7 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
     // On GTK, popup windows are notoriously difficult to reposition and resize.
     // The most reliable sequence is to hide, set new geometry, and then show again,
     // followed by a forced layout and refresh.
+#ifdef __WXGTK__
     Hide();
 
     // On GTK, when showing below, the resize sometimes fails. A more aggressive
@@ -1612,12 +1624,19 @@ void MediaPopup::ApplySizeAndPosition(int width, int height)
         Move(-1000, -1000);
         wxYield(); // Allow GTK to process the move
     }
+#endif
     
     // Use the atomic SetSize(x,y,w,h) form which sets position and size together
     SetSize(targetPos.x, targetPos.y, width, height);
 
     // Now show the window at its new size and position
+#ifdef __WXGTK__
     Show();
+#else
+    if (!IsShown()) {
+        Show();
+    }
+#endif
     Raise();
     
     // Force a layout and full refresh to ensure content is drawn correctly in the new size
