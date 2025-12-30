@@ -87,6 +87,7 @@ private:
     void CreateMemberList(wxWindow* parent);
     void SetupColors();
     void SetupFonts();
+    void ApplySavedFonts();
     void PopulateDummyData();
     
     // Transfer handling

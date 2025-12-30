@@ -12,6 +12,8 @@
 #include <wx/settings.h>
 #include <wx/filename.h>
 #include <wx/config.h>
+#include <wx/fontpicker.h>
+#include <wx/statbox.h>
 #include <ctime>
 
 // Helper function to format last seen time
@@ -115,6 +117,9 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     SetupFonts();
     CreateMenuBar();
     CreateMainLayout();
+    
+    // Apply saved fonts to widgets (must be after CreateMainLayout)
+    ApplySavedFonts();
 
     // Setup status bar manager
     m_statusBar = new StatusBarManager(this);
@@ -238,23 +243,114 @@ void MainFrame::SetupColors()
 
 void MainFrame::SetupFonts()
 {
-    // Use native system fonts for 100% native look & feel
+    // Default fonts - native system fonts for 100% native look & feel
     wxFont defaultFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
 #ifdef __WXGTK__
-    wxFont fixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+    wxFont defaultFixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
 #else
-    wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+    wxFont defaultFixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
 #endif
     
-    // For chat display, use the system fixed-width font
-    m_chatFont = fixedFont;
+    // Ensure default fonts have reasonable sizes
+    if (defaultFont.GetPointSize() <= 0) {
+        defaultFont.SetPointSize(11);
+    }
+    if (defaultFixedFont.GetPointSize() <= 0) {
+        defaultFixedFont.SetPointSize(10);
+    }
     
-    // For tree/list controls, use the default GUI font
-    m_treeFont = defaultFont;
-    m_memberListFont = defaultFont;
+    // Load saved fonts from config, or use defaults
+    wxConfigBase* config = wxConfigBase::Get();
     
-    // Input uses the same fixed-width font as chat
-    m_inputFont = fixedFont;
+    // Chat font (for chat display and input box)
+    wxString chatFontStr = config ? config->Read("/Fonts/ChatFont", "") : "";
+    int chatFontSize = config ? config->ReadLong("/Fonts/ChatFontSize", 0) : 0;
+    if (!chatFontStr.IsEmpty()) {
+        wxFont savedFont;
+        if (savedFont.SetNativeFontInfo(chatFontStr) && savedFont.IsOk()) {
+            // Validate the font has a reasonable size
+            int pointSize = savedFont.GetPointSize();
+            if (pointSize <= 0 && chatFontSize > 0 && chatFontSize < 200) {
+                // Use saved size as fallback
+                savedFont.SetPointSize(chatFontSize);
+                pointSize = chatFontSize;
+            }
+            if (pointSize > 0 && pointSize < 200) {
+                m_chatFont = savedFont;
+            } else {
+                // Font loaded but size is invalid, use default
+                m_chatFont = defaultFixedFont;
+            }
+        } else {
+            m_chatFont = defaultFixedFont;
+        }
+    } else {
+        m_chatFont = defaultFixedFont;
+    }
+    
+    // UI font (for tree/list controls)
+    wxString uiFontStr = config ? config->Read("/Fonts/UIFont", "") : "";
+    int uiFontSize = config ? config->ReadLong("/Fonts/UIFontSize", 0) : 0;
+    if (!uiFontStr.IsEmpty()) {
+        wxFont savedFont;
+        if (savedFont.SetNativeFontInfo(uiFontStr) && savedFont.IsOk()) {
+            // Validate the font has a reasonable size
+            int pointSize = savedFont.GetPointSize();
+            if (pointSize <= 0 && uiFontSize > 0 && uiFontSize < 200) {
+                // Use saved size as fallback
+                savedFont.SetPointSize(uiFontSize);
+                pointSize = uiFontSize;
+            }
+            if (pointSize > 0 && pointSize < 200) {
+                m_treeFont = savedFont;
+                m_memberListFont = savedFont;
+            } else {
+                // Font loaded but size is invalid, use default
+                m_treeFont = defaultFont;
+                m_memberListFont = defaultFont;
+            }
+        } else {
+            m_treeFont = defaultFont;
+            m_memberListFont = defaultFont;
+        }
+    } else {
+        m_treeFont = defaultFont;
+        m_memberListFont = defaultFont;
+    }
+    
+    // Input uses the same font as chat
+    m_inputFont = m_chatFont;
+}
+
+void MainFrame::ApplySavedFonts()
+{
+    // Apply chat font to ChatViewWidget
+    if (m_chatViewWidget && m_chatViewWidget->GetChatArea()) {
+        m_chatViewWidget->GetChatArea()->SetChatFont(m_chatFont);
+    }
+    
+    // Apply chat font to WelcomeChat and display initial content
+    if (m_welcomeChat && m_welcomeChat->GetChatArea()) {
+        m_welcomeChat->GetChatArea()->SetChatFont(m_chatFont);
+        // Display the welcome text with the correct font
+        // (WelcomeChat constructor no longer calls AppendWelcome)
+        m_welcomeChat->InitialDisplay();
+    }
+    
+    // Apply input font to InputBox
+    if (m_inputBoxWidget) {
+        m_inputBoxWidget->SetInputFont(m_inputFont);
+    }
+    
+    // Apply UI font to chat list
+    if (m_chatListWidget) {
+        m_chatListWidget->SetTreeFont(m_treeFont);
+    }
+    
+    // Apply UI font to member list
+    if (m_memberList) {
+        m_memberList->SetFont(m_memberListFont);
+    }
 }
 
 void MainFrame::CreateMenuBar()
@@ -803,8 +899,72 @@ void MainFrame::OnSavedMessages(wxCommandEvent& event)
 
 void MainFrame::OnPreferences(wxCommandEvent& event)
 {
-    wxDialog dialog(this, wxID_ANY, "Preferences", wxDefaultPosition, wxSize(400, 200));
+    wxDialog dialog(this, wxID_ANY, "Preferences", wxDefaultPosition, wxSize(500, 350));
     wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
+    
+    // Fonts section
+    wxStaticBoxSizer* fontsSizer = new wxStaticBoxSizer(wxVERTICAL, &dialog, "Fonts");
+    
+    // Chat font (for chat display and input box)
+    wxBoxSizer* chatFontSizer = new wxBoxSizer(wxHORIZONTAL);
+    wxStaticText* chatFontLabel = new wxStaticText(&dialog, wxID_ANY, "Chat Font:");
+    chatFontLabel->SetMinSize(wxSize(80, -1));
+    
+    // Ensure we pass a valid font to the picker with explicit size
+    wxFont chatFontForPicker = m_chatFont;
+    if (!chatFontForPicker.IsOk() || chatFontForPicker.GetPointSize() <= 0) {
+#ifdef __WXGTK__
+        chatFontForPicker = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+#else
+        chatFontForPicker = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+        if (chatFontForPicker.GetPointSize() <= 0) {
+            chatFontForPicker.SetPointSize(10);
+        }
+#endif
+    }
+    
+    wxFontPickerCtrl* chatFontPicker = new wxFontPickerCtrl(&dialog, wxID_ANY, chatFontForPicker,
+        wxDefaultPosition, wxDefaultSize, wxFNTP_DEFAULT_STYLE | wxFNTP_USEFONT_FOR_LABEL);
+    chatFontSizer->Add(chatFontLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
+    chatFontSizer->Add(chatFontPicker, 1, wxEXPAND);
+    fontsSizer->Add(chatFontSizer, 0, wxEXPAND | wxALL, 10);
+    
+    // UI font (for chat list, member list, etc.)
+    wxBoxSizer* uiFontSizer = new wxBoxSizer(wxHORIZONTAL);
+    wxStaticText* uiFontLabel = new wxStaticText(&dialog, wxID_ANY, "UI Font:");
+    uiFontLabel->SetMinSize(wxSize(80, -1));
+    
+    // Ensure we pass a valid font to the picker with explicit size
+    wxFont uiFontForPicker = m_treeFont;
+    if (!uiFontForPicker.IsOk() || uiFontForPicker.GetPointSize() <= 0) {
+        uiFontForPicker = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+        if (uiFontForPicker.GetPointSize() <= 0) {
+            uiFontForPicker.SetPointSize(11);
+        }
+    }
+    
+    wxFontPickerCtrl* uiFontPicker = new wxFontPickerCtrl(&dialog, wxID_ANY, uiFontForPicker,
+        wxDefaultPosition, wxDefaultSize, wxFNTP_DEFAULT_STYLE | wxFNTP_USEFONT_FOR_LABEL);
+    uiFontSizer->Add(uiFontLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
+    uiFontSizer->Add(uiFontPicker, 1, wxEXPAND);
+    fontsSizer->Add(uiFontSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+    
+    // Reset fonts button
+    wxButton* resetFontsBtn = new wxButton(&dialog, wxID_ANY, "Reset to Defaults");
+    resetFontsBtn->Bind(wxEVT_BUTTON, [chatFontPicker, uiFontPicker](wxCommandEvent&) {
+        // Reset to system defaults
+        wxFont defaultFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+#ifdef __WXGTK__
+        wxFont defaultFixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
+#else
+        wxFont defaultFixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
+#endif
+        chatFontPicker->SetSelectedFont(defaultFixedFont);
+        uiFontPicker->SetSelectedFont(defaultFont);
+    });
+    fontsSizer->Add(resetFontsBtn, 0, wxALIGN_RIGHT | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+    
+    mainSizer->Add(fontsSizer, 0, wxEXPAND | wxALL, 10);
     
     // Privacy section
     wxStaticBoxSizer* privacySizer = new wxStaticBoxSizer(wxVERTICAL, &dialog, "Privacy");
@@ -815,7 +975,7 @@ void MainFrame::OnPreferences(wxCommandEvent& event)
     }
     privacySizer->Add(readReceiptsCheckbox, 0, wxALL, 10);
     
-    mainSizer->Add(privacySizer, 0, wxEXPAND | wxALL, 10);
+    mainSizer->Add(privacySizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
     
     // Buttons
     wxBoxSizer* buttonSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -836,10 +996,74 @@ void MainFrame::OnPreferences(wxCommandEvent& event)
             m_telegramClient->SetSendReadReceipts(sendReadReceipts);
         }
         
+        // Get selected fonts
+        wxFont newChatFont = chatFontPicker->GetSelectedFont();
+        wxFont newUIFont = uiFontPicker->GetSelectedFont();
+        
+        // Validate and fix font sizes if needed
+        if (newChatFont.IsOk() && newChatFont.GetPointSize() <= 0) {
+            newChatFont.SetPointSize(10);
+        }
+        if (newUIFont.IsOk() && newUIFont.GetPointSize() <= 0) {
+            newUIFont.SetPointSize(11);
+        }
+        
+        // Always apply chat font (font comparison is unreliable in wxWidgets)
+        if (newChatFont.IsOk()) {
+            m_chatFont = newChatFont;
+            m_inputFont = newChatFont;
+            
+            // Apply to ChatViewWidget
+            if (m_chatViewWidget && m_chatViewWidget->GetChatArea()) {
+                m_chatViewWidget->GetChatArea()->SetChatFont(m_chatFont);
+            }
+            
+            // Apply to WelcomeChat
+            if (m_welcomeChat && m_welcomeChat->GetChatArea()) {
+                m_welcomeChat->GetChatArea()->SetChatFont(m_chatFont);
+                // Refresh the welcome display to redraw ASCII art with new font
+                m_welcomeChat->RefreshDisplay();
+            }
+            
+            // Apply to InputBox
+            if (m_inputBoxWidget) {
+                m_inputBoxWidget->SetInputFont(m_inputFont);
+            }
+        }
+        
+        // Always apply UI font (font comparison is unreliable in wxWidgets)
+        if (newUIFont.IsOk()) {
+            m_treeFont = newUIFont;
+            m_memberListFont = newUIFont;
+            
+            // Apply to chat list
+            if (m_chatListWidget) {
+                m_chatListWidget->SetTreeFont(m_treeFont);
+            }
+            
+            // Apply to member list
+            if (m_memberList) {
+                m_memberList->SetFont(m_memberListFont);
+                m_memberList->Refresh();
+            }
+        }
+        
         // Save to config
         wxConfigBase* config = wxConfigBase::Get();
         if (config) {
             config->Write("/Privacy/SendReadReceipts", sendReadReceipts);
+            
+            // Save fonts using native font info string (portable representation)
+            // Also save point size separately for robustness
+            if (m_chatFont.IsOk()) {
+                config->Write("/Fonts/ChatFont", m_chatFont.GetNativeFontInfoDesc());
+                config->Write("/Fonts/ChatFontSize", m_chatFont.GetPointSize());
+            }
+            if (m_treeFont.IsOk()) {
+                config->Write("/Fonts/UIFont", m_treeFont.GetNativeFontInfoDesc());
+                config->Write("/Fonts/UIFontSize", m_treeFont.GetPointSize());
+            }
+            
             config->Flush();
         }
     }

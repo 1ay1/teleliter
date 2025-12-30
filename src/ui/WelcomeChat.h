@@ -60,6 +60,12 @@ public:
     // Get the underlying display (for compatibility)
     wxRichTextCtrl* GetChatDisplay() { return m_chatArea ? m_chatArea->GetDisplay() : nullptr; }
     
+    // Refresh display after font change (redraws welcome text with new font)
+    void RefreshDisplay();
+    
+    // Initial display - called by MainFrame after fonts are configured
+    void InitialDisplay();
+    
 private:
     void CreateUI();
     

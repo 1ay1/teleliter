@@ -4,27 +4,24 @@
 
 ChatArea::ChatArea(wxWindow *parent, wxWindowID id)
     : wxPanel(parent, id), m_chatDisplay(nullptr), m_wasAtBottom(true),
-      m_batchDepth(0) {
+      m_batchDepth(0), m_refreshPending(false) {
   SetupColors();
   CreateUI();
 }
 
 void ChatArea::SetupColors() {
   // Use native system font
-#ifdef __WXGTK__
-  // On Linux/GTK, wxSYS_ANSI_FIXED_FONT might not return a monospace font
-  // Force a monospace font using the TELETYPE family
-  m_chatFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
-#else
-  m_chatFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
-#endif
+  // Force a monospace font using the TELETYPE family for all platforms
+  // This ensures ASCII art renders correctly and gives the desired HexChat look
+  m_chatFont = wxFont(wxFontInfo(12).Family(wxFONTFAMILY_TELETYPE));
 
   // Only set colors that are actually needed for semantic meaning
   // All other colors will use native defaults
   m_errorColor = wxColour(0xCC, 0x00, 0x00);   // Red for errors
   m_successColor = wxColour(0x00, 0x80, 0x00); // Green for success
   m_readColor = wxColour(0x00, 0xAA, 0x00);    // Green for read status (✓✓)
-  m_readHighlightColor = wxColour(0x00, 0xFF, 0x44); // Bright green for recently read
+  m_readHighlightColor =
+      wxColour(0x00, 0xFF, 0x44); // Bright green for recently read
 
   // User colors for sender names - need distinct colors for different users
   m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
@@ -58,9 +55,14 @@ void ChatArea::CreateUI() {
   // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
   m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
 
-  // Only set font in default style, let colors be native
+  // Set font and line spacing in default style to prevent text overlap
   wxRichTextAttr defaultStyle;
   defaultStyle.SetFont(m_chatFont);
+  // Set proper line spacing to avoid overlap issues
+  defaultStyle.SetLineSpacing(
+      10); // 10 = single line spacing (wxTEXT_ATTR_LINE_SPACING_NORMAL)
+  defaultStyle.SetParagraphSpacingBefore(0);
+  defaultStyle.SetParagraphSpacingAfter(0);
   m_chatDisplay->SetDefaultStyle(defaultStyle);
   m_chatDisplay->SetBasicStyle(defaultStyle);
 
@@ -97,8 +99,51 @@ void ChatArea::ResetStyles() {
   m_chatDisplay->SetBasicStyle(defaultStyle);
 }
 
+void ChatArea::SetChatFont(const wxFont &font) {
+  if (!font.IsOk())
+    return;
+
+  m_chatFont = font;
+
+  if (m_chatDisplay) {
+    // Freeze to prevent rendering issues during font change
+    m_chatDisplay->Freeze();
+
+    m_chatDisplay->SetFont(m_chatFont);
+
+    // Update default and basic styles for new text
+    wxRichTextAttr defaultStyle;
+    defaultStyle.SetFont(m_chatFont);
+    defaultStyle.SetLineSpacing(10);
+    defaultStyle.SetParagraphSpacingBefore(0);
+    defaultStyle.SetParagraphSpacingAfter(0);
+    m_chatDisplay->SetDefaultStyle(defaultStyle);
+    m_chatDisplay->SetBasicStyle(defaultStyle);
+
+    // Apply font to ALL existing text WITHOUT using selection
+    // This avoids visual artifacts caused by selection-based style changes
+    long textLength = m_chatDisplay->GetLastPosition();
+    if (textLength > 0) {
+      wxRichTextAttr fontAttr;
+      fontAttr.SetFont(m_chatFont);
+      // Use SetStyleEx without selection - apply directly to range
+      m_chatDisplay->SetStyleEx(wxRichTextRange(0, textLength), fontAttr,
+                                wxRICHTEXT_SETSTYLE_OPTIMIZE);
+    }
+
+    // Force layout recalculation
+    m_chatDisplay->LayoutContent();
+
+    m_chatDisplay->Thaw();
+    m_chatDisplay->Refresh();
+    m_chatDisplay->Update();
+  }
+}
+
 void ChatArea::ScrollToBottom() {
   m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+  m_chatDisplay->Refresh();
+  m_chatDisplay->Update();
 }
 
 void ChatArea::ScrollToBottomIfAtBottom() {
@@ -132,11 +177,46 @@ void ChatArea::EndBatchUpdate() {
     m_batchDepth--;
     if (m_batchDepth == 0) {
       m_chatDisplay->Thaw();
+      DoRefresh();
       if (m_wasAtBottom) {
         ScrollToBottom();
       }
     }
   }
+}
+
+void ChatArea::ScheduleRefresh() {
+  // If we're in a batch update, don't schedule individual refreshes
+  if (m_batchDepth > 0) {
+    return;
+  }
+
+  // If a refresh is already pending, don't schedule another
+  if (m_refreshPending) {
+    return;
+  }
+
+  m_refreshPending = true;
+
+  // Use CallAfter to coalesce multiple rapid updates into a single refresh
+  // This runs after the current event processing is complete
+  CallAfter([this]() {
+    if (m_refreshPending) {
+      DoRefresh();
+      m_refreshPending = false;
+    }
+  });
+}
+
+void ChatArea::DoRefresh() {
+  if (!m_chatDisplay) {
+    return;
+  }
+
+  // Force layout recalculation and repaint
+  m_chatDisplay->LayoutContent();
+  m_chatDisplay->Refresh();
+  m_chatDisplay->Update();
 }
 
 wxString ChatArea::GetCurrentTimestamp() {
@@ -149,48 +229,49 @@ void ChatArea::WriteTimestamp(const wxString &timestamp) {
   WriteTimestamp(timestamp, MessageStatus::None, false);
 }
 
-void ChatArea::WriteTimestamp(const wxString &timestamp, MessageStatus status, bool highlight) {
+void ChatArea::WriteTimestamp(const wxString &timestamp, MessageStatus status,
+                              bool highlight) {
   if (!m_chatDisplay)
     return;
   m_chatDisplay->BeginTextColour(GetTimestampColor());
   m_chatDisplay->WriteText("[" + timestamp + "]");
   m_chatDisplay->EndTextColour();
-  
+
   // Write status marker if applicable
   if (status != MessageStatus::None) {
     WriteStatusMarker(status, highlight);
   }
-  
+
   m_chatDisplay->WriteText(" ");
 }
 
 void ChatArea::WriteStatusMarker(MessageStatus status, bool highlight) {
   if (!m_chatDisplay)
     return;
-  
+
   switch (status) {
-    case MessageStatus::Sending:
-      m_chatDisplay->BeginTextColour(GetTimestampColor());
-      m_chatDisplay->WriteText("...");
-      m_chatDisplay->EndTextColour();
-      break;
-    case MessageStatus::Sent:
-      m_chatDisplay->BeginTextColour(GetSentColor());
-      m_chatDisplay->WriteText("\u2713");  // ✓
-      m_chatDisplay->EndTextColour();
-      break;
-    case MessageStatus::Read:
-      if (highlight) {
-        m_chatDisplay->BeginTextColour(m_readHighlightColor);
-      } else {
-        m_chatDisplay->BeginTextColour(m_readColor);
-      }
-      m_chatDisplay->WriteText("\u2713\u2713");  // ✓✓
-      m_chatDisplay->EndTextColour();
-      break;
-    case MessageStatus::None:
-    default:
-      break;
+  case MessageStatus::Sending:
+    m_chatDisplay->BeginTextColour(GetTimestampColor());
+    m_chatDisplay->WriteText("...");
+    m_chatDisplay->EndTextColour();
+    break;
+  case MessageStatus::Sent:
+    m_chatDisplay->BeginTextColour(GetSentColor());
+    m_chatDisplay->WriteText("\u2713"); // ✓
+    m_chatDisplay->EndTextColour();
+    break;
+  case MessageStatus::Read:
+    if (highlight) {
+      m_chatDisplay->BeginTextColour(m_readHighlightColor);
+    } else {
+      m_chatDisplay->BeginTextColour(m_readColor);
+    }
+    m_chatDisplay->WriteText("\u2713\u2713"); // ✓✓
+    m_chatDisplay->EndTextColour();
+    break;
+  case MessageStatus::None:
+  default:
+    break;
   }
 }
 
@@ -202,6 +283,8 @@ void ChatArea::AppendInfo(const wxString &message) {
   m_chatDisplay->BeginTextColour(GetInfoColor());
   m_chatDisplay->WriteText("* " + message + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendError(const wxString &message) {
@@ -212,6 +295,8 @@ void ChatArea::AppendError(const wxString &message) {
   m_chatDisplay->BeginTextColour(m_errorColor);
   m_chatDisplay->WriteText("* Error: " + message + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendSuccess(const wxString &message) {
@@ -222,6 +307,8 @@ void ChatArea::AppendSuccess(const wxString &message) {
   m_chatDisplay->BeginTextColour(m_successColor);
   m_chatDisplay->WriteText("* " + message + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendPrompt(const wxString &prompt) {
@@ -232,6 +319,8 @@ void ChatArea::AppendPrompt(const wxString &prompt) {
   m_chatDisplay->BeginTextColour(GetPromptColor());
   m_chatDisplay->WriteText(">> " + prompt + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendUserInput(const wxString &input) {
@@ -242,6 +331,8 @@ void ChatArea::AppendUserInput(const wxString &input) {
   m_chatDisplay->BeginTextColour(GetFgColor());
   m_chatDisplay->WriteText("> " + input + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendService(const wxString &message) {
@@ -252,6 +343,8 @@ void ChatArea::AppendService(const wxString &message) {
   m_chatDisplay->BeginTextColour(GetServiceColor());
   m_chatDisplay->WriteText("* " + message + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendMessage(const wxString &sender, const wxString &message) {
@@ -276,6 +369,8 @@ void ChatArea::AppendMessage(const wxString &timestamp, const wxString &sender,
   m_chatDisplay->BeginTextColour(GetFgColor());
   m_chatDisplay->WriteText(message + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendAction(const wxString &sender, const wxString &action) {
@@ -295,6 +390,8 @@ void ChatArea::AppendAction(const wxString &timestamp, const wxString &sender,
   m_chatDisplay->EndBold();
   m_chatDisplay->WriteText(" " + action + "\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendJoin(const wxString &user) {
@@ -309,6 +406,8 @@ void ChatArea::AppendJoin(const wxString &timestamp, const wxString &user) {
   m_chatDisplay->BeginTextColour(GetServiceColor());
   m_chatDisplay->WriteText("--> " + user + " has joined\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::AppendLeave(const wxString &user) {
@@ -323,6 +422,8 @@ void ChatArea::AppendLeave(const wxString &timestamp, const wxString &user) {
   m_chatDisplay->BeginTextColour(GetServiceColor());
   m_chatDisplay->WriteText("<-- " + user + " has left\n");
   m_chatDisplay->EndTextColour();
+
+  ScheduleRefresh();
 }
 
 void ChatArea::SetUserColors(const wxColour colors[16]) {

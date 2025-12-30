@@ -151,8 +151,9 @@ void ChatListWidget::SetTreeFont(const wxFont& font)
 {
     m_font = font;
     
-    // Let tree control use native font - don't override
-    if (m_chatTree) {
+    // Apply font to tree control
+    if (m_chatTree && font.IsOk()) {
+        m_chatTree->SetFont(font);
         m_chatTree->Refresh();
     }
 }
