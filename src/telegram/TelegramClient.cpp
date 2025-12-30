@@ -2391,6 +2391,10 @@ void TelegramClient::PostToMainThread(std::function<void()> func)
 
 void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
 {
+    // Clear the refresh pending flag FIRST so subsequent SetDirty calls can post new events
+    // This avoids a race condition where updates occurring during processing would be missed
+    m_uiRefreshPending.store(false);
+
     // REACTIVE MVC: First, tell MainFrame to poll dirty flags
     // This handles all the frequent updates (messages, downloads, chat list)
     if (m_mainFrame) {
@@ -2420,9 +2424,6 @@ void TelegramClient::OnTdlibUpdate(wxThreadEvent& event)
             }
         }
     }
-    
-    // Clear the refresh pending flag so next SetDirty can post again
-    m_uiRefreshPending.store(false);
 }
 
 // ===== REACTIVE MVC API IMPLEMENTATION =====

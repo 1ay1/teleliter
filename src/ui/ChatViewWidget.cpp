@@ -260,9 +260,15 @@ void ChatViewWidget::RefreshDisplay() {
 
   CVWLOG("RefreshDisplay: rendering " << m_messages.size() << " messages");
 
-  // Check actual scroll position RIGHT BEFORE clearing - not the cached value
-  // This ensures we capture the true scroll state before destroying content
-  bool shouldScrollToBottom = IsAtBottom();
+  // Use member variable for scroll state - it's updated by user actions
+  // and explicitly set when user sends a message
+  bool shouldScrollToBottom = m_wasAtBottom;
+
+  // Capture current scroll position to restore if not scrolling to bottom
+  long savedFirstVisiblePos = -1;
+  if (!shouldScrollToBottom && m_chatArea && m_chatArea->GetDisplay()) {
+    savedFirstVisiblePos = m_chatArea->GetDisplay()->GetFirstVisiblePosition();
+  }
 
   // Clear display but keep message storage
   m_chatArea->Clear();
@@ -321,13 +327,18 @@ void ChatViewWidget::RefreshDisplay() {
   EndBatchUpdate();
 
   // Restore scroll position - use CallAfter to ensure layout is complete
-  if (shouldScrollToBottom) {
-    CallAfter([this]() {
-      if (m_chatArea) {
-        m_chatArea->ScrollToBottom();
-      }
-    });
-  }
+  CallAfter([this, shouldScrollToBottom, savedFirstVisiblePos]() {
+    if (!m_chatArea)
+      return;
+
+    if (shouldScrollToBottom) {
+      m_chatArea->ScrollToBottom();
+    } else if (savedFirstVisiblePos > 0) {
+      // Restore previous position if we weren't at bottom
+      // ShowPosition scrolls so the position is visible
+      m_chatArea->GetDisplay()->ShowPosition(savedFirstVisiblePos);
+    }
+  });
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
@@ -1671,197 +1682,137 @@ void ChatViewWidget::OnSize(wxSizeEvent &event) {
 }
 
 void ChatViewWidget::OnNewMessageButtonClick(wxCommandEvent &event) {
+  // Hide the button
+  HideNewMessageIndicator();
+
+  // Scroll to bottom
+  m_wasAtBottom = true;
   ScrollToBottom();
 }
 
 void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
-  int keyCode = event.GetKeyCode();
-
-  switch (keyCode) {
-  case WXK_HOME:
-    if (m_chatArea && m_chatArea->GetDisplay()) {
-      m_chatArea->GetDisplay()->ShowPosition(0);
-      m_wasAtBottom = false;
-    }
-    break;
-
-  case WXK_END:
-    ScrollToBottom();
-    break;
-
-  case WXK_PAGEUP:
-  case WXK_PAGEDOWN:
-    event.Skip(); // Let default handling work
-    // Update scroll state after
-    CallAfter([this]() {
-      m_wasAtBottom = IsAtBottom();
-      if (m_wasAtBottom) {
-        HideNewMessageIndicator();
-      }
-    });
-    break;
-
-  case 'C':
-  case 'c':
-    if (event.ControlDown() || event.CmdDown()) {
-      // Copy selected text
-      wxRichTextCtrl *display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-      if (display && display->CanCopy()) {
-        display->Copy();
-      }
-    } else {
-      event.Skip();
-    }
-    break;
-
-  default:
-    // Forward printable characters to input box
-    if (!event.ControlDown() && !event.AltDown() && !event.CmdDown()) {
-      int keyCode = event.GetKeyCode();
-      // Check if it's a printable character
-      if (keyCode >= 32 && keyCode < 127) {
-        InputBoxWidget *inputBox =
-            m_mainFrame ? m_mainFrame->GetInputBoxWidget() : nullptr;
-        if (inputBox) {
-          inputBox->SetFocus();
-          // Add the character to the input box
-          wxStyledTextCtrl *stc = inputBox->GetTextCtrl();
-          if (stc) {
-            wxString ch((wxChar)keyCode);
-            if (event.ShiftDown()) {
-              stc->AddText(ch);
-            } else {
-              stc->AddText(ch.Lower());
-            }
-          }
-          return;
-        }
-      }
-    }
-    event.Skip();
-    break;
+  // Check for copy shortcut (Ctrl+C or Cmd+C)
+  if (event.GetModifiers() == wxMOD_CMD && event.GetKeyCode() == 'C') {
+    OnCopyText(reinterpret_cast<wxCommandEvent &>(event));
+    return;
   }
+
+  event.Skip();
 }
 
 void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
                                       int64_t messageId) {
-  m_readMarkerSpans.push_back({startPos, endPos, messageId});
+  ReadMarkerSpan span;
+  span.startPos = startPos;
+  span.endPos = endPos;
+  span.messageId = messageId;
+  m_readMarkerSpans.push_back(span);
 }
 
 void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
-  if (m_lastReadOutboxId != lastReadOutboxId) {
-    // If getting a new read update, mark messages in range as read at this time
-    if (lastReadOutboxId > m_lastReadOutboxId && readTime > 0) {
-      std::lock_guard<std::mutex> lock(m_messagesMutex);
-      for (const auto &msg : m_messages) {
-        if (msg.isOutgoing && msg.id > m_lastReadOutboxId &&
-            msg.id <= lastReadOutboxId) {
-          m_messageReadTimes[msg.id] = readTime;
-        }
-      }
-    }
-
-    m_lastReadOutboxId = lastReadOutboxId;
-    // Re-render messages to update read status indicators
-    RefreshDisplay();
-  }
-}
-void ChatViewWidget::OnRightDown(wxMouseEvent &event) {
-  wxPoint pos = event.GetPosition();
-  long textPos;
-
-  wxRichTextCtrl *display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-  if (!display) {
-    event.Skip();
+  if (lastReadOutboxId <= m_lastReadOutboxId) {
     return;
   }
 
-  wxTextCtrlHitTestResult hit = display->HitTest(pos, &textPos);
+  m_lastReadOutboxId = lastReadOutboxId;
 
-  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
-    m_contextMenuPos = textPos;
+  // We could update all displayed messages here, but that's expensive
+  // Instead, we just trigger a refresh which will re-render everything
+  // correctly with [R] markers
+  ScheduleRefresh();
+}
 
-    // Check what's at this position
-    m_contextMenuLink = GetLinkAtPosition(textPos);
+void ChatViewWidget::OnRightDown(wxMouseEvent &event) {
+  // Get position in text control
+  if (!m_chatArea || !m_chatArea->GetDisplay())
+    return;
 
-    MediaSpan *mediaSpan = GetMediaSpanAtPosition(textPos);
+  wxRichTextCtrl *display = m_chatArea->GetDisplay();
+  wxPoint pos = event.GetPosition();
+  wxTextCoord col, row;
+  long charPos = 0;
+
+  // Hit test to find character position
+  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
+  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
+      wxRICHTEXT_HITTEST_NONE) {
+    // Find what's at this position
+    MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
+    LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
+
+    if (linkSpan) {
+      m_contextMenuLink = linkSpan->url;
+    } else {
+      m_contextMenuLink.Clear();
+    }
+
     if (mediaSpan) {
-      // Get fresh MediaInfo from m_messages (single source of truth)
       m_contextMenuMedia = GetMediaInfoForSpan(*mediaSpan);
     } else {
       m_contextMenuMedia = MediaInfo();
     }
 
-    ShowContextMenu(display->ClientToScreen(pos));
-  } else {
-    event.Skip();
+    m_contextMenuPos = charPos;
+    ShowContextMenu(event.GetPosition());
   }
 }
 
 wxString ChatViewWidget::GetSelectedText() const {
   if (m_chatArea && m_chatArea->GetDisplay()) {
-    return m_chatArea->GetDisplay()->GetStringSelection();
+    if (m_chatArea->GetDisplay()->HasSelection()) {
+      return m_chatArea->GetDisplay()->GetStringSelection();
+    }
   }
-  return wxString();
+  return "";
 }
 
 wxString ChatViewWidget::GetLinkAtPosition(long pos) const {
-  for (const auto &span : m_linkSpans) {
-    if (pos >= span.startPos && pos < span.endPos) {
-      return span.url;
-    }
+  // This is used for right click - we've already done the lookup in OnRightDown
+  if (pos == m_contextMenuPos && !m_contextMenuLink.IsEmpty()) {
+    return m_contextMenuLink;
   }
-  return wxString();
+  return "";
 }
 
 void ChatViewWidget::ShowContextMenu(const wxPoint &pos) {
   wxMenu menu;
 
-  // Copy option (always available if text is selected)
-  wxString selectedText = GetSelectedText();
-  if (!selectedText.IsEmpty()) {
-    menu.Append(ID_COPY_TEXT, "Copy\tCtrl+C");
+  bool hasSelection = !GetSelectedText().IsEmpty();
+  bool hasLink = !m_contextMenuLink.IsEmpty();
+  bool hasMedia = (m_contextMenuMedia.fileId != 0 ||
+                   !m_contextMenuMedia.localPath.IsEmpty());
+
+  if (hasSelection) {
+    menu.Append(ID_COPY_TEXT, "Copy");
+    Bind(wxEVT_MENU, &ChatViewWidget::OnCopyText, this, ID_COPY_TEXT);
   }
 
-  // Link options
-  if (!m_contextMenuLink.IsEmpty()) {
-    menu.AppendSeparator();
-    menu.Append(ID_OPEN_LINK, "Open Link");
+  if (hasLink) {
     menu.Append(ID_COPY_LINK, "Copy Link");
+    menu.Append(ID_OPEN_LINK, "Open Link");
+    Bind(wxEVT_MENU, &ChatViewWidget::OnCopyLink, this, ID_COPY_LINK);
+    Bind(wxEVT_MENU, &ChatViewWidget::OnOpenLink, this, ID_OPEN_LINK);
   }
 
-  // Media options
-  if (m_contextMenuMedia.fileId != 0 ||
-      !m_contextMenuMedia.localPath.IsEmpty()) {
-    menu.AppendSeparator();
-    if (!m_contextMenuMedia.localPath.IsEmpty() &&
-        wxFileExists(m_contextMenuMedia.localPath)) {
-      menu.Append(ID_OPEN_MEDIA, "Open Media");
-      menu.Append(ID_SAVE_MEDIA, "Save As...");
-    }
+  if (hasMedia) {
+    menu.Append(ID_SAVE_MEDIA, "Save As...");
+    menu.Append(ID_OPEN_MEDIA, "Open Media");
+    Bind(wxEVT_MENU, &ChatViewWidget::OnSaveMedia, this, ID_SAVE_MEDIA);
+    Bind(wxEVT_MENU, &ChatViewWidget::OnOpenMedia, this, ID_OPEN_MEDIA);
   }
 
-  // Bind handlers
-  Bind(wxEVT_MENU, &ChatViewWidget::OnCopyText, this, ID_COPY_TEXT);
-  Bind(wxEVT_MENU, &ChatViewWidget::OnCopyLink, this, ID_COPY_LINK);
-  Bind(wxEVT_MENU, &ChatViewWidget::OnOpenLink, this, ID_OPEN_LINK);
-  Bind(wxEVT_MENU, &ChatViewWidget::OnSaveMedia, this, ID_SAVE_MEDIA);
-  Bind(wxEVT_MENU, &ChatViewWidget::OnOpenMedia, this, ID_OPEN_MEDIA);
-
-  PopupMenu(&menu);
-
-  // Unbind handlers
-  Unbind(wxEVT_MENU, &ChatViewWidget::OnCopyText, this, ID_COPY_TEXT);
-  Unbind(wxEVT_MENU, &ChatViewWidget::OnCopyLink, this, ID_COPY_LINK);
-  Unbind(wxEVT_MENU, &ChatViewWidget::OnOpenLink, this, ID_OPEN_LINK);
-  Unbind(wxEVT_MENU, &ChatViewWidget::OnSaveMedia, this, ID_SAVE_MEDIA);
-  Unbind(wxEVT_MENU, &ChatViewWidget::OnOpenMedia, this, ID_OPEN_MEDIA);
+  if (menu.GetMenuItemCount() > 0) {
+    PopupMenu(&menu, pos);
+  }
 }
 
 void ChatViewWidget::OnCopyText(wxCommandEvent &event) {
-  wxRichTextCtrl *display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-  if (display && display->CanCopy()) {
-    display->Copy();
+  wxString text = GetSelectedText();
+  if (!text.IsEmpty()) {
+    if (wxTheClipboard->Open()) {
+      wxTheClipboard->SetData(new wxTextDataObject(text));
+      wxTheClipboard->Close();
+    }
   }
 }
 
@@ -1876,234 +1827,137 @@ void ChatViewWidget::OnCopyLink(wxCommandEvent &event) {
 
 void ChatViewWidget::OnOpenLink(wxCommandEvent &event) {
   if (!m_contextMenuLink.IsEmpty()) {
-    wxLaunchDefaultBrowser(m_contextMenuLink);
+    wxLaunchDefaultApplication(m_contextMenuLink);
   }
 }
 
 void ChatViewWidget::OnSaveMedia(wxCommandEvent &event) {
-  if (m_contextMenuMedia.localPath.IsEmpty() ||
-      !wxFileExists(m_contextMenuMedia.localPath)) {
+  if (m_contextMenuMedia.fileId == 0 &&
+      m_contextMenuMedia.localPath.IsEmpty()) {
     return;
   }
 
-  wxFileName fn(m_contextMenuMedia.localPath);
-  wxString defaultName = m_contextMenuMedia.fileName.IsEmpty()
-                             ? fn.GetFullName()
-                             : m_contextMenuMedia.fileName;
-
-  wxFileDialog saveDialog(this, "Save Media As", "", defaultName,
-                          "All files (*.*)|*.*",
-                          wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
-
-  if (saveDialog.ShowModal() == wxID_OK) {
-    wxCopyFile(m_contextMenuMedia.localPath, saveDialog.GetPath());
-  }
+  // TODO: Implement save dialog
+  wxMessageBox("Save As not implemented yet", "Info", wxICON_INFORMATION);
 }
 
 void ChatViewWidget::OnOpenMedia(wxCommandEvent &event) {
-  if (!m_contextMenuMedia.localPath.IsEmpty() &&
-      wxFileExists(m_contextMenuMedia.localPath)) {
-    wxLaunchDefaultApplication(m_contextMenuMedia.localPath);
+  if (m_contextMenuMedia.fileId != 0 ||
+      !m_contextMenuMedia.localPath.IsEmpty()) {
+    OpenMedia(m_contextMenuMedia);
   }
 }
 
 void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
-  wxPoint pos = event.GetPosition();
-  long textPos;
-
-  wxRichTextCtrl *ctrl = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-  if (!ctrl) {
-    event.Skip();
+  if (!m_chatArea || !m_chatArea->GetDisplay())
     return;
-  }
 
-  // Just update cursor - no hover popup anymore (popup is click-only now)
-  wxTextCtrlHitTestResult hit = ctrl->HitTest(pos, &textPos);
+  wxRichTextCtrl *display = m_chatArea->GetDisplay();
+  wxPoint pos = event.GetPosition();
+  wxTextCoord col, row;
+  long charPos = 0;
 
-  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
-    // Check for [R] marker - look at surrounding text for tooltip
-    // Get the line at this position
-    long x, y;
-    ctrl->PositionToXY(textPos, &x, &y);
-    long lineStart = ctrl->XYToPosition(0, y);
-    wxString lineText = ctrl->GetRange(
-        lineStart, std::min(lineStart + 100, ctrl->GetLastPosition()));
-
-    // Check if this line has [R] and cursor is near it
-    // Check if this line has [R] and cursor is near it
-    int rPos = lineText.Find("[R]");
-    if (rPos != wxNOT_FOUND && textPos >= lineStart + rPos &&
-        textPos <= lineStart + rPos + 3) {
-      // Find which message this [R] belongs to
-      int64_t msgId = 0;
-      for (const auto &span : m_readMarkerSpans) {
-        // Check if textPos is within the message span including the [R] marker
-        // We expand the check a bit to be safe
-        if (textPos >= span.startPos && textPos <= span.endPos + 4) {
-          msgId = span.messageId;
-          break;
-        }
-      }
-
-      // Get read time for this specific message
-      int64_t readTime = 0;
-      if (msgId != 0) {
-        auto it = m_messageReadTimes.find(msgId);
-        if (it != m_messageReadTimes.end()) {
-          readTime = it->second;
-        }
-      }
-
-      // Show read time in status bar for instant feedback
-      wxString statusText;
-      if (readTime > 0) {
-        std::time_t now = std::time(nullptr);
-        std::time_t rt = static_cast<std::time_t>(readTime);
-        double diff = std::difftime(now, rt);
-
-        wxString relativeTime;
-        if (diff < 60) {
-          relativeTime = "Read just now";
-        } else if (diff < 3600) {
-          relativeTime =
-              wxString::Format("Read %d mins ago", static_cast<int>(diff / 60));
-        } else if (diff < 86400) {
-          relativeTime = wxString::Format("Read %d hours ago",
-                                          static_cast<int>(diff / 3600));
-        } else {
-          relativeTime = wxString::Format("Read %d days ago",
-                                          static_cast<int>(diff / 86400));
-        }
-
-        std::tm *tm = std::localtime(&rt);
-        char timeStr[64];
-        std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", tm);
-
-        statusText = wxString::Format("%s (%s)", relativeTime, timeStr);
-      } else {
-        statusText = "Message read by recipient";
-      }
-
-      // Update status bar via MainFrame using override mechanism
-      if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
-        m_mainFrame->GetStatusBarManager()->SetOverrideStatus(statusText);
-      }
-      m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
-      event.Skip();
-      return;
-    }
-
-    // Clear override if not on [R]
-    if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
-      m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
-    }
-
-    // Check for media span
-    MediaSpan *span = GetMediaSpanAtPosition(textPos);
-    if (span) {
-      m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
-      event.Skip();
-      return;
-    }
-
-    // Check for link span
-    LinkSpan *linkSpan = GetLinkSpanAtPosition(textPos);
+  // Hit test to find character position
+  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
+  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
+      wxRICHTEXT_HITTEST_NONE) {
+    // Check for links
+    LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
     if (linkSpan) {
-      m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
-      event.Skip();
-      return;
-    }
+      display->SetCursor(wxCursor(wxCURSOR_HAND));
+      display->SetToolTip(linkSpan->url);
+    } else {
+      // Check for media
+      MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
+      if (mediaSpan) {
+        display->SetCursor(wxCursor(wxCURSOR_HAND));
+        MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
+        if (!info.fileName.IsEmpty()) {
+          display->SetToolTip(info.fileName);
+        } else {
+          display->SetToolTip("Click to view");
+        }
+      } else {
+        // Check for edit markers
+        EditSpan *editSpan = GetEditSpanAtPosition(charPos);
+        if (editSpan) {
+          display->SetCursor(wxCursor(wxCURSOR_HAND));
+          display->SetToolTip("Click to see original message");
+        } else {
+          // Check for read markers
+          bool foundReadMarker = false;
+          for (const auto &span : m_readMarkerSpans) {
+            if (charPos >= span.startPos && charPos < span.endPos) {
+              display->SetCursor(wxCursor(wxCURSOR_ARROW));
+              display->SetToolTip("Read by recipient");
+              foundReadMarker = true;
+              break;
+            }
+          }
 
-    // Check for edit span
-    EditSpan *editSpan = GetEditSpanAtPosition(textPos);
-    if (editSpan) {
-      m_chatArea->SetCurrentCursor(wxCURSOR_HAND);
-      event.Skip();
-      return;
+          if (!foundReadMarker) {
+            display->SetCursor(wxCursor(wxCURSOR_IBEAM));
+            display->SetToolTip(NULL); // Clear tooltip
+          }
+        }
+      }
     }
-
-    // Default arrow cursor for regular text (not I-beam)
-    m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
   } else {
-    if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
-      m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
-    }
-    ctrl->UnsetToolTip();
-    m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
+    display->SetCursor(wxCursor(wxCURSOR_ARROW));
+    display->SetToolTip(NULL);
   }
 
   event.Skip();
 }
 
 void ChatViewWidget::OnMouseLeave(wxMouseEvent &event) {
-  HideEditHistoryPopup();
-
-  // Clear read receipt status text when leaving
-  // Clear read receipt status text when leaving
-  if (m_mainFrame && m_mainFrame->GetStatusBarManager()) {
-    m_mainFrame->GetStatusBarManager()->ClearOverrideStatus();
-  }
-
-  if (m_chatArea) {
-    m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
+  if (m_chatArea && m_chatArea->GetDisplay()) {
+    m_chatArea->GetDisplay()->SetCursor(wxCursor(wxCURSOR_ARROW));
+    m_chatArea->GetDisplay()->SetToolTip(NULL);
   }
   event.Skip();
 }
 
 void ChatViewWidget::OnLeftDown(wxMouseEvent &event) {
-  wxPoint pos = event.GetPosition();
-  long textPos;
-
-  wxRichTextCtrl *ctrl = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
-  if (!ctrl) {
-    event.Skip();
+  if (!m_chatArea || !m_chatArea->GetDisplay())
     return;
-  }
 
-  wxTextCtrlHitTestResult hit = ctrl->HitTest(pos, &textPos);
+  wxRichTextCtrl *display = m_chatArea->GetDisplay();
+  wxPoint pos = event.GetPosition();
+  wxTextCoord col, row;
+  long charPos = 0;
 
-  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
-    MediaSpan *span = GetMediaSpanAtPosition(textPos);
-    if (span) {
-      // Get fresh MediaInfo from m_messages (single source of truth)
-      MediaInfo info = GetMediaInfoForSpan(*span);
-
-      // Show popup on click for visual media types
-      bool isVisualMedia =
-          (info.type == MediaType::Photo || info.type == MediaType::Video ||
-           info.type == MediaType::Sticker || info.type == MediaType::GIF ||
-           info.type == MediaType::VideoNote);
-
-      if (isVisualMedia) {
-        // Toggle popup - if already showing same media, hide it; otherwise show
-        // it
-        if (m_mediaPopup && m_mediaPopup->IsShown() &&
-            IsSameMedia(m_currentlyShowingMedia, info)) {
-          HideMediaPopup();
-        } else {
-          wxPoint screenPos = ctrl->ClientToScreen(pos);
-          // Also get the bottom of the chat area in screen coordinates
-          wxRect chatRect = ctrl->GetScreenRect();
-          ShowMediaPopup(info, screenPos, chatRect.GetBottom());
-        }
-      } else {
-        // Non-visual media (Voice, File) - open directly
-        OpenMedia(info);
-      }
-      return; // Don't skip - we handled the click
-    }
-
-    // Check for link click
-    LinkSpan *linkSpan = GetLinkSpanAtPosition(textPos);
+  // Hit test to find character position
+  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
+  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
+      wxRICHTEXT_HITTEST_NONE) {
+    // Check for links
+    LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
     if (linkSpan) {
-      // Open URL in default browser
-      wxLaunchDefaultBrowser(linkSpan->url);
-      return; // Don't skip - we handled the click
+      wxLaunchDefaultApplication(linkSpan->url);
+      return;
+    }
+
+    // Check for media
+    MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
+    if (mediaSpan) {
+      MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
+      ShowMediaPopup(info, ClientToScreen(pos),
+                     GetScreenRect().GetBottom()); // Use ChatViewWidget bottom
+      return;
+    }
+
+    // Check for edit markers
+    EditSpan *editSpan = GetEditSpanAtPosition(charPos);
+    if (editSpan) {
+      ShowEditHistoryPopup(*editSpan, ClientToScreen(pos));
+      return;
     }
   }
 
-  // If clicking elsewhere, hide any open popup
+  // Hide popups if clicking elsewhere
   HideMediaPopup();
+  HideEditHistoryPopup();
 
   event.Skip();
 }
