@@ -1358,7 +1358,11 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
     // Clear reloading state now that we have fresh messages
     m_chatViewWidget->SetReloading(false);
     
-    // Set read status for outgoing message indicators
+    // Clear existing messages first
+    m_chatViewWidget->ClearMessages();
+    
+    // Set read status for outgoing message indicators BEFORE displaying
+    // (must be after ClearMessages since that resets the read status)
     if (m_telegramClient) {
         bool found = false;
         ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
@@ -1367,9 +1371,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId, const std::vector<MessageInfo>&
         }
     }
 
-    // Clear existing messages and display all new ones in bulk
+    // Display all messages in bulk
     // ChatViewWidget::DisplayMessages handles sorting internally
-    m_chatViewWidget->ClearMessages();
     m_chatViewWidget->DisplayMessages(messages);
 
     // Scroll to bottom after loading

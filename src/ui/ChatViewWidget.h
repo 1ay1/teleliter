@@ -275,13 +275,18 @@ private:
 
   // Read receipts
   int64_t m_lastReadOutboxId = 0;
-  std::map<int64_t, int64_t> m_messageReadTimes; // messageId -> read timestamp
+  int64_t m_lastReadOutboxTime = 0;
+
+  // Per-message read times - records when each message was marked as read
+  // Key: messageId, Value: Unix timestamp when we learned it was read
+  std::map<int64_t, int64_t> m_messageReadTimes;
 
   // Track [R] marker positions for tooltips
   struct ReadMarkerSpan {
     long startPos;
     long endPos;
     int64_t messageId;
+    int64_t readTime;  // When this specific message was read
   };
   std::vector<ReadMarkerSpan> m_readMarkerSpans;
 

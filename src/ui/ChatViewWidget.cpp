@@ -787,6 +787,12 @@ void ChatViewWidget::ClearMessages() {
     m_displayedMessageIds.clear();
   }
 
+  // Clear per-message read times and read status (switching chats)
+  m_messageReadTimes.clear();
+  m_readMarkerSpans.clear();
+  m_lastReadOutboxId = 0;
+  m_lastReadOutboxTime = 0;
+
   // Clear display
   if (m_chatArea) {
     m_chatArea->Clear();
@@ -1705,10 +1711,46 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
 
 void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
                                       int64_t messageId) {
+  // Calculate the exact position of [R] in the timestamp
+  // Timestamp format from FormatTimestamp: "HH:MM:SS" (8 chars)
+  // With [R] appended: "HH:MM:SS[R]" (11 chars)
+  // WriteTimestamp outputs "[" + timestamp + "] " 
+  // So output is "[HH:MM:SS[R]] " (14 chars)
+  // Position 0: '['
+  // Position 1-8: "HH:MM:SS"
+  // Position 9-11: "[R]"
+  // Position 12: ']'
+  // Position 13: ' '
+  
+  // Record just the [R] span (3 characters) for precise tooltip
+  long rMarkerStart = startPos + 9;   // Position of '[' in [R]
+  long rMarkerEnd = startPos + 12;    // Position after ']' in [R]
+  
+  // Make sure we don't exceed the actual text bounds
+  if (rMarkerEnd > endPos) {
+    rMarkerEnd = endPos;
+  }
+  if (rMarkerStart >= rMarkerEnd) {
+    // Fallback to full span if calculation is off
+    rMarkerStart = startPos;
+    rMarkerEnd = endPos;
+  }
+  
   ReadMarkerSpan span;
-  span.startPos = startPos;
-  span.endPos = endPos;
+  span.startPos = rMarkerStart;
+  span.endPos = rMarkerEnd;
   span.messageId = messageId;
+  
+  // Look up the per-message read time from our tracking map
+  auto it = m_messageReadTimes.find(messageId);
+  if (it != m_messageReadTimes.end()) {
+    span.readTime = it->second;
+  } else {
+    // No recorded time - message was read before app started
+    // Use 0 to indicate unknown time (tooltip will show "Read by recipient" without time)
+    span.readTime = 0;
+  }
+  
   m_readMarkerSpans.push_back(span);
 }
 
@@ -1717,7 +1759,26 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
     return;
   }
 
+  // Record read times for all newly read messages
+  // Messages between old m_lastReadOutboxId and new lastReadOutboxId are now read
+  if (readTime > 0) {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    for (const auto& msg : m_messages) {
+      if (msg.isOutgoing && msg.id > 0 && 
+          msg.id > m_lastReadOutboxId && msg.id <= lastReadOutboxId) {
+        // This message was just marked as read - record the time
+        if (m_messageReadTimes.find(msg.id) == m_messageReadTimes.end()) {
+          m_messageReadTimes[msg.id] = readTime;
+        }
+      }
+    }
+  }
+
   m_lastReadOutboxId = lastReadOutboxId;
+
+  if (readTime > 0) {
+    m_lastReadOutboxTime = readTime;
+  }
 
   // We could update all displayed messages here, but that's expensive
   // Instead, we just trigger a refresh which will re-render everything
@@ -1860,41 +1921,76 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
   // Hit test to find character position
   wxTextCtrlHitTestResult hit = display->HitTest(pos, &charPos);
   if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
-    // Check for links
-    LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
-    if (linkSpan) {
-      display->SetCursor(wxCursor(wxCURSOR_HAND));
-      display->SetToolTip(linkSpan->url);
-    } else {
-      // Check for media
-      MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
-      if (mediaSpan) {
-        display->SetCursor(wxCursor(wxCURSOR_HAND));
-        MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
-        if (!info.fileName.IsEmpty()) {
-          display->SetToolTip(info.fileName);
-        } else {
-          display->SetToolTip("Click to view");
-        }
-      } else {
-        // Check for edit markers
-        EditSpan *editSpan = GetEditSpanAtPosition(charPos);
-        if (editSpan) {
-          display->SetCursor(wxCursor(wxCURSOR_HAND));
-          display->SetToolTip("Click to see original message");
-        } else {
-          // Check for read markers
-          bool foundReadMarker = false;
-          for (const auto &span : m_readMarkerSpans) {
-            if (charPos >= span.startPos && charPos < span.endPos) {
-              display->SetCursor(wxCursor(wxCURSOR_ARROW));
-              display->SetToolTip("Read by recipient");
-              foundReadMarker = true;
-              break;
+    // Check for read markers FIRST - they are the most specific (just 3 chars for [R])
+    // and located in the timestamp area, so they won't conflict with message content
+    bool foundReadMarker = false;
+    for (const auto &span : m_readMarkerSpans) {
+      if (charPos >= span.startPos && charPos < span.endPos) {
+        display->SetCursor(wxCursor(wxCURSOR_ARROW));
+
+        wxString tooltip = "Read by recipient";
+        // Use the per-message read time stored in the span
+        if (span.readTime > 0) {
+          int64_t readTime = span.readTime;
+          wxDateTime now = wxDateTime::Now();
+          wxDateTime readDt((time_t)readTime);
+          wxTimeSpan diff = now - readDt;
+
+          wxString relativeTime;
+          long total_seconds = diff.GetSeconds().GetValue();
+          int mins = total_seconds / 60;
+          if (mins < 1) {
+            relativeTime = "just now";
+          } else if (mins < 60) {
+            relativeTime = wxString::Format(
+                "%d min%s ago", mins, mins == 1 ? "" : "s");
+          } else {
+            int hours = mins / 60;
+            if (hours < 24) {
+              relativeTime = wxString::Format(
+                  "%d hour%s ago", hours, hours == 1 ? "" : "s");
+            } else {
+              int days = hours / 24;
+              relativeTime = wxString::Format("%d day%s ago", days,
+                                              days == 1 ? "" : "s");
             }
           }
+          tooltip = wxString::Format("Read %s (%s)", relativeTime,
+                                     readDt.Format("%Y-%m-%d %H:%M:%S"));
+        }
 
-          if (!foundReadMarker) {
+        display->SetToolTip(tooltip);
+        foundReadMarker = true;
+        break;
+      }
+    }
+
+    if (foundReadMarker) {
+      // Already handled above
+    } else {
+      // Check for links
+      LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
+      if (linkSpan) {
+        display->SetCursor(wxCursor(wxCURSOR_HAND));
+        display->SetToolTip(linkSpan->url);
+      } else {
+        // Check for media
+        MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
+        if (mediaSpan) {
+          display->SetCursor(wxCursor(wxCURSOR_HAND));
+          MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
+          if (!info.fileName.IsEmpty()) {
+            display->SetToolTip(info.fileName);
+          } else {
+            display->SetToolTip("Click to view");
+          }
+        } else {
+          // Check for edit markers
+          EditSpan *editSpan = GetEditSpanAtPosition(charPos);
+          if (editSpan) {
+            display->SetCursor(wxCursor(wxCURSOR_HAND));
+            display->SetToolTip("Click to see original message");
+          } else {
             display->SetCursor(wxCursor(wxCURSOR_IBEAM));
             display->SetToolTip(NULL); // Clear tooltip
           }
