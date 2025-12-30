@@ -1729,13 +1729,11 @@ void ChatViewWidget::OnRightDown(wxMouseEvent &event) {
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();
-  wxTextCoord col, row;
   long charPos = 0;
 
   // Hit test to find character position
-  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
-  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
-      wxRICHTEXT_HITTEST_NONE) {
+  wxTextCtrlHitTestResult hit = display->HitTest(pos, &charPos);
+  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
     // Find what's at this position
     MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
     LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
@@ -1854,13 +1852,11 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();
-  wxTextCoord col, row;
   long charPos = 0;
 
   // Hit test to find character position
-  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
-  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
-      wxRICHTEXT_HITTEST_NONE) {
+  wxTextCtrlHitTestResult hit = display->HitTest(pos, &charPos);
+  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
     // Check for links
     LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
     if (linkSpan) {
@@ -1924,13 +1920,11 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent &event) {
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();
-  wxTextCoord col, row;
   long charPos = 0;
 
   // Hit test to find character position
-  wxRichTextHitTestFlags flags = wxRICHTEXT_HITTEST_NO_NESTED_OBJECTS;
-  if (display->HitTest(pos, &charPos, &col, &row, flags) !=
-      wxRICHTEXT_HITTEST_NONE) {
+  wxTextCtrlHitTestResult hit = display->HitTest(pos, &charPos);
+  if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
     // Check for links
     LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
     if (linkSpan) {
