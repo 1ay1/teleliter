@@ -396,13 +396,19 @@ void ChatViewWidget::RefreshDisplay() {
   m_lastDisplayedTimestamp = 0;
   m_lastDisplayedMessageId = 0;
 
-  // Sort messages before rendering
+  // Freeze display for batch update
+  BeginBatchUpdate();
+
+  // Single lock for all message operations to reduce lock contention
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
+    
+    // Sort messages before rendering
     SortMessages();
 
     // Calculate optimal username width for alignment
     std::vector<wxString> usernames;
+    usernames.reserve(m_messages.size());
     for (const auto &msg : m_messages) {
       if (!msg.senderName.IsEmpty()) {
         usernames.push_back(msg.senderName);
@@ -420,14 +426,8 @@ void ChatViewWidget::RefreshDisplay() {
         }
       }
     }
-  }
 
-  // Freeze display for batch update
-  BeginBatchUpdate();
-
-  // Render all messages in order
-  {
-    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    // Render all messages in order
     for (const auto &msg : m_messages) {
       RenderMessageToDisplay(msg);
     }
@@ -2285,21 +2285,40 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
 
   // Throttle mouse move processing to reduce CPU usage
   // Only process every 50ms to avoid excessive work on rapid mouse movements
-  static wxLongLong lastProcessTime = 0;
+  static wxLongLong s_lastProcessTime = 0;
+  static wxString s_lastTooltip;
+  static wxStockCursor s_lastCursor = wxCURSOR_ARROW;
+  
   wxLongLong now = wxGetLocalTimeMillis();
-  if (now - lastProcessTime < 50) {
+  if (now - s_lastProcessTime < 50) {
     event.Skip();
     return;
   }
-  lastProcessTime = now;
+  s_lastProcessTime = now;
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();
   long charPos = 0;
 
   // Helper to set cursor without flickering - updates ChatArea's tracked cursor
+  // Also caches last cursor to avoid redundant calls
   auto setCursor = [this](wxStockCursor cursor) {
-    m_chatArea->SetCurrentCursor(cursor);
+    if (cursor != s_lastCursor) {
+      m_chatArea->SetCurrentCursor(cursor);
+      s_lastCursor = cursor;
+    }
+  };
+  
+  // Helper to set tooltip only if changed
+  auto setTooltip = [display](const wxString& tip) {
+    if (tip != s_lastTooltip) {
+      if (tip.IsEmpty()) {
+        display->SetToolTip(NULL);
+      } else {
+        display->SetToolTip(tip);
+      }
+      s_lastTooltip = tip;
+    }
   };
 
   // Hit test to find character position
@@ -2338,7 +2357,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
           }
         }
 
-        display->SetToolTip(tooltip);
+        setTooltip(tooltip);
         foundReadMarker = true;
         break;
       }
@@ -2351,7 +2370,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
       LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
       if (linkSpan) {
         setCursor(wxCURSOR_HAND);
-        display->SetToolTip(linkSpan->url);
+        setTooltip(linkSpan->url);
       } else {
         // Check for media
         MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
@@ -2359,20 +2378,20 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
           setCursor(wxCURSOR_HAND);
           MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
           if (!info.fileName.IsEmpty()) {
-            display->SetToolTip(info.fileName);
+            setTooltip(info.fileName);
           } else {
-            display->SetToolTip("Click to view");
+            setTooltip("Click to view");
           }
         } else {
           // Check for edit markers
           EditSpan *editSpan = GetEditSpanAtPosition(charPos);
           if (editSpan) {
             setCursor(wxCURSOR_HAND);
-            display->SetToolTip("Click to see original message");
+            setTooltip("Click to see original message");
           } else {
             // Normal text - use I-beam for text selection
             setCursor(wxCURSOR_IBEAM);
-            display->SetToolTip(NULL); // Clear tooltip
+            setTooltip(wxEmptyString);
           }
         }
       }
@@ -2380,7 +2399,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
   } else {
     // Not on text
     setCursor(wxCURSOR_ARROW);
-    display->SetToolTip(NULL);
+    setTooltip(wxEmptyString);
   }
 
   event.Skip();
