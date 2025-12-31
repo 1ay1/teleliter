@@ -1886,7 +1886,10 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
           msg.id <= lastReadOutboxId) {
         // This message was just marked as read - record the time
         if (m_messageReadTimes.find(msg.id) == m_messageReadTimes.end()) {
-          m_messageReadTimes[msg.id] = readTime > 0 ? readTime : now;
+          // Only record time if we have a valid read time from the server
+          // If readTime is 0, it means we don't know when it was read (loaded
+          // as already-read) In that case, use 0 to indicate "unknown time"
+          m_messageReadTimes[msg.id] = readTime > 0 ? readTime : 0;
         }
         // Track for highlight animation
         m_recentlyReadMessages[msg.id] = now;
