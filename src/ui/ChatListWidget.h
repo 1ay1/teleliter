@@ -68,6 +68,7 @@ private:
   // Event handlers
   void OnSearchText(wxCommandEvent &event);
   void OnSearchCancel(wxCommandEvent &event);
+  void OnSelectionChanged(wxTreeEvent &event);
 
   TelegramClient *m_telegramClient;
 
@@ -82,6 +83,7 @@ private:
   wxTreeItemId m_groups;
   wxTreeItemId m_channels;
   wxTreeItemId m_bots;
+  wxTreeItemId m_previousSelection;
 
   // Chat ID mappings
   std::map<wxTreeItemId, int64_t> m_treeItemToChatId;
