@@ -512,14 +512,37 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
   if (text.IsEmpty())
     return;
 
+  // Calculate continuation indent for multiline messages
+  // Format: [HH:MM:SS] <username> message
+  // Timestamp: 11 chars, username area: m_usernameWidth + 3 for "< >"
+  int continuationIndent = 11 + m_usernameWidth + 3;
+  wxString indentStr = wxString(' ', continuationIndent);
+
   // URL regex pattern - matches http://, https://, and www. URLs
   static wxRegEx urlRegex(
       "(https?://[^\\s<>\"'\\)\\]]+|www\\.[^\\s<>\"'\\)\\]]+)",
       wxRE_EXTENDED | wxRE_ICASE);
 
+  // Helper lambda to write plain text with continuation line indentation
+  auto writeTextWithIndent = [this, &indentStr](const wxString &chunk) {
+    if (chunk.IsEmpty())
+      return;
+    
+    // Split by newlines and add indentation for continuation lines
+    wxArrayString lines = wxSplit(chunk, '\n');
+    for (size_t i = 0; i < lines.size(); ++i) {
+      if (i > 0) {
+        // This is a continuation line - add newline and indent
+        m_chatArea->WriteText("\n");
+        m_chatArea->WriteText(indentStr);
+      }
+      m_chatArea->WriteText(lines[i]);
+    }
+  };
+
   if (!urlRegex.IsValid()) {
-    // Fallback - just write plain text
-    m_chatArea->WriteText(text);
+    // Fallback - just write plain text with indent handling
+    writeTextWithIndent(text);
     return;
   }
 
@@ -531,9 +554,9 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
       break;
     }
 
-    // Write text before the link
+    // Write text before the link (with indent handling)
     if (matchStart > 0) {
-      m_chatArea->WriteText(remaining.Left(matchStart));
+      writeTextWithIndent(remaining.Left(matchStart));
     }
 
     // Extract the URL
@@ -566,9 +589,9 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
     remaining = remaining.Mid(matchStart + matchLen);
   }
 
-  // Write any remaining text
+  // Write any remaining text (with indent handling)
   if (!remaining.IsEmpty()) {
-    m_chatArea->WriteText(remaining);
+    writeTextWithIndent(remaining);
   }
 }
 
