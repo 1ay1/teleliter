@@ -1,5 +1,6 @@
 #include "FFmpegPlayer.h"
 #include <iostream>
+#include <wx/file.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -136,6 +137,26 @@ void FFmpegPlayer::CleanupDecoder() {
 
 bool FFmpegPlayer::LoadFile(const wxString &path) {
   FFMPEGLOG("LoadFile: " << path.ToStdString());
+
+  // Check if file exists and is readable
+  if (!wxFileExists(path)) {
+    FFMPEGLOG("LoadFile: file does not exist: " << path.ToStdString());
+    return false;
+  }
+  
+  wxFile testFile(path, wxFile::read);
+  if (!testFile.IsOpened()) {
+    FFMPEGLOG("LoadFile: cannot open file for reading: " << path.ToStdString());
+    return false;
+  }
+  wxFileOffset fileSize = testFile.Length();
+  testFile.Close();
+  FFMPEGLOG("LoadFile: file size = " << fileSize << " bytes");
+  
+  if (fileSize < 100) {
+    FFMPEGLOG("LoadFile: file too small, likely incomplete: " << fileSize);
+    return false;
+  }
 
   // Clean up any previous state
   CleanupDecoder();
@@ -300,10 +321,14 @@ bool FFmpegPlayer::LoadFile(const wxString &path) {
 
   // For video files, decode the first frame for display
   if (!m_isAudioOnly) {
+    FFMPEGLOG("Attempting to decode first frame...");
     if (!DecodeNextFrame()) {
-      FFMPEGLOG("Failed to decode first frame");
-      CleanupDecoder();
-      return false;
+      FFMPEGLOG("Failed to decode first frame - this may be a partial/incomplete file");
+      // Don't fail completely - the file might still be playable
+      // Just log the issue and continue
+      FFMPEGLOG("Continuing despite first frame decode failure");
+    } else {
+      FFMPEGLOG("First frame decoded successfully");
     }
   }
 
