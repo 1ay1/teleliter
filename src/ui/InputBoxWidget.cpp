@@ -577,15 +577,6 @@ bool InputBoxWidget::ProcessCommand(const wxString &command) {
   } else if (cmd == "help") {
     ProcessHelpCommand();
     return true;
-  } else if (cmd == "react") {
-    ProcessReactCommand(args);
-    return true;
-  } else if (cmd == "edit") {
-    ProcessEditCommand(args);
-    return true;
-  } else if (cmd == "delete" || cmd == "del") {
-    ProcessDeleteCommand();
-    return true;
   } else {
     if (m_messageFormatter) {
       m_messageFormatter->AppendServiceMessage(
@@ -723,9 +714,7 @@ void InputBoxWidget::ProcessHelpCommand() {
   helpText += "  /msg <user> <text> - Send private message\n";
   helpText += "  /whois <user>      - View user info\n";
   helpText += "  /leave             - Leave current chat\n";
-  helpText += "  /react <emoji>     - React to last message (e.g. /react \xF0\x9F\x91\x8D)\n";
-  helpText += "  /edit <text>       - Edit your last message\n";
-  helpText += "  /delete            - Delete your last message\n";
+
   helpText += "  /help              - Show this help";
   
   m_messageFormatter->AppendServiceMessage(ts, helpText);
@@ -735,136 +724,7 @@ void InputBoxWidget::ProcessHelpCommand() {
   }
 }
 
-void InputBoxWidget::ProcessReactCommand(const wxString &args) {
-  if (!m_mainFrame)
-    return;
 
-  TelegramClient *client = m_mainFrame->GetTelegramClient();
-  int64_t chatId = m_mainFrame->GetCurrentChatId();
-
-  if (!client || !client->IsLoggedIn() || chatId == 0) {
-    if (m_messageFormatter) {
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Not connected or no chat selected");
-    }
-    return;
-  }
-
-  wxString emoji = wxString(args).Trim();
-  if (emoji.IsEmpty()) {
-    // Show common reactions
-    if (m_messageFormatter) {
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Usage: /react <emoji>");
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Common reactions: 👍 👎 ❤️ 🔥 🎉 😂 😮 😢");
-    }
-    return;
-  }
-
-  // Find last message from someone else to react to
-  if (m_chatView) {
-    const auto &messages = m_chatView->GetMessages();
-    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-      if (!it->isOutgoing) {
-        client->SendReaction(chatId, it->id, emoji);
-        if (m_messageFormatter) {
-          m_messageFormatter->AppendServiceMessage(
-              GetCurrentTimestamp(),
-              wxString::Format("Reacted %s to %s's message", emoji, it->senderName));
-        }
-        return;
-      }
-    }
-  }
-
-  if (m_messageFormatter) {
-    m_messageFormatter->AppendServiceMessage(
-        GetCurrentTimestamp(), "No message to react to");
-  }
-}
-
-void InputBoxWidget::ProcessEditCommand(const wxString &args) {
-  if (!m_mainFrame)
-    return;
-
-  TelegramClient *client = m_mainFrame->GetTelegramClient();
-  int64_t chatId = m_mainFrame->GetCurrentChatId();
-
-  if (!client || !client->IsLoggedIn() || chatId == 0) {
-    if (m_messageFormatter) {
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Not connected or no chat selected");
-    }
-    return;
-  }
-
-  wxString newText = wxString(args).Trim();
-  if (newText.IsEmpty()) {
-    if (m_messageFormatter) {
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Usage: /edit <new text>");
-    }
-    return;
-  }
-
-  // Find last outgoing message to edit
-  if (m_chatView) {
-    const auto &messages = m_chatView->GetMessages();
-    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-      if (it->isOutgoing && !it->text.IsEmpty()) {
-        client->EditMessage(chatId, it->id, newText);
-        if (m_messageFormatter) {
-          m_messageFormatter->AppendServiceMessage(
-              GetCurrentTimestamp(), "Editing message...");
-        }
-        return;
-      }
-    }
-  }
-
-  if (m_messageFormatter) {
-    m_messageFormatter->AppendServiceMessage(
-        GetCurrentTimestamp(), "No message to edit");
-  }
-}
-
-void InputBoxWidget::ProcessDeleteCommand() {
-  if (!m_mainFrame)
-    return;
-
-  TelegramClient *client = m_mainFrame->GetTelegramClient();
-  int64_t chatId = m_mainFrame->GetCurrentChatId();
-
-  if (!client || !client->IsLoggedIn() || chatId == 0) {
-    if (m_messageFormatter) {
-      m_messageFormatter->AppendServiceMessage(
-          GetCurrentTimestamp(), "Not connected or no chat selected");
-    }
-    return;
-  }
-
-  // Find last outgoing message to delete
-  if (m_chatView) {
-    const auto &messages = m_chatView->GetMessages();
-    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-      if (it->isOutgoing) {
-        std::vector<int64_t> ids = {it->id};
-        client->DeleteMessages(chatId, ids, true);
-        if (m_messageFormatter) {
-          m_messageFormatter->AppendServiceMessage(
-              GetCurrentTimestamp(), "Deleting message...");
-        }
-        return;
-      }
-    }
-  }
-
-  if (m_messageFormatter) {
-    m_messageFormatter->AppendServiceMessage(
-        GetCurrentTimestamp(), "No message to delete");
-  }
-}
 
 void InputBoxWidget::NavigateHistoryUp() {
   if (!m_inputHistory.empty() && m_historyIndex > 0) {

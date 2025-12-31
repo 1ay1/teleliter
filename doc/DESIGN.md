@@ -50,12 +50,15 @@ Following IRC/HexChat tradition, functionality is exposed through slash commands
 /help              - Show available commands
 ```
 
-Commands that were considered but **intentionally not implemented** (to avoid UI complexity):
+Commands that were considered but **intentionally not implemented** (to keep read-only philosophy):
 
-- `/react` - Would need server-side message lookup
-- `/edit` - Would need edit history tracking
-- `/delete` - Would need confirmation flow
+- `/react` - Would send reactions (we only display them)
+- `/edit` - Would edit messages (we only show edits from others)
+- `/delete` - Would delete messages (we only show deletion notices)
 - `/reply` - Would need message selection UI
+- `/forward` - Would need chat selection UI
+
+The corresponding TelegramClient API methods (`SendReaction`, `EditMessage`, `DeleteMessages`, `ForwardMessages`) were also removed to enforce this philosophy at the code level.
 
 ## Architecture
 

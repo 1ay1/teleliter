@@ -117,13 +117,6 @@ public:
     void SendMessage(int64_t chatId, const wxString& text, int64_t replyToMessageId);
     void SendFile(int64_t chatId, const wxString& filePath, const wxString& caption = "");
     
-    // Message actions
-    void SendReaction(int64_t chatId, int64_t messageId, const wxString& emoji);
-    void RemoveReaction(int64_t chatId, int64_t messageId, const wxString& emoji);
-    void EditMessage(int64_t chatId, int64_t messageId, const wxString& newText);
-    void DeleteMessages(int64_t chatId, const std::vector<int64_t>& messageIds, bool revoke = true);
-    void ForwardMessages(int64_t fromChatId, int64_t toChatId, const std::vector<int64_t>& messageIds);
-    
     void DownloadFile(int32_t fileId, int priority = 1, const wxString& fileName = "", int64_t fileSize = 0);
     void CancelDownload(int32_t fileId);
     void RetryDownload(int32_t fileId);
