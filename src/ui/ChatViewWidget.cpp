@@ -558,7 +558,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -580,7 +583,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -600,7 +606,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -639,7 +648,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -659,7 +671,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -679,7 +694,10 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
     m_messageFormatter->AppendMediaMessage(
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
-    AddMediaSpan(startPos, endPos, info, msg.id);
+    // Only add span if we have valid media reference
+    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+      AddMediaSpan(startPos, endPos, info, msg.id);
+    }
     if (hasReadMarker)
       RecordReadMarker(startPos, endPos, msg.id);
     updateStateAfterMedia();
@@ -964,13 +982,26 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
     }
   }
 
-  // Update media spans if message ID changed
+  // Update media spans if message ID changed or file IDs became available
   if (msg.serverMessageId != 0 && oldId != newId) {
     for (auto &span : m_mediaSpans) {
       if (span.messageId == oldId) {
         span.messageId = newId;
         // Also update fileId and thumbnailFileId from the new message data
         span.fileId = msg.mediaFileId;
+        span.thumbnailFileId = msg.mediaThumbnailFileId;
+      }
+    }
+  }
+  
+  // Also update spans that have the same message ID but missing file IDs
+  // This handles the case where the message was created before file info was available
+  for (auto &span : m_mediaSpans) {
+    if (span.messageId == msg.id || span.messageId == newId) {
+      if (span.fileId == 0 && msg.mediaFileId != 0) {
+        span.fileId = msg.mediaFileId;
+      }
+      if (span.thumbnailFileId == 0 && msg.mediaThumbnailFileId != 0) {
         span.thumbnailFileId = msg.mediaThumbnailFileId;
       }
     }
@@ -1177,21 +1208,28 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
   MediaInfo info;
   info.type = span.type;
 
+  // Always start with span's file IDs as fallback
+  info.fileId = span.fileId;
+  info.thumbnailFileId = span.thumbnailFileId;
+  info.width = span.width;
+  info.height = span.height;
+
   // Look up the message to get current file IDs and paths (single source of
   // truth) The message may have been updated with file IDs since the span was
   // created
   const MessageInfo *msg = GetMessageById(span.messageId);
   if (msg) {
-
     info.width = msg->width;
     info.height = msg->height;
     info.duration = msg->mediaDuration;
     info.waveform = msg->mediaWaveform;
     // Prefer message's file IDs over span's (message is updated, span is not)
-    info.fileId = (msg->mediaFileId != 0) ? msg->mediaFileId : span.fileId;
-    info.thumbnailFileId = (msg->mediaThumbnailFileId != 0)
-                               ? msg->mediaThumbnailFileId
-                               : span.thumbnailFileId;
+    if (msg->mediaFileId != 0) {
+      info.fileId = msg->mediaFileId;
+    }
+    if (msg->mediaThumbnailFileId != 0) {
+      info.thumbnailFileId = msg->mediaThumbnailFileId;
+    }
     info.localPath = msg->mediaLocalPath;
     info.thumbnailPath = msg->mediaThumbnailPath;
     info.fileName = msg->mediaFileName;
@@ -1232,12 +1270,8 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
       }
     }
   } else {
-    // Fallback to span's file IDs if message not found
-
-    info.fileId = span.fileId;
-    info.thumbnailFileId = span.thumbnailFileId;
-    info.width = span.width;
-    info.height = span.height;
+    // Message not found in m_messages - this can happen briefly for new messages
+    // We already have span's file IDs from initialization above
   }
 
   return info;
