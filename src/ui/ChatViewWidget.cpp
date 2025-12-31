@@ -257,11 +257,13 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
   // Remove expired highlights (older than HIGHLIGHT_DURATION_SECONDS)
   int64_t now = wxGetUTCTime();
   bool hasActiveHighlights = false;
+  bool removedAny = false;
 
   auto it = m_recentlyReadMessages.begin();
   while (it != m_recentlyReadMessages.end()) {
     if (now - it->second >= HIGHLIGHT_DURATION_SECONDS) {
       it = m_recentlyReadMessages.erase(it);
+      removedAny = true;
     } else {
       hasActiveHighlights = true;
       ++it;
@@ -273,8 +275,10 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
     m_highlightTimer.Stop();
   }
 
-  // Always refresh to update the highlight state
-  ScheduleRefresh();
+  // Only refresh if we actually removed expired highlights
+  if (removedAny) {
+    ScheduleRefresh();
+  }
 }
 
 void ChatViewWidget::OnRefreshTimer(wxTimerEvent &event) {
@@ -292,7 +296,7 @@ void ChatViewWidget::RefreshDisplay() {
     m_refreshTimer.Stop();
   }
 
-  CVWLOG("RefreshDisplay: rendering " << m_messages.size() << " messages");
+  // CVWLOG("RefreshDisplay: rendering " << m_messages.size() << " messages");
 
   // Use member variable for scroll state - it's updated by user actions
   // and explicitly set when user sends a message
@@ -864,9 +868,6 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
   if (msg.id == 0)
     return;
 
-  CVWLOG("UpdateMessage: msgId=" << msg.id << " serverMessageId=" << msg.serverMessageId
-         << " mediaFileId=" << msg.mediaFileId << " localPath=" << msg.mediaLocalPath.ToStdString());
-
   bool neededRefresh = false;
   int64_t oldId = msg.id;
   int64_t newId = (msg.serverMessageId != 0) ? msg.serverMessageId : msg.id;
@@ -883,8 +884,6 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
             existingMsg.reactions != msg.reactions) {
 
           neededRefresh = true;
-          CVWLOG(
-              "UpdateMessage: meaningful change detected for msgId=" << msg.id);
         } else if ((existingMsg.mediaFileId == 0 && msg.mediaFileId != 0) ||
                    (existingMsg.mediaThumbnailFileId == 0 &&
                     msg.mediaThumbnailFileId != 0)) {
@@ -894,8 +893,6 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
         
         // If server assigned a new ID, update the message ID and track in displayedMessageIds
         if (msg.serverMessageId != 0 && existingMsg.id != msg.serverMessageId) {
-          CVWLOG("UpdateMessage: updating message ID from " << existingMsg.id 
-                 << " to " << msg.serverMessageId);
           m_displayedMessageIds.erase(existingMsg.id);
           existingMsg.id = msg.serverMessageId;
           m_displayedMessageIds.insert(msg.serverMessageId);
@@ -923,7 +920,6 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
   if (msg.serverMessageId != 0 && oldId != newId) {
     for (auto &span : m_mediaSpans) {
       if (span.messageId == oldId) {
-        CVWLOG("UpdateMessage: updating media span messageId from " << oldId << " to " << newId);
         span.messageId = newId;
         // Also update fileId and thumbnailFileId from the new message data
         span.fileId = msg.mediaFileId;
@@ -1129,22 +1125,14 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
   MediaInfo info;
   info.type = span.type;
 
-  CVWLOG("GetMediaInfoForSpan: span.messageId=" << span.messageId 
-         << " span.fileId=" << span.fileId 
-         << " span.thumbnailFileId=" << span.thumbnailFileId);
+
 
   // Look up the message to get current file IDs and paths (single source of
   // truth) The message may have been updated with file IDs since the span was
   // created
   const MessageInfo *msg = GetMessageById(span.messageId);
   if (msg) {
-    CVWLOG("GetMediaInfoForSpan: found message, mediaFileId=" << msg->mediaFileId
-           << " mediaThumbnailFileId=" << msg->mediaThumbnailFileId
-           << " mediaLocalPath=" << msg->mediaLocalPath.ToStdString()
-           << " mediaThumbnailPath=" << msg->mediaThumbnailPath.ToStdString()
-           << " hasPhoto=" << msg->hasPhoto << " hasVideo=" << msg->hasVideo
-           << " hasDocument=" << msg->hasDocument);
-    
+
     info.width = msg->width;
     info.height = msg->height;
     info.duration = msg->mediaDuration;
@@ -1165,8 +1153,7 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     // frequently (e.g. on hover) triggering network requests here would be
     // disastrous for performance
     if (info.fileId == 0 && info.thumbnailFileId == 0) {
-      CVWLOG("GetMediaInfoForSpan: no file IDs for msgId=" << msg->id 
-             << " - message may still be uploading or failed");
+
     }
 
     // Accurate downloading state check
@@ -1197,18 +1184,12 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     }
   } else {
     // Fallback to span's file IDs if message not found
-    CVWLOG("GetMediaInfoForSpan: message NOT FOUND for id=" << span.messageId
-           << " - falling back to span data");
+
     info.fileId = span.fileId;
     info.thumbnailFileId = span.thumbnailFileId;
     info.width = span.width;
     info.height = span.height;
   }
-
-  CVWLOG("GetMediaInfoForSpan: returning fileId=" << info.fileId
-         << " thumbnailFileId=" << info.thumbnailFileId
-         << " localPath=" << info.localPath.ToStdString()
-         << " thumbnailPath=" << info.thumbnailPath.ToStdString());
 
   return info;
 }
@@ -2011,8 +1992,10 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
     m_highlightTimer.Start(1000); // Check every second
   }
 
-  // Trigger refresh to show the new read markers with highlights
-  ScheduleRefresh();
+  // Only trigger refresh if we have newly read messages to highlight
+  if (hasNewlyReadMessages) {
+    ScheduleRefresh();
+  }
 }
 
 void ChatViewWidget::OnRightDown(wxMouseEvent &event) {
