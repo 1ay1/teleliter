@@ -2397,40 +2397,18 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     auto& thumbSize = c.photo_->sizes_.front();
                     auto& fullSize = c.photo_->sizes_.back();
 
-                    TDLOG("ConvertMessage: Photo has %zu sizes", c.photo_->sizes_.size());
-
                     if (fullSize->photo_) {
                         info.mediaFileId = fullSize->photo_->id_;
                         info.mediaFileSize = fullSize->photo_->size_;
                         info.width = fullSize->width_;
                         info.height = fullSize->height_;
 
-                        TDLOG("ConvertMessage: Photo fullSize fileId=%d, size=%lld, local=%s, remote=%s",
-                              fullSize->photo_->id_,
-                              (long long)fullSize->photo_->size_,
-                              fullSize->photo_->local_ ? fullSize->photo_->local_->path_.c_str() : "(null)",
-                              fullSize->photo_->remote_ ? fullSize->photo_->remote_->id_.c_str() : "(null)");
-                        
-                        if (fullSize->photo_->local_) {
-                            TDLOG("ConvertMessage: Photo local - downloaded=%d, path=%s",
-                                  fullSize->photo_->local_->is_downloading_completed_,
-                                  fullSize->photo_->local_->path_.c_str());
-                        }
-                        if (fullSize->photo_->remote_) {
-                            TDLOG("ConvertMessage: Photo remote - uploading=%d, uploaded=%d",
-                                  fullSize->photo_->remote_->is_uploading_active_,
-                                  fullSize->photo_->remote_->is_uploading_completed_);
-                        }
-
                         if (IsFileAvailableLocally(fullSize->photo_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
-                            TDLOG("ConvertMessage: Photo is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
                         } else if (ShouldDownloadFile(fullSize->photo_.get())) {
                             // Auto-download full photo
                             this->DownloadFile(fullSize->photo_->id_, 5, "Photo", fullSize->photo_->size_);
                         }
-                    } else {
-                        TDLOG("ConvertMessage: Photo fullSize->photo_ is null!");
                     }
 
                     // Track thumbnail separately
@@ -2443,8 +2421,6 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                             this->DownloadFile(thumbSize->photo_->id_, 8, "Thumbnail", 0);
                         }
                     }
-                } else {
-                    TDLOG("ConvertMessage: Photo has no sizes array or photo_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVideo>) {
                 info.hasVideo = true;
@@ -2462,29 +2438,10 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.width = c.video_->width_;
                         info.height = c.video_->height_;
 
-                        TDLOG("ConvertMessage: Video fileId=%d, name=%s, size=%lld",
-                              c.video_->video_->id_,
-                              c.video_->file_name_.c_str(),
-                              (long long)c.video_->video_->size_);
-                        
-                        if (c.video_->video_->local_) {
-                            TDLOG("ConvertMessage: Video local - downloaded=%d, path=%s",
-                                  c.video_->video_->local_->is_downloading_completed_,
-                                  c.video_->video_->local_->path_.c_str());
-                        }
-                        if (c.video_->video_->remote_) {
-                            TDLOG("ConvertMessage: Video remote - uploading=%d, uploaded=%d",
-                                  c.video_->video_->remote_->is_uploading_active_,
-                                  c.video_->video_->remote_->is_uploading_completed_);
-                        }
-
                         // Check if actual video file is downloaded
                         if (IsFileAvailableLocally(c.video_->video_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_->video_->local_->path_);
-                            TDLOG("ConvertMessage: Video is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
                         }
-                    } else {
-                        TDLOG("ConvertMessage: Video video_ is null!");
                     }
 
                     // Always track thumbnail separately (don't put thumbnail path in mediaLocalPath)
@@ -2497,8 +2454,6 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                             this->DownloadFile(c.video_->thumbnail_->file_->id_, 8, "Video Thumbnail", 0);
                         }
                     }
-                } else {
-                    TDLOG("ConvertMessage: messageVideo but video_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageDocument>) {
                 info.hasDocument = true;
@@ -2510,29 +2465,10 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     info.mediaFileName = wxString::FromUTF8(c.document_->file_name_);
                     info.mediaFileSize = c.document_->document_->size_;
                     
-                    TDLOG("ConvertMessage: Document fileId=%d, name=%s, size=%lld",
-                          c.document_->document_->id_,
-                          c.document_->file_name_.c_str(),
-                          (long long)c.document_->document_->size_);
-                    
-                    if (c.document_->document_->local_) {
-                        TDLOG("ConvertMessage: Document local - downloaded=%d, path=%s",
-                              c.document_->document_->local_->is_downloading_completed_,
-                              c.document_->document_->local_->path_.c_str());
-                    }
-                    if (c.document_->document_->remote_) {
-                        TDLOG("ConvertMessage: Document remote - uploading=%d, uploaded=%d",
-                              c.document_->document_->remote_->is_uploading_active_,
-                              c.document_->document_->remote_->is_uploading_completed_);
-                    }
-                    
                     // Also check for local availability for documents
                     if (IsFileAvailableLocally(c.document_->document_.get())) {
                         info.mediaLocalPath = wxString::FromUTF8(c.document_->document_->local_->path_);
-                        TDLOG("ConvertMessage: Document is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
                     }
-                } else {
-                    TDLOG("ConvertMessage: messageDocument but document_ or document_->document_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVoiceNote>) {
                 info.hasVoice = true;
