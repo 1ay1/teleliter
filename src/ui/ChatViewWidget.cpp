@@ -25,8 +25,8 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_downloadLabel(nullptr), m_downloadGauge(nullptr),
       m_downloadHideTimer(this), m_refreshTimer(this), m_refreshPending(false),
       m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
-      m_highlightTimer(this, HIGHLIGHT_TIMER_ID),
-      m_isReloading(false), m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
+      m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
+      m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1) {
   // Bind timer events
   Bind(
@@ -125,10 +125,9 @@ void ChatViewWidget::ClearTopicText() {
 }
 
 void ChatViewWidget::CreateNewMessageButton() {
-  m_newMessageButton =
-      new wxButton(this, ID_NEW_MESSAGE_BUTTON, 
-                   wxString::FromUTF8("↓ New Messages"),
-                   wxDefaultPosition, wxDefaultSize);
+  m_newMessageButton = new wxButton(this, ID_NEW_MESSAGE_BUTTON,
+                                    wxString::FromUTF8("↓ New Messages"),
+                                    wxDefaultPosition, wxDefaultSize);
 
   // Use native button styling
   m_newMessageButton->Hide();
@@ -188,8 +187,9 @@ void ChatViewWidget::EnsureMediaDownloaded(const MediaInfo &info) {
         int priority = 5;
         if (info.type == MediaType::Photo || info.type == MediaType::Sticker) {
           priority = 10;
-        } else if (info.type == MediaType::Voice || info.type == MediaType::VideoNote) {
-          priority = 12;  // High priority for voice/video notes
+        } else if (info.type == MediaType::Voice ||
+                   info.type == MediaType::VideoNote) {
+          priority = 12; // High priority for voice/video notes
         } else if (info.type == MediaType::GIF) {
           priority = 8;
         } else if (info.type == MediaType::Video) {
@@ -257,7 +257,7 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
   // Remove expired highlights (older than HIGHLIGHT_DURATION_SECONDS)
   int64_t now = wxGetUTCTime();
   bool hasActiveHighlights = false;
-  
+
   auto it = m_recentlyReadMessages.begin();
   while (it != m_recentlyReadMessages.end()) {
     if (now - it->second >= HIGHLIGHT_DURATION_SECONDS) {
@@ -267,12 +267,12 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
       ++it;
     }
   }
-  
+
   // If we removed any highlights, refresh to show normal colors
   if (!hasActiveHighlights) {
     m_highlightTimer.Stop();
   }
-  
+
   // Always refresh to update the highlight state
   ScheduleRefresh();
 }
@@ -416,7 +416,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   // Determine message status for outgoing messages
   MessageStatus status = MessageStatus::None;
   bool statusHighlight = false;
-  
+
   if (msg.isOutgoing) {
     if (msg.id == 0) {
       status = MessageStatus::Sending;
@@ -426,7 +426,7 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
       auto it = m_recentlyReadMessages.find(msg.id);
       if (it != m_recentlyReadMessages.end()) {
         int64_t now = wxGetUTCTime();
-        if (now - it->second < 3) {  // Highlight for 3 seconds
+        if (now - it->second < 3) { // Highlight for 3 seconds
           statusHighlight = true;
         }
       }
@@ -483,8 +483,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.thumbnailPath = msg.mediaThumbnailPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -505,8 +505,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.duration = msg.mediaDuration;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -525,8 +525,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.caption = msg.mediaCaption;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -544,8 +544,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.waveform = msg.mediaWaveform;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "",
-                                           status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(timestamp, sender, info, "", status,
+                                           statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -564,8 +564,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.duration = msg.mediaDuration;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -584,8 +584,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.thumbnailPath = msg.mediaThumbnailPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -604,8 +604,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
     info.thumbnailPath = msg.mediaThumbnailPath;
 
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendMediaMessage(timestamp, sender, info,
-                                           msg.mediaCaption, status, statusHighlight);
+    m_messageFormatter->AppendMediaMessage(
+        timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     AddMediaSpan(startPos, endPos, info, msg.id);
     if (hasReadMarker)
@@ -618,8 +618,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   if (msg.text.StartsWith("/me ")) {
     wxString action = msg.text.Mid(4);
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendActionMessage(timestamp, sender, action,
-                                            status, statusHighlight);
+    m_messageFormatter->AppendActionMessage(timestamp, sender, action, status,
+                                            statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -632,8 +632,8 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
   // Note: TDLib doesn't provide original message text, so no hover popup
   if (msg.isEdited) {
     long startPos = m_chatArea->GetLastPosition();
-    m_messageFormatter->AppendEditedMessage(timestamp, sender, msg.text,
-                                            nullptr, nullptr, status, statusHighlight);
+    m_messageFormatter->AppendEditedMessage(
+        timestamp, sender, msg.text, nullptr, nullptr, status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
     m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -656,17 +656,17 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
   // Regular text message
   long startPos = m_chatArea->GetLastPosition();
-  
+
   if (isMentioned) {
     // Highlighted message - someone mentioned you (always full format)
     m_messageFormatter->AppendHighlightMessage(timestamp, sender, msg.text,
                                                status, statusHighlight);
   } else {
     // Full message with nick and timestamp
-    m_messageFormatter->AppendMessage(timestamp, sender, msg.text,
-                                      status, statusHighlight);
+    m_messageFormatter->AppendMessage(timestamp, sender, msg.text, status,
+                                      statusHighlight);
   }
-  
+
   if (hasReadMarker)
     RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
 
@@ -697,8 +697,8 @@ void ChatViewWidget::DisplayMessage(const MessageInfo &msg) {
   AddMessage(msg);
 
   // Trigger download for media if needed
-  if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation || 
-      msg.hasVoice || msg.hasVideoNote || msg.hasVideo) {
+  if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation || msg.hasVoice ||
+      msg.hasVideoNote || msg.hasVideo) {
     MediaInfo info;
     info.fileId = msg.mediaFileId;
     info.localPath = msg.mediaLocalPath;
@@ -778,8 +778,8 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
       }
 
       // Trigger download for media if needed
-      if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation ||
-          msg.hasVoice || msg.hasVideoNote || msg.hasVideo) {
+      if (msg.hasPhoto || msg.hasSticker || msg.hasAnimation || msg.hasVoice ||
+          msg.hasVideoNote || msg.hasVideo) {
         MediaInfo info;
         info.fileId = msg.mediaFileId;
         info.localPath = msg.mediaLocalPath;
@@ -886,7 +886,7 @@ void ChatViewWidget::ClearMessages() {
   m_recentlyReadMessages.clear();
   m_lastReadOutboxId = 0;
   m_lastReadOutboxTime = 0;
-  
+
   // Stop highlight timer if running
   if (m_highlightTimer.IsRunning()) {
     m_highlightTimer.Stop();
@@ -1825,17 +1825,18 @@ void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
 
 void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
                                       int64_t messageId) {
-  // Use the formatter's tracked status marker positions for accurate tooltip placement
+  // Use the formatter's tracked status marker positions for accurate tooltip
+  // placement
   long rMarkerStart = m_messageFormatter->GetLastStatusMarkerStart();
   long rMarkerEnd = m_messageFormatter->GetLastStatusMarkerEnd();
-  
+
   // If formatter didn't record valid positions, fall back to end of message
   if (rMarkerStart < 0 || rMarkerEnd < 0 || rMarkerStart >= rMarkerEnd) {
     // Fallback: ticks are at end of message before newline
     // Format: ... ✓✓\n  (space + 2 ticks + newline = 4 chars from end)
-    rMarkerStart = endPos - 3;  // Position of first ✓
-    rMarkerEnd = endPos - 1;    // Position after second ✓ (before newline)
-    
+    rMarkerStart = endPos - 3; // Position of first ✓
+    rMarkerEnd = endPos - 1;   // Position after second ✓ (before newline)
+
     // Make sure we don't go before start of message
     if (rMarkerStart < startPos) {
       rMarkerStart = startPos;
@@ -1846,22 +1847,24 @@ void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
       rMarkerEnd = endPos;
     }
   }
-  
+
   ReadMarkerSpan span;
   span.startPos = rMarkerStart;
   span.endPos = rMarkerEnd;
   span.messageId = messageId;
-  
+
   // Look up the per-message read time from our tracking map
   auto it = m_messageReadTimes.find(messageId);
   if (it != m_messageReadTimes.end()) {
     span.readTime = it->second;
   } else {
-    // No recorded time - message was read before app started
-    // Use 0 to indicate unknown time (tooltip will show "Read by recipient" without time)
-    span.readTime = 0;
+    // No recorded time for this specific message - fall back to the chat's
+    // overall lastReadOutboxTime which is when we last received a read receipt
+    // This handles the case when switching back to a chat where messages were
+    // already read before the current session
+    span.readTime = m_lastReadOutboxTime;
   }
-  
+
   m_readMarkerSpans.push_back(span);
 }
 
@@ -1871,15 +1874,16 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
   }
 
   // Record read times for all newly read messages
-  // Messages between old m_lastReadOutboxId and new lastReadOutboxId are now read
+  // Messages between old m_lastReadOutboxId and new lastReadOutboxId are now
+  // read
   int64_t now = wxGetUTCTime();
   bool hasNewlyReadMessages = false;
-  
+
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
-    for (const auto& msg : m_messages) {
-      if (msg.isOutgoing && msg.id > 0 && 
-          msg.id > m_lastReadOutboxId && msg.id <= lastReadOutboxId) {
+    for (const auto &msg : m_messages) {
+      if (msg.isOutgoing && msg.id > 0 && msg.id > m_lastReadOutboxId &&
+          msg.id <= lastReadOutboxId) {
         // This message was just marked as read - record the time
         if (m_messageReadTimes.find(msg.id) == m_messageReadTimes.end()) {
           m_messageReadTimes[msg.id] = readTime > 0 ? readTime : now;
@@ -1899,7 +1903,7 @@ void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
 
   // Start highlight timer to clear highlights after a few seconds
   if (hasNewlyReadMessages && !m_highlightTimer.IsRunning()) {
-    m_highlightTimer.Start(1000);  // Check every second
+    m_highlightTimer.Start(1000); // Check every second
   }
 
   // Trigger refresh to show the new read markers with highlights
@@ -2031,22 +2035,30 @@ void ChatViewWidget::OnOpenMedia(wxCommandEvent &event) {
 }
 
 void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
-  if (!m_chatArea || !m_chatArea->GetDisplay())
+  if (!m_chatArea || !m_chatArea->GetDisplay()) {
+    event.Skip();
     return;
+  }
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();
   long charPos = 0;
 
+  // Helper to set cursor without flickering - updates ChatArea's tracked cursor
+  auto setCursor = [this](wxStockCursor cursor) {
+    m_chatArea->SetCurrentCursor(cursor);
+  };
+
   // Hit test to find character position
   wxTextCtrlHitTestResult hit = display->HitTest(pos, &charPos);
   if (hit == wxTE_HT_ON_TEXT || hit == wxTE_HT_BEFORE) {
-    // Check for read markers FIRST - they are the most specific (just 3 chars for [R])
-    // and located in the timestamp area, so they won't conflict with message content
+    // Check for read markers FIRST - they are the most specific (just 3 chars
+    // for [R]) and located in the timestamp area, so they won't conflict with
+    // message content
     bool foundReadMarker = false;
     for (const auto &span : m_readMarkerSpans) {
       if (charPos >= span.startPos && charPos < span.endPos) {
-        display->SetCursor(wxCursor(wxCURSOR_ARROW));
+        setCursor(wxCURSOR_ARROW);
 
         wxString tooltip = "Seen";
         // Use the per-message read time stored in the span
@@ -2085,13 +2097,13 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
       // Check for links
       LinkSpan *linkSpan = GetLinkSpanAtPosition(charPos);
       if (linkSpan) {
-        display->SetCursor(wxCursor(wxCURSOR_HAND));
+        setCursor(wxCURSOR_HAND);
         display->SetToolTip(linkSpan->url);
       } else {
         // Check for media
         MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
         if (mediaSpan) {
-          display->SetCursor(wxCursor(wxCURSOR_HAND));
+          setCursor(wxCURSOR_HAND);
           MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
           if (!info.fileName.IsEmpty()) {
             display->SetToolTip(info.fileName);
@@ -2102,17 +2114,19 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
           // Check for edit markers
           EditSpan *editSpan = GetEditSpanAtPosition(charPos);
           if (editSpan) {
-            display->SetCursor(wxCursor(wxCURSOR_HAND));
+            setCursor(wxCURSOR_HAND);
             display->SetToolTip("Click to see original message");
           } else {
-            display->SetCursor(wxCursor(wxCURSOR_IBEAM));
+            // Normal text - use I-beam for text selection
+            setCursor(wxCURSOR_IBEAM);
             display->SetToolTip(NULL); // Clear tooltip
           }
         }
       }
     }
   } else {
-    display->SetCursor(wxCursor(wxCURSOR_ARROW));
+    // Not on text
+    setCursor(wxCURSOR_ARROW);
     display->SetToolTip(NULL);
   }
 
@@ -2120,9 +2134,11 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
 }
 
 void ChatViewWidget::OnMouseLeave(wxMouseEvent &event) {
-  if (m_chatArea && m_chatArea->GetDisplay()) {
-    m_chatArea->GetDisplay()->SetCursor(wxCursor(wxCURSOR_ARROW));
-    m_chatArea->GetDisplay()->SetToolTip(NULL);
+  if (m_chatArea) {
+    m_chatArea->SetCurrentCursor(wxCURSOR_ARROW);
+    if (m_chatArea->GetDisplay()) {
+      m_chatArea->GetDisplay()->SetToolTip(NULL);
+    }
   }
   event.Skip();
 }

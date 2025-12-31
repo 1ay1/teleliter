@@ -142,6 +142,11 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   // Connect status bar to telegram client
   m_statusBar->SetTelegramClient(m_telegramClient);
 
+  // Connect chat list widget to telegram client (for online status lookup)
+  if (m_chatListWidget) {
+    m_chatListWidget->SetTelegramClient(m_telegramClient);
+  }
+
   // Setup transfer manager callbacks
   m_transferManager.SetProgressCallback([this](const TransferInfo &info) {
     m_statusBar->SetActiveTransferCount(m_transferManager.GetActiveCount());
