@@ -3,8 +3,8 @@
 #include <execinfo.h>
 #endif
 #include "FFmpegPlayer.h"
-#include "LottiePlayer.h"
 #include "FileUtils.h"
+#include "LottiePlayer.h"
 #include <iostream>
 #include <thread>
 #include <unordered_map>
@@ -21,31 +21,32 @@ wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 // Cached file existence check to reduce disk I/O
 // Cache entries expire after 500ms to balance performance with freshness
 static bool CachedFileExists(const wxString &path) {
-  if (path.IsEmpty()) return false;
-  
+  if (path.IsEmpty())
+    return false;
+
   struct CacheEntry {
     bool exists;
     wxLongLong timestamp;
   };
-  
+
   static std::unordered_map<std::string, CacheEntry> s_cache;
   static const wxLongLong CACHE_DURATION_MS = 500;
-  
+
   std::string key = path.ToStdString();
   wxLongLong now = wxGetLocalTimeMillis();
-  
+
   auto it = s_cache.find(key);
   if (it != s_cache.end() && (now - it->second.timestamp) < CACHE_DURATION_MS) {
     return it->second.exists;
   }
-  
+
   // Cache miss or expired - do actual check
-  bool exists = CachedFileExists(path);
+  bool exists = wxFileExists(path);
   s_cache[key] = {exists, now};
-  
+
   // Periodically clean old entries to prevent unbounded growth
   if (s_cache.size() > 1000) {
-    for (auto iter = s_cache.begin(); iter != s_cache.end(); ) {
+    for (auto iter = s_cache.begin(); iter != s_cache.end();) {
       if ((now - iter->second.timestamp) > CACHE_DURATION_MS * 10) {
         iter = s_cache.erase(iter);
       } else {
@@ -53,7 +54,7 @@ static bool CachedFileExists(const wxString &path) {
       }
     }
   }
-  
+
   return exists;
 }
 
@@ -88,10 +89,10 @@ static bool IsVideoFormat(const wxString &path) {
 }
 
 // Check if media type is a video-like format that should be played with FFmpeg
-// Note: Does NOT include Sticker - stickers need special handling (can be static WebP or animated)
+// Note: Does NOT include Sticker - stickers need special handling (can be
+// static WebP or animated)
 static bool IsVideoMediaType(MediaType type) {
-  return type == MediaType::Video || 
-         type == MediaType::VideoNote || 
+  return type == MediaType::Video || type == MediaType::VideoNote ||
          type == MediaType::GIF;
 }
 
@@ -108,31 +109,20 @@ static bool IsLottieFormat(const wxString &path) {
   return (ext == "tgs" || ext == "json");
 }
 
-wxBEGIN_EVENT_TABLE(MediaPopup, wxPopupWindow)
-  EVT_PAINT(MediaPopup::OnPaint)
-wxEND_EVENT_TABLE()
+wxBEGIN_EVENT_TABLE(MediaPopup, wxPopupWindow) EVT_PAINT(MediaPopup::OnPaint)
+    wxEND_EVENT_TABLE()
 
-MediaPopup::MediaPopup(wxWindow *parent)
-    : wxPopupWindow(parent, wxBORDER_NONE),
-      m_hasImage(false),
-      m_isLoading(false),
-      m_isDownloadingMedia(false),
-      m_hasError(false),
-      m_loadingTimer(this, LOADING_TIMER_ID),
-      m_loadingFrame(0),
-      m_isPlayingFFmpeg(false),
-      m_videoLoadPending(false),
-      m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID),
-      m_loopVideo(false),
-      m_videoMuted(true),
-      m_isPlayingLottie(false),
-      m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID),
-      m_isPlayingVoice(false),
-      m_voiceProgress(0.0),
-      m_voiceDuration(0.0),
+        MediaPopup::MediaPopup(wxWindow *parent)
+    : wxPopupWindow(parent, wxBORDER_NONE), m_hasImage(false),
+      m_isLoading(false), m_isDownloadingMedia(false), m_hasError(false),
+      m_loadingTimer(this, LOADING_TIMER_ID), m_loadingFrame(0),
+      m_isPlayingFFmpeg(false), m_videoLoadPending(false),
+      m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID), m_loopVideo(false),
+      m_videoMuted(true), m_isPlayingLottie(false),
+      m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID), m_isPlayingVoice(false),
+      m_voiceProgress(0.0), m_voiceDuration(0.0),
       m_voiceProgressTimer(this, VOICE_PROGRESS_TIMER_ID),
-      m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID),
-      m_asyncLoadPending(false),
+      m_asyncLoadTimer(this, ASYNC_LOAD_TIMER_ID), m_asyncLoadPending(false),
       m_parentBottom(-1) {
   SetCursor(wxCursor(wxCURSOR_HAND));
 
@@ -144,7 +134,8 @@ MediaPopup::MediaPopup(wxWindow *parent)
   Bind(wxEVT_TIMER, &MediaPopup::OnFFmpegAnimTimer, this, FFMPEG_ANIM_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnLottieAnimTimer, this, LOTTIE_ANIM_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
-  Bind(wxEVT_TIMER, &MediaPopup::OnVoiceProgressTimer, this, VOICE_PROGRESS_TIMER_ID);
+  Bind(wxEVT_TIMER, &MediaPopup::OnVoiceProgressTimer, this,
+       VOICE_PROGRESS_TIMER_ID);
   Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
   Bind(wxEVT_LEFT_DOWN, &MediaPopup::OnLeftDown, this);
 }
@@ -163,26 +154,25 @@ MediaPopup::~MediaPopup() {
 
 void MediaPopup::StopAllPlayback() {
   // Log stack context to help debug unexpected stops
-  MPLOG("StopAllPlayback called, m_isPlayingFFmpeg=" << m_isPlayingFFmpeg 
-        << " m_isPlayingLottie=" << m_isPlayingLottie
-        << " m_isPlayingVoice=" << m_isPlayingVoice
-        << " m_videoLoadPending=" << m_videoLoadPending
-        << " IsShown=" << IsShown()
+  MPLOG("StopAllPlayback called, m_isPlayingFFmpeg="
+        << m_isPlayingFFmpeg << " m_isPlayingLottie=" << m_isPlayingLottie
+        << " m_isPlayingVoice=" << m_isPlayingVoice << " m_videoLoadPending="
+        << m_videoLoadPending << " IsShown=" << IsShown()
         << " videoPath=" << m_videoPath.ToStdString());
-  
-  // Print a mini stack trace for debugging
-  #ifdef __GNUC__
-  void* callstack[5];
+
+// Print a mini stack trace for debugging
+#ifdef __GNUC__
+  void *callstack[5];
   int frames = backtrace(callstack, 5);
-  char** symbols = backtrace_symbols(callstack, frames);
+  char **symbols = backtrace_symbols(callstack, frames);
   if (symbols) {
     for (int i = 1; i < frames && i < 4; i++) {
       MPLOG("  caller[" << i << "]: " << symbols[i]);
     }
     free(symbols);
   }
-  #endif
-  
+#endif
+
   m_ffmpegAnimTimer.Stop();
   m_lottieAnimTimer.Stop();
   m_loadingTimer.Stop();
@@ -236,18 +226,20 @@ bool MediaPopup::IsSameMedia(const MediaInfo &a, const MediaInfo &b) const {
 }
 
 void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
-  MPLOG("ShowMedia called: fileId=" << info.fileId
-        << " type=" << static_cast<int>(info.type)
+  MPLOG("ShowMedia called: fileId="
+        << info.fileId << " type=" << static_cast<int>(info.type)
         << " localPath=" << info.localPath.ToStdString()
         << " thumbnailPath=" << info.thumbnailPath.ToStdString()
         << " isDownloading=" << info.isDownloading);
 
   m_originalPosition = pos;
 
-  bool isSameFile = (m_mediaInfo.fileId != 0 && m_mediaInfo.fileId == info.fileId);
-  
+  bool isSameFile =
+      (m_mediaInfo.fileId != 0 && m_mediaInfo.fileId == info.fileId);
+
   // If already playing or loading the same file, don't interrupt playback
-  if (isSameFile && (m_isPlayingFFmpeg || m_isPlayingVoice || m_videoLoadPending)) {
+  if (isSameFile &&
+      (m_isPlayingFFmpeg || m_isPlayingVoice || m_videoLoadPending)) {
     MPLOG("ShowMedia: already playing/loading same file, not interrupting");
     AdjustPositionToScreen(pos);
     return;
@@ -280,7 +272,8 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   m_hasImage = isSameFile ? hadImage : false;
   m_isDownloadingMedia = false;
 
-  bool hasLocalFile = !info.localPath.IsEmpty() && CachedFileExists(info.localPath);
+  bool hasLocalFile =
+      !info.localPath.IsEmpty() && CachedFileExists(info.localPath);
 
   // Handle voice notes specially - show waveform and play audio
   if (info.type == MediaType::Voice) {
@@ -288,11 +281,12 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     m_decodedWaveform = DecodeWaveform(info.waveform, 40);
     m_voiceDuration = info.duration > 0 ? info.duration : 0.0;
     m_voiceProgress = 0.0;
-    MPLOG("Voice note: duration=" << info.duration << " m_voiceDuration=" << m_voiceDuration);
-    
+    MPLOG("Voice note: duration=" << info.duration
+                                  << " m_voiceDuration=" << m_voiceDuration);
+
     // Set up the popup size for voice note display
     ApplySizeAndPosition(VOICE_WIDTH, VOICE_HEIGHT);
-    
+
     if (hasLocalFile) {
       // Don't auto-play - wait for user to click play button
       m_isPlayingVoice = false;
@@ -316,31 +310,30 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   }
 
   // Handle video/animation formats with FFmpeg
-  // Check both file extension AND media type (Telegram often downloads without extensions)
-  // But don't try to play if file is still downloading (incomplete file will fail)
+  // Check both file extension AND media type (Telegram often downloads without
+  // extensions) But don't try to play if file is still downloading (incomplete
+  // file will fail)
   bool hasVideoExtension = IsVideoFormat(info.localPath);
   bool isVideoByType = IsVideoMediaType(info.type);
   bool noExtension = HasNoExtension(info.localPath);
   bool fileReady = hasLocalFile && !info.isDownloading;
-  
+
   // For files without extension, use media type to decide
-  // For Sticker type without extension, try FFmpeg first (could be animated WebM)
-  bool tryAsVideo = fileReady && (
-    hasVideoExtension || 
-    isVideoByType || 
-    (info.type == MediaType::Sticker && noExtension)
-  );
-  
-  MPLOG("ShowMedia: hasVideoExtension=" << hasVideoExtension 
-        << " isVideoByType=" << isVideoByType 
-        << " noExtension=" << noExtension
-        << " fileReady=" << fileReady
+  // For Sticker type without extension, try FFmpeg first (could be animated
+  // WebM)
+  bool tryAsVideo =
+      fileReady && (hasVideoExtension || isVideoByType ||
+                    (info.type == MediaType::Sticker && noExtension));
+
+  MPLOG("ShowMedia: hasVideoExtension="
+        << hasVideoExtension << " isVideoByType=" << isVideoByType
+        << " noExtension=" << noExtension << " fileReady=" << fileReady
         << " tryAsVideo=" << tryAsVideo);
-  
+
   if (tryAsVideo) {
-    bool shouldLoop = (info.type == MediaType::GIF || 
-                       info.type == MediaType::Sticker ||
-                       info.type == MediaType::VideoNote);
+    bool shouldLoop =
+        (info.type == MediaType::GIF || info.type == MediaType::Sticker ||
+         info.type == MediaType::VideoNote);
     PlayVideo(info.localPath, shouldLoop, true);
     return;
   }
@@ -349,8 +342,9 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   // Also check file is not still downloading
   bool hasImageExtension = IsSupportedImageFormat(info.localPath);
   bool isImageByType = (info.type == MediaType::Photo);
-  bool isImageFile = fileReady && (hasImageExtension || (isImageByType && noExtension));
-  
+  bool isImageFile =
+      fileReady && (hasImageExtension || (isImageByType && noExtension));
+
   if (isImageFile) {
     m_isLoading = true;
     m_loadingFrame = 0;
@@ -386,7 +380,8 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
 }
 
 void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
-  MPLOG("PlayVideo: path=" << path.ToStdString() << " loop=" << loop << " muted=" << muted);
+  MPLOG("PlayVideo: path=" << path.ToStdString() << " loop=" << loop
+                           << " muted=" << muted);
 
   if (HasFailedRecently(path)) {
     MPLOG("PlayVideo: skipping recently failed file");
@@ -413,13 +408,13 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
   m_videoPath = path;
   m_loopVideo = loop;
   m_videoMuted = muted;
-  m_videoLoadPending = true;  // Mark that we're loading a video
+  m_videoLoadPending = true; // Mark that we're loading a video
 
   // Show compact loading state while initializing
   m_isLoading = true;
   m_loadingFrame = 0;
   m_loadingTimer.Start(150);
-  
+
   // Use compact loading size
   ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
   Refresh();
@@ -428,7 +423,7 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
   // Load asynchronously in a separate thread to prevent UI blocking
   // Capture media type before thread since m_mediaInfo could change
   MediaType mediaType = m_mediaInfo.type;
-  
+
   std::thread([this, path, loop, muted, mediaType]() {
     // Create a new player in the background thread
     auto ffmpegPlayer = std::make_unique<FFmpegPlayer>();
@@ -451,18 +446,18 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
 
     // Store result and notify main thread
     // Use raw pointer transfer since CallAfter copies the lambda
-    FFmpegPlayer* playerPtr = loadSuccess ? ffmpegPlayer.release() : nullptr;
+    FFmpegPlayer *playerPtr = loadSuccess ? ffmpegPlayer.release() : nullptr;
 
     // Switch back to main thread for UI updates
     CallAfter([this, path, loop, muted, loadSuccess, playerPtr]() {
       // Take ownership of the player (may be null on failure)
       std::unique_ptr<FFmpegPlayer> player(playerPtr);
-      
+
       if (!m_videoLoadPending || m_videoPath != path) {
         // User moved on to different media, discard this result
         return;
       }
-      
+
       if (!loadSuccess || !player) {
         MPLOG("PlayVideo async: failed to load: " << path.ToStdString());
         MarkLoadFailed(path);
@@ -478,7 +473,8 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
   }).detach();
 }
 
-void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop, bool muted) {
+void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop,
+                                      bool muted) {
   MPLOG("FinishFFmpegPlayback: " << path.ToStdString());
 
   m_isLoading = false;
@@ -521,8 +517,10 @@ void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop, bool mute
     popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
     popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
   } else {
-    popupWidth = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_WIDTH : PHOTO_MAX_WIDTH;
-    popupHeight = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_HEIGHT : PHOTO_MAX_HEIGHT;
+    popupWidth = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_WIDTH
+                                                          : PHOTO_MAX_WIDTH;
+    popupHeight = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_HEIGHT
+                                                           : PHOTO_MAX_HEIGHT;
   }
 
   // Set size without Hide/Show dance
@@ -530,7 +528,7 @@ void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop, bool mute
   if (currentPos.x < 0 || currentPos.y < 0) {
     currentPos = m_originalPosition;
   }
-  
+
   SetSize(currentPos.x, currentPos.y, popupWidth, popupHeight);
   if (!IsShown()) {
     Show();
@@ -545,8 +543,9 @@ void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop, bool mute
 
   Refresh();
   Update();
-  
-  MPLOG("FinishFFmpegPlayback: playback started, interval=" << interval << "ms");
+
+  MPLOG("FinishFFmpegPlayback: playback started, interval=" << interval
+                                                            << "ms");
 }
 
 // PlayMediaWithFFmpeg is now replaced by async loading in PlayVideo
@@ -630,13 +629,13 @@ void MediaPopup::PlayLottie(const wxString &path, bool loop) {
 
     // Store result and notify main thread
     // Use raw pointer transfer since CallAfter copies the lambda
-    LottiePlayer* playerPtr = loadSuccess ? lottiePlayer.release() : nullptr;
+    LottiePlayer *playerPtr = loadSuccess ? lottiePlayer.release() : nullptr;
 
     // Switch back to main thread for UI updates
     CallAfter([this, path, loop, loadSuccess, playerPtr]() {
       // Take ownership of the player (may be null on failure)
       std::unique_ptr<LottiePlayer> player(playerPtr);
-      
+
       if (m_lottiePath != path) {
         // User moved on to different media, discard this result
         return;
@@ -709,11 +708,13 @@ void MediaPopup::FinishLottiePlayback(const wxString &path, bool loop) {
   m_lottieAnimTimer.Start(interval);
 
   Refresh();
-  MPLOG("PlayLottie: playback started, interval=" << interval << "ms"
+  MPLOG("PlayLottie: playback started, interval="
+        << interval << "ms"
         << " frames=" << m_lottiePlayer->GetTotalFrames()
         << " fps=" << m_lottiePlayer->GetFrameRate());
 #else
-  MPLOG("PlayLottie: rlottie support not compiled in, falling back to thumbnail");
+  MPLOG(
+      "PlayLottie: rlottie support not compiled in, falling back to thumbnail");
   FallbackToThumbnail();
 #endif
 }
@@ -752,13 +753,16 @@ void MediaPopup::OnLottieFrame(const wxBitmap &frame) {
 }
 
 void MediaPopup::FallbackToThumbnail() {
-  MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
+  MPLOG("FallbackToThumbnail: thumbnailPath="
+        << m_mediaInfo.thumbnailPath.ToStdString()
         << " localPath=" << m_mediaInfo.localPath.ToStdString());
 
-  // Check if main file still needs downloading - if so, keep timer running for spinner overlay
-  bool mainFileNeedsDownload = m_mediaInfo.fileId != 0 &&
-      (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
-  
+  // Check if main file still needs downloading - if so, keep timer running for
+  // spinner overlay
+  bool mainFileNeedsDownload =
+      m_mediaInfo.fileId != 0 && (m_mediaInfo.localPath.IsEmpty() ||
+                                  !CachedFileExists(m_mediaInfo.localPath));
+
   if (mainFileNeedsDownload) {
     // Keep timer running for the download spinner overlay on thumbnail
     m_isDownloadingMedia = true;
@@ -770,9 +774,11 @@ void MediaPopup::FallbackToThumbnail() {
     m_isDownloadingMedia = false;
   }
 
-  if (!m_mediaInfo.thumbnailPath.IsEmpty() && CachedFileExists(m_mediaInfo.thumbnailPath)) {
+  if (!m_mediaInfo.thumbnailPath.IsEmpty() &&
+      CachedFileExists(m_mediaInfo.thumbnailPath)) {
     // Try to play animated thumbnail (e.g. WebP) if it hasn't failed recently
-    if (IsVideoFormat(m_mediaInfo.thumbnailPath) && !HasFailedRecently(m_mediaInfo.thumbnailPath)) {
+    if (IsVideoFormat(m_mediaInfo.thumbnailPath) &&
+        !HasFailedRecently(m_mediaInfo.thumbnailPath)) {
       PlayVideo(m_mediaInfo.thumbnailPath, true, true);
       return;
     }
@@ -783,13 +789,15 @@ void MediaPopup::FallbackToThumbnail() {
     Refresh();
   } else if (!m_mediaInfo.localPath.IsEmpty() &&
              CachedFileExists(m_mediaInfo.localPath)) {
-    // Try loading as image - either has image extension OR no extension (Telegram temp files)
-    // FFmpeg already failed if we're here, so try image loading as fallback
+    // Try loading as image - either has image extension OR no extension
+    // (Telegram temp files) FFmpeg already failed if we're here, so try image
+    // loading as fallback
     bool hasImageExt = IsSupportedImageFormat(m_mediaInfo.localPath);
     bool noExt = HasNoExtension(m_mediaInfo.localPath);
-    
+
     if (hasImageExt || noExt) {
-      MPLOG("FallbackToThumbnail: trying localPath as image (hasImageExt=" << hasImageExt << " noExt=" << noExt << ")");
+      MPLOG("FallbackToThumbnail: trying localPath as image (hasImageExt="
+            << hasImageExt << " noExt=" << noExt << ")");
       m_hasError = false;
       m_errorMessage.Clear();
       LoadImageAsync(m_mediaInfo.localPath);
@@ -797,7 +805,7 @@ void MediaPopup::FallbackToThumbnail() {
       return;
     }
   }
-  
+
   if (!m_mediaInfo.emoji.IsEmpty()) {
     m_hasError = false;
     m_errorMessage.Clear();
@@ -822,8 +830,9 @@ void MediaPopup::SetImage(const wxImage &image) {
   StopAllPlayback();
   m_isLoading = false;
 
-  bool needsDownload = m_mediaInfo.fileId != 0 &&
-      (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
+  bool needsDownload =
+      m_mediaInfo.fileId != 0 && (m_mediaInfo.localPath.IsEmpty() ||
+                                  !CachedFileExists(m_mediaInfo.localPath));
 
   if (!m_isDownloadingMedia && !needsDownload) {
     m_loadingTimer.Stop();
@@ -918,7 +927,7 @@ void MediaPopup::OnLoadingTimer(wxTimerEvent &event) {
 
   if (IsShown()) {
     Refresh();
-    Update();  // Force immediate repaint for spinner animation
+    Update(); // Force immediate repaint for spinner animation
   }
 }
 
@@ -929,7 +938,8 @@ wxString MediaPopup::GetMediaLabel() const {
   case MediaType::Video:
     return "Video";
   case MediaType::Sticker:
-    return "Sticker" + (m_mediaInfo.emoji.IsEmpty() ? "" : " " + m_mediaInfo.emoji);
+    return "Sticker" +
+           (m_mediaInfo.emoji.IsEmpty() ? "" : " " + m_mediaInfo.emoji);
   case MediaType::GIF:
     return "GIF";
   case MediaType::Voice:
@@ -970,13 +980,13 @@ wxString MediaPopup::GetMediaIcon() const {
 
 void MediaPopup::OnLeftDown(wxMouseEvent &event) {
   MPLOG("MediaPopup clicked");
-  
+
   // For voice notes, toggle play/pause on click
   if (m_mediaInfo.type == MediaType::Voice) {
     ToggleVoicePlayback();
     return;
   }
-  
+
   if (m_clickCallback) {
     m_clickCallback(m_mediaInfo);
   }
@@ -1088,10 +1098,11 @@ void MediaPopup::ApplySizeAndPosition(int width, int height) {
     }
   }
 
-  // Avoid Hide/Show dance during video playback - causes Gdk warnings and interrupts playback
-  bool isPlayingMedia = m_isPlayingFFmpeg || m_isPlayingLottie || m_isPlayingVoice;
-  
 #ifdef __WXGTK__
+  // Avoid Hide/Show dance during video playback - causes Gdk warnings and
+  // interrupts playback
+  bool isPlayingMedia =
+      m_isPlayingFFmpeg || m_isPlayingLottie || m_isPlayingVoice;
   if (!isPlayingMedia && IsShown()) {
     // Only do Hide/Show dance when not playing - for initial positioning
     Hide();
@@ -1126,7 +1137,8 @@ void MediaPopup::UpdateSize() {
   if (m_hasImage && m_bitmap.IsOk()) {
     width = m_bitmap.GetWidth() + (PADDING * 2) + (BORDER_WIDTH * 2);
     height = m_bitmap.GetHeight() + (PADDING * 2) + (BORDER_WIDTH * 2) + 24;
-  } else if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
+  } else if (m_mediaInfo.type == MediaType::Sticker &&
+             !m_mediaInfo.emoji.IsEmpty()) {
     width = 200;
     height = 150;
   } else {
@@ -1134,7 +1146,8 @@ void MediaPopup::UpdateSize() {
     height = PHOTO_MAX_HEIGHT;
   }
 
-  // Use larger minimums when in loading/downloading state to fit spinner + text + label
+  // Use larger minimums when in loading/downloading state to fit spinner + text
+  // + label
   if (m_isLoading || m_isDownloadingMedia) {
     width = std::max(width, LOADING_MIN_WIDTH);
     height = std::max(height, LOADING_MIN_HEIGHT);
@@ -1185,14 +1198,16 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
                               CachedFileExists(m_mediaInfo.thumbnailPath) &&
                               (m_mediaInfo.localPath.IsEmpty() ||
                                !CachedFileExists(m_mediaInfo.localPath));
-    bool needsDownload = m_mediaInfo.fileId != 0 &&
-        (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
+    bool needsDownload =
+        m_mediaInfo.fileId != 0 && (m_mediaInfo.localPath.IsEmpty() ||
+                                    !CachedFileExists(m_mediaInfo.localPath));
 
     int centerX = imgX + m_bitmap.GetWidth() / 2;
     int centerY = imgY + m_bitmap.GetHeight() / 2;
     int radius = 24;
 
-    if (m_isLoading || m_isDownloadingMedia || (isShowingThumbnail && needsDownload)) {
+    if (m_isLoading || m_isDownloadingMedia ||
+        (isShowingThumbnail && needsDownload)) {
       dc.SetBrush(wxBrush(wxColour(0, 0, 0, 150)));
       dc.SetPen(*wxTRANSPARENT_PEN);
       dc.DrawRectangle(imgX, imgY, m_bitmap.GetWidth(), m_bitmap.GetHeight());
@@ -1201,10 +1216,12 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       dc.SetPen(*wxTRANSPARENT_PEN);
       dc.DrawCircle(centerX, centerY, radius);
 
-      static const wxString spinnerChars[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
+      static const wxString spinnerChars[] = {"|", "/", "-", "\\",
+                                              "|", "/", "-", "\\"};
       wxString spinner = spinnerChars[m_loadingFrame % 8];
       dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
-      dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
+      dc.SetTextForeground(
+          wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
       wxSize spinnerSize = dc.GetTextExtent(spinner);
       dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2,
                   centerY - spinnerSize.GetHeight() / 2);
@@ -1212,7 +1229,8 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
       wxString statusText = "Downloading...";
       wxSize statusSize = dc.GetTextExtent(statusText);
-      dc.DrawText(statusText, centerX - statusSize.GetWidth() / 2, centerY + radius + 8);
+      dc.DrawText(statusText, centerX - statusSize.GetWidth() / 2,
+                  centerY + radius + 8);
     } else if (isVideoType) {
       dc.SetBrush(wxBrush(wxColour(0, 0, 0, 100)));
       dc.SetPen(*wxTRANSPARENT_PEN);
@@ -1234,7 +1252,8 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
       wxString hint = "Click to play";
       wxSize hintSize = dc.GetTextExtent(hint);
-      dc.DrawText(hint, centerX - hintSize.GetWidth() / 2, centerY + radius + 8);
+      dc.DrawText(hint, centerX - hintSize.GetWidth() / 2,
+                  centerY + radius + 8);
     }
 
     DrawMediaLabel(dc, size);
@@ -1243,14 +1262,16 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     dc.SetTextForeground(wxColour(0xCC, 0x00, 0x00));
     dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
 
-    wxString errorText = m_errorMessage.IsEmpty() ? "Error loading media" : m_errorMessage;
+    wxString errorText =
+        m_errorMessage.IsEmpty() ? "Error loading media" : m_errorMessage;
     wxSize textSize = dc.GetTextExtent(errorText);
     int textX = (size.GetWidth() - textSize.GetWidth()) / 2;
     int textY = (size.GetHeight() - textSize.GetHeight()) / 2;
     dc.DrawText(errorText, textX, textY);
 
   } else if (m_isLoading || m_isDownloadingMedia) {
-    static const wxString spinners[] = {"|", "/", "-", "\\", "|", "/", "-", "\\"};
+    static const wxString spinners[] = {"|", "/", "-", "\\",
+                                        "|", "/", "-", "\\"};
     wxString spinner = spinners[m_loadingFrame % 8];
 
     int centerX = size.GetWidth() / 2;
@@ -1261,8 +1282,10 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     dc.SetPen(*wxTRANSPARENT_PEN);
     dc.DrawCircle(centerX, centerY, radius);
 
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
-    dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
+    dc.SetFont(
+        wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
+    dc.SetTextForeground(
+        wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
 
     wxSize spinnerSize = dc.GetTextExtent(spinner);
     dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2,
@@ -1281,12 +1304,14 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
   } else {
     wxString icon = GetMediaIcon();
     double scaleFactor = 3.0;
-    if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
+    if (m_mediaInfo.type == MediaType::Sticker &&
+        !m_mediaInfo.emoji.IsEmpty()) {
       scaleFactor = 5.0;
       icon = m_mediaInfo.emoji;
     }
 
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
+    dc.SetFont(
+        wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
     dc.SetTextForeground(m_textColor);
 
     wxSize iconSize = dc.GetTextExtent(icon);
@@ -1295,7 +1320,8 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     dc.DrawText(icon, iconX, iconY);
 
     wxString typeText = GetMediaLabel();
-    if (m_mediaInfo.type == MediaType::Sticker && !m_mediaInfo.emoji.IsEmpty()) {
+    if (m_mediaInfo.type == MediaType::Sticker &&
+        !m_mediaInfo.emoji.IsEmpty()) {
       typeText = "Sticker";
     }
 
@@ -1311,7 +1337,8 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     if (!m_mediaInfo.fileSize.IsEmpty()) {
       infoText = m_mediaInfo.fileSize;
     }
-    if (!m_mediaInfo.fileName.IsEmpty() && m_mediaInfo.type != MediaType::File) {
+    if (!m_mediaInfo.fileName.IsEmpty() &&
+        m_mediaInfo.type != MediaType::File) {
       if (!infoText.IsEmpty())
         infoText += " - ";
       infoText += m_mediaInfo.fileName;
@@ -1361,7 +1388,8 @@ void MediaPopup::DrawMediaLabel(wxDC &dc, const wxSize &size) {
   dc.DrawText(label, labelX, labelY);
 
   if (!m_mediaInfo.caption.IsEmpty()) {
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT).Smaller().Italic());
+    dc.SetFont(
+        wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT).Smaller().Italic());
 
     wxString caption = m_mediaInfo.caption;
     wxSize captionSize = dc.GetTextExtent(caption);
@@ -1387,7 +1415,8 @@ void MediaPopup::LoadImageAsync(const wxString &path) {
   }
 
   if (HasFailedRecently(path)) {
-    MPLOG("LoadImageAsync: skipping recently failed path: " << path.ToStdString());
+    MPLOG("LoadImageAsync: skipping recently failed path: "
+          << path.ToStdString());
     FallbackToThumbnail();
     return;
   }
@@ -1453,7 +1482,7 @@ bool MediaPopup::HasFailedRecently(const wxString &path) const {
   if (it == m_failedLoads.end()) {
     return false;
   }
-  
+
   // Check if failure has expired
   int64_t now = wxGetUTCTime();
   int64_t failureTime = it->second;
@@ -1461,7 +1490,7 @@ bool MediaPopup::HasFailedRecently(const wxString &path) const {
     // Expired - will be cleaned up on next MarkLoadFailed
     return false;
   }
-  
+
   return true;
 }
 
@@ -1469,18 +1498,18 @@ void MediaPopup::MarkLoadFailed(const wxString &path) {
   if (!path.IsEmpty()) {
     int64_t now = wxGetUTCTime();
     m_failedLoads[path] = now;
-    MPLOG("MarkLoadFailed: " << path.ToStdString()
-          << " (total failures: " << m_failedLoads.size() << ")");
+    MPLOG("MarkLoadFailed: " << path.ToStdString() << " (total failures: "
+                             << m_failedLoads.size() << ")");
 
     // Clean up expired entries and limit size
     if (m_failedLoads.size() > 50) {
       std::vector<wxString> toRemove;
-      for (const auto& [p, t] : m_failedLoads) {
+      for (const auto &[p, t] : m_failedLoads) {
         if (now - t > FAILURE_EXPIRATION_SECONDS) {
           toRemove.push_back(p);
         }
       }
-      for (const auto& p : toRemove) {
+      for (const auto &p : toRemove) {
         m_failedLoads.erase(p);
       }
       // If still too many, clear all
@@ -1491,9 +1520,7 @@ void MediaPopup::MarkLoadFailed(const wxString &path) {
   }
 }
 
-void MediaPopup::ClearFailedLoads() {
-  m_failedLoads.clear();
-}
+void MediaPopup::ClearFailedLoads() { m_failedLoads.clear(); }
 
 void MediaPopup::ClearFailedPath(const wxString &path) {
   if (!path.IsEmpty()) {
@@ -1506,62 +1533,65 @@ void MediaPopup::ClearFailedPath(const wxString &path) {
 }
 
 // Decode TDLib waveform data (5-bit values packed into bytes)
-std::vector<int> MediaPopup::DecodeWaveform(const std::vector<uint8_t>& waveformData, int targetLength) {
+std::vector<int>
+MediaPopup::DecodeWaveform(const std::vector<uint8_t> &waveformData,
+                           int targetLength) {
   std::vector<int> samples;
-  
+
   if (waveformData.empty()) {
     // Return a flat waveform if no data
     return std::vector<int>(targetLength, 16);
   }
-  
+
   // Unpack 5-bit values from bytes
   int bitPos = 0;
   size_t byteIdx = 0;
-  
+
   while (byteIdx < waveformData.size()) {
     int value = 0;
     int bitsRemaining = 5;
     int shift = 0;
-    
+
     while (bitsRemaining > 0 && byteIdx < waveformData.size()) {
       int bitsInCurrentByte = 8 - bitPos;
       int bitsToTake = std::min(bitsRemaining, bitsInCurrentByte);
-      
+
       int mask = (1 << bitsToTake) - 1;
       int extracted = (waveformData[byteIdx] >> bitPos) & mask;
       value |= (extracted << shift);
-      
+
       shift += bitsToTake;
       bitsRemaining -= bitsToTake;
       bitPos += bitsToTake;
-      
+
       if (bitPos >= 8) {
         bitPos = 0;
         byteIdx++;
       }
     }
-    
+
     samples.push_back(value);
   }
-  
+
   if (samples.empty()) {
     return std::vector<int>(targetLength, 16);
   }
-  
+
   // Resample to target length
   std::vector<int> resampled(targetLength);
   for (int i = 0; i < targetLength; i++) {
     size_t srcIdx = (i * samples.size()) / targetLength;
-    if (srcIdx >= samples.size()) srcIdx = samples.size() - 1;
+    if (srcIdx >= samples.size())
+      srcIdx = samples.size() - 1;
     resampled[i] = samples[srcIdx];
   }
-  
+
   return resampled;
 }
 
-void MediaPopup::PlayVoiceNote(const wxString& path) {
+void MediaPopup::PlayVoiceNote(const wxString &path) {
   MPLOG("PlayVoiceNote: " << path.ToStdString());
-  
+
   if (HasFailedRecently(path)) {
     MPLOG("PlayVoiceNote: skipping recently failed file");
     m_hasError = true;
@@ -1569,26 +1599,26 @@ void MediaPopup::PlayVoiceNote(const wxString& path) {
     Refresh();
     return;
   }
-  
+
   m_isLoading = false;
   m_loadingTimer.Stop();
-  
+
   // Stop any existing playback first
   if (m_ffmpegPlayer) {
     m_ffmpegPlayer->Stop();
   }
-  
+
   // Use FFmpegPlayer for audio playback (cross-platform via SDL2)
   if (!m_ffmpegPlayer) {
     m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
   }
-  
+
   // Track which file we're playing
   m_currentVoicePath = path;
-  
+
   m_ffmpegPlayer->SetLoop(false);
-  m_ffmpegPlayer->SetMuted(false);  // Voice notes should be audible!
-  
+  m_ffmpegPlayer->SetMuted(false); // Voice notes should be audible!
+
   if (!m_ffmpegPlayer->LoadFile(path)) {
     MPLOG("PlayVoiceNote: failed to load: " << path.ToStdString());
     MarkLoadFailed(path);
@@ -1597,37 +1627,37 @@ void MediaPopup::PlayVoiceNote(const wxString& path) {
     Refresh();
     return;
   }
-  
+
   // Get duration from FFmpeg if we don't have it
   double duration = m_ffmpegPlayer->GetDuration();
   if (duration > 0) {
     m_voiceDuration = duration;
   }
-  
+
   m_ffmpegPlayer->Play();
   m_isPlayingVoice = true;
   m_voiceProgress = 0.0;
-  
+
   // Start progress timer (update ~20 times per second for smooth progress)
   m_voiceProgressTimer.Start(50);
-  
+
   Refresh();
 }
 
 void MediaPopup::ToggleVoicePlayback() {
   // Check if we need to load a different file
-  bool needsLoad = !m_ffmpegPlayer || 
-                   m_currentVoicePath.IsEmpty() ||
+  bool needsLoad = !m_ffmpegPlayer || m_currentVoicePath.IsEmpty() ||
                    m_currentVoicePath != m_mediaInfo.localPath;
-  
+
   if (needsLoad) {
     // Load and play the new file
-    if (!m_mediaInfo.localPath.IsEmpty() && CachedFileExists(m_mediaInfo.localPath)) {
+    if (!m_mediaInfo.localPath.IsEmpty() &&
+        CachedFileExists(m_mediaInfo.localPath)) {
       PlayVoiceNote(m_mediaInfo.localPath);
     }
     return;
   }
-  
+
   if (m_isPlayingVoice) {
     // Pause playback
     m_ffmpegPlayer->Pause();
@@ -1644,43 +1674,44 @@ void MediaPopup::ToggleVoicePlayback() {
     m_voiceProgressTimer.Start(50);
     m_isPlayingVoice = true;
   }
-  
+
   Refresh();
 }
 
-void MediaPopup::OnVoiceProgressTimer(wxTimerEvent& event) {
+void MediaPopup::OnVoiceProgressTimer(wxTimerEvent &event) {
   if (!m_ffmpegPlayer || !m_isPlayingVoice) {
     m_voiceProgressTimer.Stop();
     return;
   }
-  
+
   // Keep audio buffer filled (for audio-only files)
   if (m_ffmpegPlayer->IsAudioOnly()) {
     m_ffmpegPlayer->AdvanceFrame();
   }
-  
+
   // Get current position from FFmpeg
   double currentTime = m_ffmpegPlayer->GetCurrentTime();
-  
+
   if (m_voiceDuration > 0) {
     m_voiceProgress = currentTime / m_voiceDuration;
-    if (m_voiceProgress > 1.0) m_voiceProgress = 1.0;
+    if (m_voiceProgress > 1.0)
+      m_voiceProgress = 1.0;
   }
-  
+
   // Check if playback finished
   if (!m_ffmpegPlayer->IsPlaying() || m_voiceProgress >= 0.99) {
     m_isPlayingVoice = false;
     m_voiceProgress = 1.0;
     m_voiceProgressTimer.Stop();
   }
-  
+
   Refresh();
 }
 
-void MediaPopup::DrawVoiceWaveform(wxDC& dc, const wxSize& size) {
+void MediaPopup::DrawVoiceWaveform(wxDC &dc, const wxSize &size) {
   int contentWidth = size.GetWidth() - PADDING * 2 - BORDER_WIDTH * 2;
   int contentHeight = size.GetHeight() - PADDING * 2 - BORDER_WIDTH * 2;
-  
+
   // Layout:
   // [Play/Pause Icon] [Waveform Bars] [Time]
   int iconSize = 24;
@@ -1689,15 +1720,15 @@ void MediaPopup::DrawVoiceWaveform(wxDC& dc, const wxSize& size) {
   int waveformWidth = contentWidth - iconSize - timeWidth - 16;
   int waveformHeight = contentHeight - 20;
   int waveformY = PADDING + BORDER_WIDTH + 10;
-  
+
   // Draw play/pause icon
-  wxColour accentColor(0x00, 0x88, 0xCC);  // Nice blue
+  wxColour accentColor(0x00, 0x88, 0xCC); // Nice blue
   dc.SetBrush(wxBrush(accentColor));
   dc.SetPen(*wxTRANSPARENT_PEN);
-  
+
   int iconX = PADDING + BORDER_WIDTH + 4;
   int iconY = (size.GetHeight() - iconSize) / 2;
-  
+
   if (m_isPlayingVoice) {
     // Draw pause icon (two vertical bars)
     int barWidth = 6;
@@ -1712,53 +1743,60 @@ void MediaPopup::DrawVoiceWaveform(wxDC& dc, const wxSize& size) {
     triangle[2] = wxPoint(iconX + iconSize, iconY + iconSize / 2);
     dc.DrawPolygon(3, triangle);
   }
-  
+
   // Draw waveform bars
-  int numBars = m_decodedWaveform.empty() ? 40 : static_cast<int>(m_decodedWaveform.size());
+  int numBars = m_decodedWaveform.empty()
+                    ? 40
+                    : static_cast<int>(m_decodedWaveform.size());
   int barWidth = std::max(2, (waveformWidth - numBars) / numBars);
   int gap = 1;
   int actualBarWidth = barWidth - gap;
-  if (actualBarWidth < 2) actualBarWidth = 2;
-  
+  if (actualBarWidth < 2)
+    actualBarWidth = 2;
+
   // Calculate progress position
   int progressBar = static_cast<int>(m_voiceProgress * numBars);
-  
-  for (int i = 0; i < numBars && i * (actualBarWidth + gap) < waveformWidth; i++) {
+
+  for (int i = 0; i < numBars && i * (actualBarWidth + gap) < waveformWidth;
+       i++) {
     int barX = waveformX + i * (actualBarWidth + gap);
-    
+
     // Get bar height from waveform data (0-31 range)
-    int value = m_decodedWaveform.empty() ? 16 : m_decodedWaveform[i % m_decodedWaveform.size()];
+    int value = m_decodedWaveform.empty()
+                    ? 16
+                    : m_decodedWaveform[i % m_decodedWaveform.size()];
     int barHeight = std::max(4, (value * waveformHeight) / 31);
     int barY = waveformY + (waveformHeight - barHeight) / 2;
-    
+
     // Color based on progress
     if (i < progressBar) {
-      dc.SetBrush(wxBrush(accentColor));  // Played portion
+      dc.SetBrush(wxBrush(accentColor)); // Played portion
     } else {
-      dc.SetBrush(wxBrush(m_labelColor));  // Unplayed portion
+      dc.SetBrush(wxBrush(m_labelColor)); // Unplayed portion
     }
-    
+
     // Draw rounded bar
     dc.DrawRoundedRectangle(barX, barY, actualBarWidth, barHeight, 1);
   }
-  
+
   // Draw time - always show current / total format
   int currentSecs = static_cast<int>(m_voiceProgress * m_voiceDuration);
   int totalSecs = static_cast<int>(m_voiceDuration);
-  wxString timeStr = wxString::Format("%d:%02d / %d:%02d",
-                                       currentSecs / 60, currentSecs % 60,
-                                       totalSecs / 60, totalSecs % 60);
-  
+  wxString timeStr =
+      wxString::Format("%d:%02d / %d:%02d", currentSecs / 60, currentSecs % 60,
+                       totalSecs / 60, totalSecs % 60);
+
   dc.SetTextForeground(m_textColor);
   wxFont font = dc.GetFont();
   font.SetPointSize(9);
   dc.SetFont(font);
-  
+
   wxSize textSize = dc.GetTextExtent(timeStr);
-  int timeX = size.GetWidth() - PADDING - BORDER_WIDTH - textSize.GetWidth() - 4;
+  int timeX =
+      size.GetWidth() - PADDING - BORDER_WIDTH - textSize.GetWidth() - 4;
   int timeY = (size.GetHeight() - textSize.GetHeight()) / 2;
   dc.DrawText(timeStr, timeX, timeY);
-  
+
   // Draw label at bottom
   wxString label = "Voice Message";
   if (m_isLoading) {
