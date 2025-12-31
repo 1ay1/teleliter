@@ -46,11 +46,15 @@ void ChatArea::CreateUI() {
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
 
   // Chat display - let it use native styling
+  // Use wxBUFFER_VIRTUAL_AREA for double buffering to reduce flicker
   m_chatDisplay = new wxRichTextCtrl(
       this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
       wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
   m_chatDisplay->SetFont(m_chatFont);
   m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));
+  
+  // Enable double buffering to prevent flicker during rapid updates
+  m_chatDisplay->SetDoubleBuffered(true);
 
   // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
   m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
@@ -141,14 +145,31 @@ void ChatArea::SetChatFont(const wxFont &font) {
 }
 
 void ChatArea::ScrollToBottom() {
+  if (!m_chatDisplay)
+    return;
+    
+  // If we're in a batch update, just mark that we need to scroll
+  if (m_batchDepth > 0) {
+    m_wasAtBottom = true;
+    return;
+  }
+  
   m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
-  m_chatDisplay->Refresh();
-  m_chatDisplay->Update();
+  // Only call Refresh, not Update - let the event loop coalesce repaints
+  ScheduleRefresh();
 }
 
 void ChatArea::ScrollToBottomIfAtBottom() {
+  if (!m_chatDisplay)
+    return;
+    
   if (IsAtBottom()) {
-    ScrollToBottom();
+    // If in batch mode, just mark the flag - EndBatchUpdate will handle it
+    if (m_batchDepth > 0) {
+      m_wasAtBottom = true;
+    } else {
+      ScrollToBottom();
+    }
   }
 }
 
@@ -177,10 +198,13 @@ void ChatArea::EndBatchUpdate() {
     m_batchDepth--;
     if (m_batchDepth == 0) {
       m_chatDisplay->Thaw();
-      DoRefresh();
+      // Layout content once after batch
+      m_chatDisplay->LayoutContent();
       if (m_wasAtBottom) {
-        ScrollToBottom();
+        m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
       }
+      // Single refresh at end of batch - no Update() to let event loop coalesce
+      m_chatDisplay->Refresh();
     }
   }
 }
@@ -213,10 +237,15 @@ void ChatArea::DoRefresh() {
     return;
   }
 
-  // Force layout recalculation and repaint
+  // Skip refresh if we're in a batch update - EndBatchUpdate will handle it
+  if (m_batchDepth > 0) {
+    return;
+  }
+
+  // Force layout recalculation and queue repaint
+  // Don't call Update() - let event loop coalesce multiple refresh requests
   m_chatDisplay->LayoutContent();
   m_chatDisplay->Refresh();
-  m_chatDisplay->Update();
 }
 
 wxString ChatArea::GetCurrentTimestamp() {

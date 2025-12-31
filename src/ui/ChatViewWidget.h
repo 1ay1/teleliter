@@ -45,6 +45,9 @@ public:
   // Update an existing message (e.g., when media info becomes available)
   void UpdateMessage(const MessageInfo &msg);
 
+  // Remove a message (e.g., when deleted)
+  void RemoveMessage(int64_t messageId);
+
   // Get stored messages (for debugging/inspection)
   const std::vector<MessageInfo> &GetMessages() const { return m_messages; }
   size_t GetMessageCount() const { return m_messages.size(); }

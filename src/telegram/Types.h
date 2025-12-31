@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <vector>
 #include <wx/wx.h>
 
@@ -15,6 +16,15 @@ enum class AuthState {
   Ready,
   Closed,
   Error
+};
+
+// Connection state (tracks actual connection to Telegram servers)
+enum class ConnectionState {
+  WaitingForNetwork,    // No network connection
+  ConnectingToProxy,    // Connecting through proxy
+  Connecting,           // Connecting to Telegram servers
+  Updating,             // Downloading updates
+  Ready                 // Connected and ready
 };
 
 // Chat info structure
@@ -64,6 +74,11 @@ struct MessageInfo {
   bool isOutgoing;
   bool isEdited;
   wxString originalText; // Original text before edit (if available)
+  
+  // When a message is sent, the server assigns a new ID different from the temporary local ID.
+  // This field holds the new server-assigned ID so the UI can update its tracking.
+  // If non-zero, the UI should update its stored message ID from 'id' to 'serverMessageId'.
+  int64_t serverMessageId;
 
   bool hasPhoto;
   bool hasVideo;
@@ -95,12 +110,15 @@ struct MessageInfo {
   bool isForwarded;
   wxString forwardedFrom;
 
+  // Reactions: emoji -> list of user names who reacted
+  std::map<wxString, std::vector<wxString>> reactions;
+
   MessageInfo()
       : id(0), chatId(0), senderId(0), date(0), editDate(0), isOutgoing(false),
-        isEdited(false), hasPhoto(false), hasVideo(false), hasDocument(false),
-        hasVoice(false), hasVideoNote(false), hasSticker(false),
-        hasAnimation(false), mediaFileId(0), mediaFileSize(0), width(0),
-        height(0), mediaThumbnailFileId(0), mediaDuration(0),
+        isEdited(false), serverMessageId(0), hasPhoto(false), hasVideo(false),
+        hasDocument(false), hasVoice(false), hasVideoNote(false),
+        hasSticker(false), hasAnimation(false), mediaFileId(0), mediaFileSize(0),
+        width(0), height(0), mediaThumbnailFileId(0), mediaDuration(0),
         replyToMessageId(0), isForwarded(false) {}
 };
 

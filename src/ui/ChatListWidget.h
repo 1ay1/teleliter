@@ -20,6 +20,7 @@ public:
 
   // Chat management
   void RefreshChatList(const std::vector<ChatInfo> &chats);
+  void RefreshOnlineIndicators();  // Update online status for private chats
   void ClearAllChats();
   void SelectTeleliter();
   void SelectChat(int64_t chatId);

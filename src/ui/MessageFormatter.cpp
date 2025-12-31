@@ -470,34 +470,32 @@ void MessageFormatter::AppendReactions(
   m_chatArea->ResetStyles();
 
   // Indent to align with message content
-  wxString indent = "           ";              // Timestamp width
+  // Timestamp is [HH:MM:SS] = 11 chars, username column = m_usernameWidth + 3
+  wxString indent = "           ";              // Timestamp width (11 chars)
   indent += wxString(' ', m_usernameWidth + 3); // Username column
 
-  m_chatArea->WriteText(indent);
   m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
-  m_chatArea->WriteText(wxString::FromUTF8("└─ "));
+  m_chatArea->WriteText(indent);
+  m_chatArea->WriteText(wxString::FromUTF8("╰ "));
   m_chatArea->EndTextColour();
 
   bool first = true;
   for (const auto &[emoji, users] : reactions) {
     if (!first) {
-      m_chatArea->WriteText("  ");
+      m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+      m_chatArea->WriteText(" · ");
+      m_chatArea->EndTextColour();
     }
     first = false;
 
-    m_chatArea->WriteText(emoji + " ");
+    m_chatArea->WriteText(emoji);
 
-    // Show first few usernames
+    // Show count or usernames
     m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
-    if (users.size() <= 2) {
-      for (size_t i = 0; i < users.size(); ++i) {
-        if (i > 0)
-          m_chatArea->WriteText(", ");
-        m_chatArea->WriteText(users[i]);
-      }
+    if (users.size() == 1) {
+      m_chatArea->WriteText(" " + users[0]);
     } else {
-      m_chatArea->WriteText(users[0] + " +" +
-                            wxString::Format("%zu", users.size() - 1));
+      m_chatArea->WriteText(wxString::Format(" %zu", users.size()));
     }
     m_chatArea->EndTextColour();
   }
@@ -607,13 +605,40 @@ void MessageFormatter::AppendServiceMessage(const wxString &timestamp,
   if (!m_chatArea)
     return;
 
-  m_chatArea->ResetStyles();
-  m_chatArea->WriteTimestamp(timestamp);
-  m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
-  m_chatArea->WriteText("* " + message);
-  m_chatArea->EndTextColour();
-  m_chatArea->ResetStyles();
-  m_chatArea->WriteText("\n");
+  // Handle multiline messages - first line gets timestamp and arrow,
+  // continuation lines get aligned padding
+  wxArrayString lines = wxSplit(message, '\n');
+  
+  for (size_t i = 0; i < lines.size(); ++i) {
+    m_chatArea->ResetStyles();
+    
+    if (i == 0) {
+      // First line: timestamp + padding + arrow
+      m_chatArea->WriteTimestamp(timestamp);
+      
+      int padding = m_usernameWidth - 3; // Account for arrow width
+      if (padding > 0) {
+        m_chatArea->WriteText(wxString(' ', padding));
+      }
+      
+      m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+      m_chatArea->WriteText(wxString::FromUTF8("——▶ ") + lines[i]);
+      m_chatArea->EndTextColour();
+    } else {
+      // Continuation lines: aligned padding (timestamp width + username width)
+      // Timestamp is typically 10 chars "[HH:MM:SS]" + space
+      int timestampWidth = 11;
+      int totalPadding = timestampWidth + m_usernameWidth + 1; // +1 for arrow spacing
+      m_chatArea->WriteText(wxString(' ', totalPadding));
+      
+      m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
+      m_chatArea->WriteText(lines[i]);
+      m_chatArea->EndTextColour();
+    }
+    
+    m_chatArea->ResetStyles();
+    m_chatArea->WriteText("\n");
+  }
 }
 
 void MessageFormatter::AppendActionMessage(const wxString &timestamp,
@@ -686,8 +711,21 @@ void MessageFormatter::AppendUserJoinedMessage(const wxString &timestamp,
 
   m_chatArea->ResetStyles();
   m_chatArea->WriteTimestamp(timestamp);
+  
+  // Align with username column
+  int padding = m_usernameWidth - 3;
+  if (padding > 0) {
+    m_chatArea->WriteText(wxString(' ', padding));
+  }
+  
   m_chatArea->BeginTextColour(m_chatArea->GetSuccessColor());
-  m_chatArea->WriteText("--> " + user + " has joined");
+  m_chatArea->WriteText(wxString::FromUTF8("——▶ "));
+  m_chatArea->EndTextColour();
+  m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
+  m_chatArea->BeginBold();
+  m_chatArea->WriteText(user);
+  m_chatArea->EndBold();
+  m_chatArea->WriteText(" joined");
   m_chatArea->EndTextColour();
   m_chatArea->ResetStyles();
   m_chatArea->WriteText("\n");
@@ -700,8 +738,21 @@ void MessageFormatter::AppendUserLeftMessage(const wxString &timestamp,
 
   m_chatArea->ResetStyles();
   m_chatArea->WriteTimestamp(timestamp);
+  
+  // Align with username column
+  int padding = m_usernameWidth - 3;
+  if (padding > 0) {
+    m_chatArea->WriteText(wxString(' ', padding));
+  }
+  
   m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
-  m_chatArea->WriteText("<-- " + user + " has left");
+  m_chatArea->WriteText(wxString::FromUTF8("◀—— "));
+  m_chatArea->EndTextColour();
+  m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
+  m_chatArea->BeginBold();
+  m_chatArea->WriteText(user);
+  m_chatArea->EndBold();
+  m_chatArea->WriteText(" left");
   m_chatArea->EndTextColour();
   m_chatArea->ResetStyles();
   m_chatArea->WriteText("\n");
@@ -949,14 +1000,13 @@ void MessageFormatter::AppendEditedMessage(
   m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
   WriteTextWithLinks(message);
   m_chatArea->EndTextColour();
-  WriteStatusSuffix(status, statusHighlight);
 
-  // Simple (edited) marker with pencil emoji
-  m_chatArea->BeginTextColour(m_editedColor);
-  m_chatArea->BeginItalic();
-  m_chatArea->WriteText(wxString::FromUTF8(" ✏️edited"));
-  m_chatArea->EndItalic();
+  // Subtle (edited) marker in gray, before status ticks
+  m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
+  m_chatArea->WriteText(" (edited)");
   m_chatArea->EndTextColour();
+
+  WriteStatusSuffix(status, statusHighlight);
 
   m_chatArea->ResetStyles();
   m_chatArea->WriteText("\n");

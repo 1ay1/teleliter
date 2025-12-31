@@ -1,5 +1,6 @@
 #include "StatusBarManager.h"
 #include "../telegram/TelegramClient.h"
+#include "../telegram/Types.h"
 #include <wx/settings.h>
 
 StatusBarManager::StatusBarManager(wxFrame *parent)
@@ -133,19 +134,41 @@ void StatusBarManager::UpdateStatusBar() {
     wxString connStatus;
     wxColour connColor;
 
-    if (m_isOnline) {
-      connStatus = "[*] Online";
-      if (!m_connectionDC.IsEmpty()) {
-        connStatus += " " + m_connectionDC;
+    // Use actual TDLib connection state for accurate status
+    if (m_telegramClient) {
+      ConnectionState state = m_telegramClient->GetConnectionState();
+      
+      switch (state) {
+        case ConnectionState::Ready:
+          connStatus = "[*] Online";
+          if (!m_connectionDC.IsEmpty()) {
+            connStatus += " " + m_connectionDC;
+          }
+          connColor = m_onlineColor;
+          break;
+        case ConnectionState::Updating:
+          connStatus = "[~] Syncing...";
+          connColor = m_connectingColor;
+          break;
+        case ConnectionState::Connecting:
+        case ConnectionState::ConnectingToProxy: {
+          // Animated connecting indicator using ASCII
+          static const wxString spinners[] = {"|", "/", "-", "\\"};
+          static int spinFrame = 0;
+          spinFrame = (spinFrame + 1) % 4;
+          connStatus = "[" + spinners[spinFrame] + "] Connecting...";
+          connColor = m_connectingColor;
+          break;
+        }
+        case ConnectionState::WaitingForNetwork:
+          connStatus = "[!] No Network";
+          connColor = m_offlineColor;
+          break;
+        default:
+          connStatus = "[ ] Offline";
+          connColor = m_offlineColor;
+          break;
       }
-      connColor = m_onlineColor;
-    } else if (m_telegramClient && m_telegramClient->IsRunning()) {
-      // Animated connecting indicator using ASCII
-      static const wxString spinners[] = {"|", "/", "-", "\\"};
-      static int spinFrame = 0;
-      spinFrame = (spinFrame + 1) % 4;
-      connStatus = "[" + spinners[spinFrame] + "] Connecting...";
-      connColor = m_connectingColor;
     } else {
       connStatus = "[ ] Offline";
       connColor = m_offlineColor;

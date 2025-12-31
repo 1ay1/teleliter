@@ -95,6 +95,10 @@ public:
     const UserInfo& GetCurrentUser() const { return m_currentUser; }
     bool IsLoggedIn() const { return m_authState == AuthState::Ready; }
     
+    // Connection state - tracks actual connection to Telegram servers
+    ConnectionState GetConnectionState() const { return m_connectionState; }
+    bool IsConnected() const { return m_connectionState == ConnectionState::Ready; }
+    
     void LoadChats(int limit = 100);
     std::map<int64_t, ChatInfo> GetChats() const;
     ChatInfo GetChat(int64_t chatId, bool* found = nullptr) const;
@@ -110,7 +114,15 @@ public:
     void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
     void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 100);
     void SendMessage(int64_t chatId, const wxString& text);
+    void SendMessage(int64_t chatId, const wxString& text, int64_t replyToMessageId);
     void SendFile(int64_t chatId, const wxString& filePath, const wxString& caption = "");
+    
+    // Message actions
+    void SendReaction(int64_t chatId, int64_t messageId, const wxString& emoji);
+    void RemoveReaction(int64_t chatId, int64_t messageId, const wxString& emoji);
+    void EditMessage(int64_t chatId, int64_t messageId, const wxString& newText);
+    void DeleteMessages(int64_t chatId, const std::vector<int64_t>& messageIds, bool revoke = true);
+    void ForwardMessages(int64_t fromChatId, int64_t toChatId, const std::vector<int64_t>& messageIds);
     
     void DownloadFile(int32_t fileId, int priority = 1, const wxString& fileName = "", int64_t fileSize = 0);
     void CancelDownload(int32_t fileId);
@@ -164,6 +176,16 @@ public:
     // Get updated messages since last call for a chat (thread-safe, clears queue)
     std::vector<MessageInfo> GetUpdatedMessages(int64_t chatId);
     
+    // Get deleted message IDs since last call for a chat (thread-safe, clears queue)
+    std::vector<int64_t> GetDeletedMessages(int64_t chatId);
+    
+    // Get typing users for current chat (thread-safe, returns copy)
+    std::map<wxString, wxString> GetTypingUsers();
+    
+    // Get send failures since last call for a chat (thread-safe, clears queue)
+    // Returns vector of (oldMessageId, errorMessage) pairs
+    std::vector<std::pair<int64_t, wxString>> GetSendFailures(int64_t chatId);
+    
     // Get download progress updates with actual byte counts (thread-safe, clears queue)
     std::vector<FileDownloadProgress> GetDownloadProgressUpdates();
     
@@ -178,6 +200,7 @@ private:
     std::atomic<bool> m_running;
     
     AuthState m_authState;
+    ConnectionState m_connectionState = ConnectionState::WaitingForNetwork;
     UserInfo m_currentUser;
     int64_t m_currentChatId = 0;  // Currently viewed chat for download prioritization
     
@@ -200,6 +223,15 @@ private:
     void ProcessUpdate(td_api::object_ptr<td_api::Object> update);
     
     void OnAuthStateUpdate(td_api::object_ptr<td_api::AuthorizationState>& state);
+    void OnConnectionStateUpdate(td_api::object_ptr<td_api::ConnectionState>& state);
+    void OnMessageInteractionInfo(int64_t chatId, int64_t messageId,
+                                  td_api::object_ptr<td_api::messageInteractionInfo>& info);
+    void OnChatAction(int64_t chatId, td_api::object_ptr<td_api::MessageSender>& sender,
+                      td_api::object_ptr<td_api::ChatAction>& action);
+    void OnDeleteMessages(int64_t chatId, const std::vector<int64_t>& messageIds);
+    void OnMessageSendSucceeded(td_api::object_ptr<td_api::message>& message, int64_t oldMessageId);
+    void OnMessageSendFailed(td_api::object_ptr<td_api::message>& message, 
+                             int64_t oldMessageId, const std::string& errorMessage);
     void HandleAuthWaitTdlibParameters();
     void HandleAuthWaitPhoneNumber();
     void HandleAuthWaitCode();
@@ -240,6 +272,18 @@ private:
     // Download tracking
     std::map<int32_t, DownloadInfo> m_activeDownloads;
     mutable std::mutex m_downloadsMutex;
+    
+    // Typing indicators: sender name -> action text
+    std::map<wxString, wxString> m_typingUsers;
+    std::mutex m_typingMutex;
+    
+    // Deleted messages queue per chat
+    std::map<int64_t, std::vector<int64_t>> m_deletedMessages;
+    std::mutex m_deletedMessagesMutex;
+    
+    // Failed send messages: chatId -> [(oldMessageId, errorMessage)]
+    std::map<int64_t, std::vector<std::pair<int64_t, wxString>>> m_sendFailedMessages;
+    std::mutex m_sendFailedMutex;
     wxTimer m_downloadTimeoutTimer;
     
     // ===== REACTIVE MVC STATE =====

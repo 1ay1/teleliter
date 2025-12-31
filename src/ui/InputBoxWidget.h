@@ -89,6 +89,9 @@ private:
     void ProcessAwayCommand(const wxString& args);
     void ProcessBackCommand();
     void ProcessHelpCommand();
+    void ProcessReactCommand(const wxString& args);
+    void ProcessEditCommand(const wxString& args);
+    void ProcessDeleteCommand();
     
     // History navigation
     void NavigateHistoryUp();

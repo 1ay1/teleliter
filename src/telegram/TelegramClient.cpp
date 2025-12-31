@@ -14,10 +14,21 @@
 // TDLib may report is_downloading_completed_ = true but the file might have been deleted
 static bool IsFileAvailableLocally(const td_api::file* file) {
     if (!file || !file->local_) return false;
-    if (!file->local_->is_downloading_completed_) return false;
-
+    
     const std::string& path = file->local_->path_;
     if (path.empty()) return false;
+
+    // File is available if:
+    // 1. Download completed (we received the file), OR
+    // 2. Upload is active/completed (we're sending a local file - check remote_)
+    // In both cases, verify the file actually exists on disk
+    bool isDownloaded = file->local_->is_downloading_completed_;
+    bool isUploading = file->remote_ && file->remote_->is_uploading_active_;
+    bool isUploaded = file->remote_ && file->remote_->is_uploading_completed_;
+    
+    if (!isDownloaded && !isUploading && !isUploaded) {
+        return false;
+    }
 
     // Actually check if the file exists on disk
     return wxFileName::FileExists(wxString::FromUTF8(path));
@@ -228,6 +239,20 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
             OnUserUpdate(u.user_);
         } else if constexpr (std::is_same_v<T, td_api::updateUserStatus>) {
             OnUserStatusUpdate(u.user_id_, u.status_);
+        } else if constexpr (std::is_same_v<T, td_api::updateConnectionState>) {
+            OnConnectionStateUpdate(u.state_);
+        } else if constexpr (std::is_same_v<T, td_api::updateMessageInteractionInfo>) {
+            OnMessageInteractionInfo(u.chat_id_, u.message_id_, u.interaction_info_);
+        } else if constexpr (std::is_same_v<T, td_api::updateChatAction>) {
+            OnChatAction(u.chat_id_, u.sender_id_, u.action_);
+        } else if constexpr (std::is_same_v<T, td_api::updateDeleteMessages>) {
+            if (u.is_permanent_) {
+                OnDeleteMessages(u.chat_id_, u.message_ids_);
+            }
+        } else if constexpr (std::is_same_v<T, td_api::updateMessageSendSucceeded>) {
+            OnMessageSendSucceeded(u.message_, u.old_message_id_);
+        } else if constexpr (std::is_same_v<T, td_api::updateMessageSendFailed>) {
+            OnMessageSendFailed(u.message_, u.old_message_id_, u.error_->message_);
         } else if constexpr (std::is_same_v<T, td_api::updateFile>) {
             OnFileUpdate(u.file_);
         } else if constexpr (std::is_same_v<T, td_api::updateChatNotificationSettings>) {
@@ -237,6 +262,265 @@ void TelegramClient::ProcessUpdate(td_api::object_ptr<td_api::Object> update)
             }
         }
     });
+}
+
+void TelegramClient::OnConnectionStateUpdate(td_api::object_ptr<td_api::ConnectionState>& state)
+{
+    if (!state) return;
+    
+    td_api::downcast_call(*state, [this](auto& s) {
+        using T = std::decay_t<decltype(s)>;
+        
+        if constexpr (std::is_same_v<T, td_api::connectionStateWaitingForNetwork>) {
+            m_connectionState = ConnectionState::WaitingForNetwork;
+            TDLOG("Connection state: WaitingForNetwork");
+        } else if constexpr (std::is_same_v<T, td_api::connectionStateConnectingToProxy>) {
+            m_connectionState = ConnectionState::ConnectingToProxy;
+            TDLOG("Connection state: ConnectingToProxy");
+        } else if constexpr (std::is_same_v<T, td_api::connectionStateConnecting>) {
+            m_connectionState = ConnectionState::Connecting;
+            TDLOG("Connection state: Connecting");
+        } else if constexpr (std::is_same_v<T, td_api::connectionStateUpdating>) {
+            m_connectionState = ConnectionState::Updating;
+            TDLOG("Connection state: Updating");
+        } else if constexpr (std::is_same_v<T, td_api::connectionStateReady>) {
+            m_connectionState = ConnectionState::Ready;
+            TDLOG("Connection state: Ready");
+        }
+    });
+    
+    // Set dirty flag so UI can update connection status
+    SetDirty(DirtyFlag::Auth);
+}
+
+void TelegramClient::OnChatAction(int64_t chatId, 
+    td_api::object_ptr<td_api::MessageSender>& sender,
+    td_api::object_ptr<td_api::ChatAction>& action)
+{
+    if (!sender || !action) return;
+    
+    // Only track for current chat
+    if (chatId != m_currentChatId) return;
+    
+    wxString senderName;
+    td_api::downcast_call(*sender, [this, &senderName](auto& s) {
+        using T = std::decay_t<decltype(s)>;
+        if constexpr (std::is_same_v<T, td_api::messageSenderUser>) {
+            senderName = GetUserDisplayName(s.user_id_);
+        }
+    });
+    
+    if (senderName.IsEmpty()) return;
+    
+    wxString actionText;
+    td_api::downcast_call(*action, [&actionText](auto& a) {
+        using T = std::decay_t<decltype(a)>;
+        if constexpr (std::is_same_v<T, td_api::chatActionTyping>) {
+            actionText = "typing";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionRecordingVideo>) {
+            actionText = "recording video";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionUploadingVideo>) {
+            actionText = "uploading video";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionRecordingVoiceNote>) {
+            actionText = "recording voice";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionUploadingVoiceNote>) {
+            actionText = "uploading voice";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionUploadingPhoto>) {
+            actionText = "uploading photo";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionUploadingDocument>) {
+            actionText = "uploading file";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionChoosingSticker>) {
+            actionText = "choosing sticker";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionRecordingVideoNote>) {
+            actionText = "recording video message";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionUploadingVideoNote>) {
+            actionText = "uploading video message";
+        } else if constexpr (std::is_same_v<T, td_api::chatActionCancel>) {
+            actionText = ""; // Action cancelled
+        }
+    });
+    
+    // Queue typing indicator update
+    {
+        std::lock_guard<std::mutex> lock(m_typingMutex);
+        if (actionText.IsEmpty()) {
+            m_typingUsers.erase(senderName);
+        } else {
+            m_typingUsers[senderName] = actionText;
+        }
+    }
+    
+    SetDirty(DirtyFlag::UserStatus); // Reuse this flag for typing updates
+}
+
+void TelegramClient::OnDeleteMessages(int64_t chatId, const std::vector<int64_t>& messageIds)
+{
+    // Remove from cache
+    {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto chatIt = m_messages.find(chatId);
+        if (chatIt != m_messages.end()) {
+            auto& msgs = chatIt->second;
+            msgs.erase(
+                std::remove_if(msgs.begin(), msgs.end(), 
+                    [&messageIds](const MessageInfo& m) {
+                        return std::find(messageIds.begin(), messageIds.end(), m.id) != messageIds.end();
+                    }),
+                msgs.end());
+        }
+    }
+    
+    // Queue deleted message IDs for UI
+    {
+        std::lock_guard<std::mutex> lock(m_deletedMessagesMutex);
+        for (int64_t id : messageIds) {
+            m_deletedMessages[chatId].push_back(id);
+        }
+    }
+    
+    SetDirty(DirtyFlag::Messages);
+}
+
+void TelegramClient::OnMessageSendSucceeded(td_api::object_ptr<td_api::message>& message, int64_t oldMessageId)
+{
+    if (!message) return;
+    
+    MessageInfo newMsg = ConvertMessage(message.get());
+    int64_t newId = newMsg.id;
+    
+    TDLOG("OnMessageSendSucceeded: oldId=%lld newId=%lld fileId=%d localPath=%s",
+          (long long)oldMessageId, (long long)newId,
+          newMsg.mediaFileId, newMsg.mediaLocalPath.ToStdString().c_str());
+    
+    // Update cache - replace old message with new one
+    {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto chatIt = m_messages.find(newMsg.chatId);
+        if (chatIt != m_messages.end()) {
+            for (auto& msg : chatIt->second) {
+                if (msg.id == oldMessageId) {
+                    msg = newMsg;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Queue update for UI with OLD ID so it can find the message
+    // The serverMessageId field tells the UI what the new ID should be
+    {
+        std::lock_guard<std::mutex> lock(m_updatedMessagesMutex);
+        MessageInfo updateMsg = newMsg;
+        updateMsg.id = oldMessageId;           // Use old ID so UI can find it
+        updateMsg.serverMessageId = newId;     // New server-assigned ID
+        m_updatedMessages[newMsg.chatId].push_back(updateMsg);
+    }
+    
+    SetDirty(DirtyFlag::Messages);
+}
+
+void TelegramClient::OnMessageSendFailed(td_api::object_ptr<td_api::message>& message, 
+    int64_t oldMessageId, const std::string& errorMessage)
+{
+    if (!message) return;
+    
+    int64_t chatId = message->chat_id_;
+    wxString error = wxString::FromUTF8(errorMessage);
+    
+    // Queue error for UI to display
+    {
+        std::lock_guard<std::mutex> lock(m_sendFailedMutex);
+        m_sendFailedMessages[chatId].push_back({oldMessageId, error});
+    }
+    
+    SetDirty(DirtyFlag::Messages);
+}
+
+void TelegramClient::OnMessageInteractionInfo(int64_t chatId, int64_t messageId, 
+    td_api::object_ptr<td_api::messageInteractionInfo>& info)
+{
+    if (!info) return;
+    
+    // Extract reactions
+    std::map<wxString, std::vector<wxString>> reactions;
+    
+    if (info->reactions_) {
+        for (auto& reaction : info->reactions_->reactions_) {
+            if (!reaction) continue;
+            
+            wxString emoji;
+            if (reaction->type_) {
+                td_api::downcast_call(*reaction->type_, [&emoji](auto& r) {
+                    using T = std::decay_t<decltype(r)>;
+                    if constexpr (std::is_same_v<T, td_api::reactionTypeEmoji>) {
+                        emoji = wxString::FromUTF8(r.emoji_);
+                    } else if constexpr (std::is_same_v<T, td_api::reactionTypeCustomEmoji>) {
+                        emoji = wxString::FromUTF8("⭐"); // Placeholder for custom emoji
+                    } else if constexpr (std::is_same_v<T, td_api::reactionTypePaid>) {
+                        emoji = wxString::FromUTF8("⭐"); // Paid reaction
+                    }
+                });
+            }
+            
+            if (emoji.IsEmpty()) continue;
+            
+            // Get recent senders for this reaction
+            std::vector<wxString> senders;
+            for (auto& sender : reaction->recent_sender_ids_) {
+                if (!sender) continue;
+                
+                td_api::downcast_call(*sender, [this, &senders](auto& s) {
+                    using T = std::decay_t<decltype(s)>;
+                    if constexpr (std::is_same_v<T, td_api::messageSenderUser>) {
+                        wxString name = GetUserDisplayName(s.user_id_);
+                        if (!name.IsEmpty()) {
+                            senders.push_back(name);
+                        }
+                    }
+                });
+            }
+            
+            // If no recent senders but has count, show count
+            if (senders.empty() && reaction->total_count_ > 0) {
+                senders.push_back(wxString::Format("%d", reaction->total_count_));
+            }
+            
+            if (!senders.empty()) {
+                reactions[emoji] = senders;
+            }
+        }
+    }
+    
+    // Update message in storage
+    {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto chatIt = m_messages.find(chatId);
+        if (chatIt != m_messages.end()) {
+            for (auto& msg : chatIt->second) {
+                if (msg.id == messageId) {
+                    msg.reactions = reactions;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Queue the updated message for UI
+    {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto chatIt = m_messages.find(chatId);
+        if (chatIt != m_messages.end()) {
+            for (auto& msg : chatIt->second) {
+                if (msg.id == messageId) {
+                    std::lock_guard<std::mutex> qlock(m_updatedMessagesMutex);
+                    m_updatedMessages[chatId].push_back(msg);
+                    break;
+                }
+            }
+        }
+    }
+    
+    SetDirty(DirtyFlag::Messages);
 }
 
 void TelegramClient::OnAuthStateUpdate(td_api::object_ptr<td_api::AuthorizationState>& state)
@@ -827,6 +1111,11 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId, int lim
 
 void TelegramClient::SendMessage(int64_t chatId, const wxString& text)
 {
+    SendMessage(chatId, text, 0);  // No reply
+}
+
+void TelegramClient::SendMessage(int64_t chatId, const wxString& text, int64_t replyToMessageId)
+{
     auto content = td_api::make_object<td_api::inputMessageText>();
     content->text_ = td_api::make_object<td_api::formattedText>();
     content->text_->text_ = text.ToStdString();
@@ -834,6 +1123,112 @@ void TelegramClient::SendMessage(int64_t chatId, const wxString& text)
     auto request = td_api::make_object<td_api::sendMessage>();
     request->chat_id_ = chatId;
     request->input_message_content_ = std::move(content);
+    
+    // Set reply if specified
+    if (replyToMessageId != 0) {
+        auto replyTo = td_api::make_object<td_api::inputMessageReplyToMessage>();
+        replyTo->message_id_ = replyToMessageId;
+        request->reply_to_ = std::move(replyTo);
+    }
+
+    Send(std::move(request), [this](td_api::object_ptr<td_api::Object> result) {
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            PostToMainThread([this, msg = error->message_]() {
+                if (m_mainFrame) {
+                    m_mainFrame->ShowStatusError(wxString::FromUTF8(msg));
+                }
+            });
+        }
+    });
+}
+
+void TelegramClient::SendReaction(int64_t chatId, int64_t messageId, const wxString& emoji)
+{
+    auto request = td_api::make_object<td_api::addMessageReaction>();
+    request->chat_id_ = chatId;
+    request->message_id_ = messageId;
+    request->is_big_ = false;
+    request->update_recent_reactions_ = true;
+    
+    auto reaction = td_api::make_object<td_api::reactionTypeEmoji>();
+    reaction->emoji_ = emoji.ToStdString();
+    request->reaction_type_ = std::move(reaction);
+
+    Send(std::move(request), [emoji](td_api::object_ptr<td_api::Object> result) {
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            TDLOG("SendReaction ERROR: %s", error->message_.c_str());
+        } else {
+            TDLOG("Reaction %s sent successfully", emoji.ToStdString().c_str());
+        }
+    });
+}
+
+void TelegramClient::RemoveReaction(int64_t chatId, int64_t messageId, const wxString& emoji)
+{
+    auto request = td_api::make_object<td_api::removeMessageReaction>();
+    request->chat_id_ = chatId;
+    request->message_id_ = messageId;
+    
+    auto reaction = td_api::make_object<td_api::reactionTypeEmoji>();
+    reaction->emoji_ = emoji.ToStdString();
+    request->reaction_type_ = std::move(reaction);
+
+    Send(std::move(request), [](td_api::object_ptr<td_api::Object> result) {
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            TDLOG("RemoveReaction ERROR: %s", error->message_.c_str());
+        }
+    });
+}
+
+void TelegramClient::EditMessage(int64_t chatId, int64_t messageId, const wxString& newText)
+{
+    auto content = td_api::make_object<td_api::inputMessageText>();
+    content->text_ = td_api::make_object<td_api::formattedText>();
+    content->text_->text_ = newText.ToStdString();
+
+    auto request = td_api::make_object<td_api::editMessageText>();
+    request->chat_id_ = chatId;
+    request->message_id_ = messageId;
+    request->input_message_content_ = std::move(content);
+
+    Send(std::move(request), [this](td_api::object_ptr<td_api::Object> result) {
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            PostToMainThread([this, msg = error->message_]() {
+                if (m_mainFrame) {
+                    m_mainFrame->ShowStatusError(wxString::FromUTF8(msg));
+                }
+            });
+        }
+    });
+}
+
+void TelegramClient::DeleteMessages(int64_t chatId, const std::vector<int64_t>& messageIds, bool revoke)
+{
+    auto request = td_api::make_object<td_api::deleteMessages>();
+    request->chat_id_ = chatId;
+    request->message_ids_ = messageIds;
+    request->revoke_ = revoke;  // Delete for everyone if true
+
+    Send(std::move(request), [](td_api::object_ptr<td_api::Object> result) {
+        if (result->get_id() == td_api::error::ID) {
+            auto error = td_api::move_object_as<td_api::error>(result);
+            TDLOG("DeleteMessages ERROR: %s", error->message_.c_str());
+        }
+    });
+}
+
+void TelegramClient::ForwardMessages(int64_t fromChatId, int64_t toChatId, const std::vector<int64_t>& messageIds)
+{
+    auto request = td_api::make_object<td_api::forwardMessages>();
+    request->chat_id_ = toChatId;
+    request->from_chat_id_ = fromChatId;
+    request->message_ids_ = messageIds;
+    request->send_copy_ = false;
+    request->remove_caption_ = false;
 
     Send(std::move(request), [this](td_api::object_ptr<td_api::Object> result) {
         if (result->get_id() == td_api::error::ID) {
@@ -1984,10 +2379,50 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
 
     // New API uses reply_to_ object with MessageReplyTo type
     if (msg->reply_to_) {
-        td_api::downcast_call(*msg->reply_to_, [&info](auto& r) {
+        td_api::downcast_call(*msg->reply_to_, [this, &info, msg](auto& r) {
             using T = std::decay_t<decltype(r)>;
             if constexpr (std::is_same_v<T, td_api::messageReplyToMessage>) {
                 info.replyToMessageId = r.message_id_;
+                
+                // Try to get quote text first (TDLib provides this for convenience)
+                if (r.quote_ && r.quote_->text_) {
+                    info.replyToText = wxString::FromUTF8(r.quote_->text_->text_);
+                }
+                
+                // If no quote, try to find the original message in our cache
+                if (info.replyToText.IsEmpty() && r.message_id_ != 0) {
+                    std::shared_lock<std::shared_mutex> lock(m_dataMutex);
+                    auto chatIt = m_messages.find(msg->chat_id_);
+                    if (chatIt != m_messages.end()) {
+                        for (const auto& cachedMsg : chatIt->second) {
+                            if (cachedMsg.id == r.message_id_) {
+                                // Found the original message
+                                if (!cachedMsg.text.IsEmpty()) {
+                                    // Truncate long replies
+                                    if (cachedMsg.text.Length() > 50) {
+                                        info.replyToText = cachedMsg.senderName + ": " + 
+                                            cachedMsg.text.Left(50) + "…";
+                                    } else {
+                                        info.replyToText = cachedMsg.senderName + ": " + cachedMsg.text;
+                                    }
+                                } else if (cachedMsg.hasPhoto) {
+                                    info.replyToText = cachedMsg.senderName + ": 📷 Photo";
+                                } else if (cachedMsg.hasVideo) {
+                                    info.replyToText = cachedMsg.senderName + ": 🎬 Video";
+                                } else if (cachedMsg.hasDocument) {
+                                    info.replyToText = cachedMsg.senderName + ": 📎 " + cachedMsg.mediaFileName;
+                                } else if (cachedMsg.hasVoice) {
+                                    info.replyToText = cachedMsg.senderName + ": 🎤 Voice";
+                                } else if (cachedMsg.hasSticker) {
+                                    info.replyToText = cachedMsg.senderName + ": " + cachedMsg.mediaCaption + " Sticker";
+                                } else if (cachedMsg.hasAnimation) {
+                                    info.replyToText = cachedMsg.senderName + ": GIF";
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         });
     }
@@ -2061,18 +2496,40 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     auto& thumbSize = c.photo_->sizes_.front();
                     auto& fullSize = c.photo_->sizes_.back();
 
-                        if (fullSize->photo_) {
-                            info.mediaFileId = fullSize->photo_->id_;
-                            info.mediaFileSize = fullSize->photo_->size_;
-                            info.width = fullSize->width_;
-                            info.height = fullSize->height_;
+                    TDLOG("ConvertMessage: Photo has %zu sizes", c.photo_->sizes_.size());
 
-                            if (IsFileAvailableLocally(fullSize->photo_.get())) {
+                    if (fullSize->photo_) {
+                        info.mediaFileId = fullSize->photo_->id_;
+                        info.mediaFileSize = fullSize->photo_->size_;
+                        info.width = fullSize->width_;
+                        info.height = fullSize->height_;
+
+                        TDLOG("ConvertMessage: Photo fullSize fileId=%d, size=%lld, local=%s, remote=%s",
+                              fullSize->photo_->id_,
+                              (long long)fullSize->photo_->size_,
+                              fullSize->photo_->local_ ? fullSize->photo_->local_->path_.c_str() : "(null)",
+                              fullSize->photo_->remote_ ? fullSize->photo_->remote_->id_.c_str() : "(null)");
+                        
+                        if (fullSize->photo_->local_) {
+                            TDLOG("ConvertMessage: Photo local - downloaded=%d, path=%s",
+                                  fullSize->photo_->local_->is_downloading_completed_,
+                                  fullSize->photo_->local_->path_.c_str());
+                        }
+                        if (fullSize->photo_->remote_) {
+                            TDLOG("ConvertMessage: Photo remote - uploading=%d, uploaded=%d",
+                                  fullSize->photo_->remote_->is_uploading_active_,
+                                  fullSize->photo_->remote_->is_uploading_completed_);
+                        }
+
+                        if (IsFileAvailableLocally(fullSize->photo_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(fullSize->photo_->local_->path_);
+                            TDLOG("ConvertMessage: Photo is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
                         } else if (ShouldDownloadFile(fullSize->photo_.get())) {
                             // Auto-download full photo
                             this->DownloadFile(fullSize->photo_->id_, 5, "Photo", fullSize->photo_->size_);
                         }
+                    } else {
+                        TDLOG("ConvertMessage: Photo fullSize->photo_ is null!");
                     }
 
                     // Track thumbnail separately
@@ -2085,6 +2542,8 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                             this->DownloadFile(thumbSize->photo_->id_, 8, "Thumbnail", 0);
                         }
                     }
+                } else {
+                    TDLOG("ConvertMessage: Photo has no sizes array or photo_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVideo>) {
                 info.hasVideo = true;
@@ -2102,10 +2561,29 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                         info.width = c.video_->width_;
                         info.height = c.video_->height_;
 
+                        TDLOG("ConvertMessage: Video fileId=%d, name=%s, size=%lld",
+                              c.video_->video_->id_,
+                              c.video_->file_name_.c_str(),
+                              (long long)c.video_->video_->size_);
+                        
+                        if (c.video_->video_->local_) {
+                            TDLOG("ConvertMessage: Video local - downloaded=%d, path=%s",
+                                  c.video_->video_->local_->is_downloading_completed_,
+                                  c.video_->video_->local_->path_.c_str());
+                        }
+                        if (c.video_->video_->remote_) {
+                            TDLOG("ConvertMessage: Video remote - uploading=%d, uploaded=%d",
+                                  c.video_->video_->remote_->is_uploading_active_,
+                                  c.video_->video_->remote_->is_uploading_completed_);
+                        }
+
                         // Check if actual video file is downloaded
                         if (IsFileAvailableLocally(c.video_->video_.get())) {
                             info.mediaLocalPath = wxString::FromUTF8(c.video_->video_->local_->path_);
+                            TDLOG("ConvertMessage: Video is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
                         }
+                    } else {
+                        TDLOG("ConvertMessage: Video video_ is null!");
                     }
 
                     // Always track thumbnail separately (don't put thumbnail path in mediaLocalPath)
@@ -2118,6 +2596,8 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                             this->DownloadFile(c.video_->thumbnail_->file_->id_, 8, "Video Thumbnail", 0);
                         }
                     }
+                } else {
+                    TDLOG("ConvertMessage: messageVideo but video_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageDocument>) {
                 info.hasDocument = true;
@@ -2128,6 +2608,30 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                     info.mediaFileId = c.document_->document_->id_;
                     info.mediaFileName = wxString::FromUTF8(c.document_->file_name_);
                     info.mediaFileSize = c.document_->document_->size_;
+                    
+                    TDLOG("ConvertMessage: Document fileId=%d, name=%s, size=%lld",
+                          c.document_->document_->id_,
+                          c.document_->file_name_.c_str(),
+                          (long long)c.document_->document_->size_);
+                    
+                    if (c.document_->document_->local_) {
+                        TDLOG("ConvertMessage: Document local - downloaded=%d, path=%s",
+                              c.document_->document_->local_->is_downloading_completed_,
+                              c.document_->document_->local_->path_.c_str());
+                    }
+                    if (c.document_->document_->remote_) {
+                        TDLOG("ConvertMessage: Document remote - uploading=%d, uploaded=%d",
+                              c.document_->document_->remote_->is_uploading_active_,
+                              c.document_->document_->remote_->is_uploading_completed_);
+                    }
+                    
+                    // Also check for local availability for documents
+                    if (IsFileAvailableLocally(c.document_->document_.get())) {
+                        info.mediaLocalPath = wxString::FromUTF8(c.document_->document_->local_->path_);
+                        TDLOG("ConvertMessage: Document is available locally at %s", info.mediaLocalPath.ToStdString().c_str());
+                    }
+                } else {
+                    TDLOG("ConvertMessage: messageDocument but document_ or document_->document_ is null!");
                 }
             } else if constexpr (std::is_same_v<T, td_api::messageVoiceNote>) {
                 info.hasVoice = true;
@@ -2273,6 +2777,52 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message* msg)
                 }
             }
         });
+    }
+
+    // Parse reactions from interaction_info
+    if (msg->interaction_info_ && msg->interaction_info_->reactions_) {
+        for (auto& reaction : msg->interaction_info_->reactions_->reactions_) {
+            if (!reaction) continue;
+            
+            wxString emoji;
+            if (reaction->type_) {
+                td_api::downcast_call(*reaction->type_, [&emoji](auto& r) {
+                    using T = std::decay_t<decltype(r)>;
+                    if constexpr (std::is_same_v<T, td_api::reactionTypeEmoji>) {
+                        emoji = wxString::FromUTF8(r.emoji_);
+                    } else if constexpr (std::is_same_v<T, td_api::reactionTypeCustomEmoji>) {
+                        emoji = wxString::FromUTF8("⭐");
+                    } else if constexpr (std::is_same_v<T, td_api::reactionTypePaid>) {
+                        emoji = wxString::FromUTF8("⭐");
+                    }
+                });
+            }
+            
+            if (emoji.IsEmpty()) continue;
+            
+            std::vector<wxString> senders;
+            for (auto& sender : reaction->recent_sender_ids_) {
+                if (!sender) continue;
+                
+                td_api::downcast_call(*sender, [this, &senders](auto& s) {
+                    using T = std::decay_t<decltype(s)>;
+                    if constexpr (std::is_same_v<T, td_api::messageSenderUser>) {
+                        wxString name = GetUserDisplayName(s.user_id_);
+                        if (!name.IsEmpty()) {
+                            senders.push_back(name);
+                        }
+                    }
+                });
+            }
+            
+            if (senders.empty() && reaction->total_count_ > 0) {
+                senders.push_back(wxString::Format("%d", reaction->total_count_));
+            }
+            
+            if (!senders.empty()) {
+                info.reactions[emoji] = senders;
+            }
+        }
     }
 
     return info;
@@ -2536,5 +3086,35 @@ std::vector<FileDownloadProgress> TelegramClient::GetDownloadProgressUpdates()
     std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
     std::vector<FileDownloadProgress> result;
     result.swap(m_downloadProgressUpdates);
+    return result;
+}
+
+std::vector<int64_t> TelegramClient::GetDeletedMessages(int64_t chatId)
+{
+    std::lock_guard<std::mutex> lock(m_deletedMessagesMutex);
+    std::vector<int64_t> result;
+    auto it = m_deletedMessages.find(chatId);
+    if (it != m_deletedMessages.end()) {
+        result.swap(it->second);
+        m_deletedMessages.erase(it);
+    }
+    return result;
+}
+
+std::map<wxString, wxString> TelegramClient::GetTypingUsers()
+{
+    std::lock_guard<std::mutex> lock(m_typingMutex);
+    return m_typingUsers;  // Return copy
+}
+
+std::vector<std::pair<int64_t, wxString>> TelegramClient::GetSendFailures(int64_t chatId)
+{
+    std::lock_guard<std::mutex> lock(m_sendFailedMutex);
+    std::vector<std::pair<int64_t, wxString>> result;
+    auto it = m_sendFailedMessages.find(chatId);
+    if (it != m_sendFailedMessages.end()) {
+        result.swap(it->second);
+        m_sendFailedMessages.erase(it);
+    }
     return result;
 }

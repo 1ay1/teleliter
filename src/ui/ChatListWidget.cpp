@@ -389,6 +389,34 @@ void ChatListWidget::ApplyFilter() {
   RefreshChatList(m_allChats);
 }
 
+void ChatListWidget::RefreshOnlineIndicators() {
+  // Update online indicators for all private chats without full rebuild
+  if (!m_telegramClient || !m_chatTree) {
+    return;
+  }
+
+  for (const auto &chat : m_allChats) {
+    // Only update private chats (they have online indicators)
+    if (!chat.isPrivate || chat.userId == 0) {
+      continue;
+    }
+
+    auto it = m_chatIdToTreeItem.find(chat.id);
+    if (it == m_chatIdToTreeItem.end() || !it->second.IsOk()) {
+      continue;
+    }
+
+    // Re-format the title (which includes online indicator check)
+    wxString newTitle = FormatChatTitle(chat);
+    wxString currentTitle = m_chatTree->GetItemText(it->second);
+
+    // Only update if changed to avoid flicker
+    if (newTitle != currentTitle) {
+      m_chatTree->SetItemText(it->second, newTitle);
+    }
+  }
+}
+
 void ChatListWidget::OnSearchText(wxCommandEvent &event) {
   m_searchFilter = m_searchBox->GetValue();
   ApplyFilter();

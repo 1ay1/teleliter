@@ -1732,18 +1732,18 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId,
     return;
   }
 
-  // Show edit notification with sender name and full message content
+  // Show edit notification with sender name and preview of new text
   if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter() &&
       !newText.IsEmpty()) {
     wxString sender = senderName.IsEmpty() ? "Someone" : senderName;
-    // Show the full message (or truncate if extremely long)
+    // Show a preview (truncate if long)
     wxString displayText = newText;
-    if (displayText.Length() > 500) {
-      displayText = displayText.Left(500) + "...";
+    if (displayText.Length() > 100) {
+      displayText = displayText.Left(100) + "…";
     }
     m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
         wxDateTime::Now().Format("%H:%M:%S"),
-        wxString::Format("* %s edited: %s", sender, displayText));
+        wxString::Format("%s edited: \"%s\"", sender, displayText));
     m_chatViewWidget->ScrollToBottomIfAtBottom();
   }
 }
@@ -2033,6 +2033,9 @@ void MainFrame::ReactiveRefresh() {
   // Handle message updates for current chat
   if ((flags & DirtyFlag::Messages) != DirtyFlag::None &&
       m_currentChatId != 0 && m_chatViewWidget) {
+    // Begin batch update to prevent flicker from multiple individual updates
+    m_chatViewWidget->BeginBatchUpdate();
+    
     // Update read status
     bool found = false;
     ChatInfo chat = m_telegramClient->GetChat(m_currentChatId, &found);
@@ -2047,16 +2050,50 @@ void MainFrame::ReactiveRefresh() {
       OnNewMessage(msg);
     }
 
-    // Get updated messages (edits)
+    // Get updated messages (edits, reactions, etc.)
     auto updatedMessages =
         m_telegramClient->GetUpdatedMessages(m_currentChatId);
     for (const auto &msg : updatedMessages) {
+      // Always update the message in storage (handles reactions, media updates, etc.)
+      OnMessageUpdated(msg.chatId, msg);
+      
+      // Additionally show edit notification if the text was edited
       if (msg.isEdited) {
         OnMessageEdited(msg.chatId, msg.id, msg.text, msg.senderName);
+      }
+      // Note: Reactions are displayed inline below messages, no separate notification needed
+    }
+    
+    // Handle deleted messages
+    auto deletedIds = m_telegramClient->GetDeletedMessages(m_currentChatId);
+    if (!deletedIds.empty()) {
+      // Remove deleted messages from view and show notification
+      for (int64_t msgId : deletedIds) {
+        m_chatViewWidget->RemoveMessage(msgId);
+      }
+      if (deletedIds.size() == 1) {
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
+            wxDateTime::Now().Format("%H:%M:%S"), "A message was deleted");
       } else {
-        OnMessageUpdated(msg.chatId, msg);
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
+            wxDateTime::Now().Format("%H:%M:%S"),
+            wxString::Format("%zu messages were deleted", deletedIds.size()));
       }
     }
+    
+    // Handle send failures
+    auto sendFailures = m_telegramClient->GetSendFailures(m_currentChatId);
+    for (const auto &[msgId, error] : sendFailures) {
+      if (m_chatViewWidget->GetMessageFormatter()) {
+        m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
+            wxDateTime::Now().Format("%H:%M:%S"),
+            wxString::Format("Message failed to send: %s", error));
+      }
+    }
+    
+    // End batch update - this will handle scroll and single refresh
+    m_chatViewWidget->EndBatchUpdate();
+    m_chatViewWidget->ScrollToBottomIfAtBottom();
   }
 
   // Handle download updates
@@ -2089,8 +2126,37 @@ void MainFrame::ReactiveRefresh() {
     }
   }
 
-  // Handle user status updates
+  // Handle user status updates (also used for typing indicators)
   if ((flags & DirtyFlag::UserStatus) != DirtyFlag::None) {
+    // Refresh online indicators in chat list
+    if (m_chatListWidget) {
+      m_chatListWidget->RefreshOnlineIndicators();
+    }
+
+    // Handle typing indicators
+    if (m_currentChatId != 0 && m_chatViewWidget) {
+      auto typingUsers = m_telegramClient->GetTypingUsers();
+      if (!typingUsers.empty()) {
+        // Build typing status string
+        wxString typingText;
+        for (const auto &[name, action] : typingUsers) {
+          if (!typingText.IsEmpty()) {
+            typingText += ", ";
+          }
+          typingText += name + " is " + action;
+        }
+        // Update topic bar or show in status
+        if (m_statusBar && !typingText.IsEmpty()) {
+          m_statusBar->SetOverrideStatus(typingText + "...");
+        }
+      } else {
+        // Clear typing indicator
+        if (m_statusBar) {
+          m_statusBar->ClearOverrideStatus();
+        }
+      }
+    }
+    
     // For private chats, update the topic bar with current user status
     if (m_currentChatId != 0 && m_chatViewWidget) {
       bool found = false;
@@ -2108,7 +2174,8 @@ void MainFrame::ReactiveRefresh() {
 void MainFrame::OnStatusTimer(wxTimerEvent &event) {
   // Update status bar periodically (connection status, session time, etc.)
   if (m_statusBar) {
-    m_statusBar->SetOnline(m_telegramClient && m_telegramClient->IsLoggedIn());
+    // Use actual TDLib connection state, not just auth state
+    m_statusBar->SetOnline(m_telegramClient && m_telegramClient->IsConnected());
     m_statusBar->SetLoggedIn(m_isLoggedIn);
     m_statusBar->SetCurrentUser(m_currentUser);
     m_statusBar->SetCurrentChatTitle(m_currentChatTitle);

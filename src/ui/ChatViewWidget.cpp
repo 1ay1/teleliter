@@ -447,6 +447,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
                                              status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
+    if (!msg.reactions.empty()) {
+      m_messageFormatter->AppendReactions(msg.reactions);
+    }
     m_messageFormatter->SetLastMessage(sender, msg.date);
     m_lastDisplayedSender = sender;
     m_lastDisplayedTimestamp = msg.date;
@@ -460,6 +463,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
                                            msg.text, status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
+    if (!msg.reactions.empty()) {
+      m_messageFormatter->AppendReactions(msg.reactions);
+    }
     m_messageFormatter->SetLastMessage(sender, msg.date);
     m_lastDisplayedSender = sender;
     m_lastDisplayedTimestamp = msg.date;
@@ -468,6 +474,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
   // Handle media messages - helper lambda to update state after media
   auto updateStateAfterMedia = [&]() {
+    if (!msg.reactions.empty()) {
+      m_messageFormatter->AppendReactions(msg.reactions);
+    }
     m_messageFormatter->SetLastMessage(sender, msg.date);
     m_lastDisplayedSender = sender;
     m_lastDisplayedTimestamp = msg.date;
@@ -622,6 +631,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
                                             statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
+    if (!msg.reactions.empty()) {
+      m_messageFormatter->AppendReactions(msg.reactions);
+    }
     m_messageFormatter->SetLastMessage(sender, msg.date);
     m_lastDisplayedSender = sender;
     m_lastDisplayedTimestamp = msg.date;
@@ -636,6 +648,9 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
         timestamp, sender, msg.text, nullptr, nullptr, status, statusHighlight);
     if (hasReadMarker)
       RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
+    if (!msg.reactions.empty()) {
+      m_messageFormatter->AppendReactions(msg.reactions);
+    }
     m_messageFormatter->SetLastMessage(sender, msg.date);
     m_lastDisplayedSender = sender;
     m_lastDisplayedTimestamp = msg.date;
@@ -669,6 +684,11 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 
   if (hasReadMarker)
     RecordReadMarker(startPos, m_chatArea->GetLastPosition(), msg.id);
+
+  // Display reactions if any
+  if (!msg.reactions.empty()) {
+    m_messageFormatter->AppendReactions(msg.reactions);
+  }
 
   // Update grouping state
   m_messageFormatter->SetLastMessage(sender, msg.date);
@@ -805,13 +825,38 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
   RefreshDisplay();
 }
 
+void ChatViewWidget::RemoveMessage(int64_t messageId) {
+  if (messageId == 0)
+    return;
+
+  bool needsRefresh = false;
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    auto it = std::find_if(m_messages.begin(), m_messages.end(),
+                           [messageId](const MessageInfo &m) { return m.id == messageId; });
+    if (it != m_messages.end()) {
+      m_messages.erase(it);
+      m_displayedMessageIds.erase(messageId);
+      needsRefresh = true;
+    }
+  }
+
+  if (needsRefresh) {
+    ScheduleRefresh();
+  }
+}
+
 void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
   if (msg.id == 0)
     return;
 
-  // CVWLOG("UpdateMessage: msgId=" << msg.id);
+  CVWLOG("UpdateMessage: msgId=" << msg.id << " serverMessageId=" << msg.serverMessageId
+         << " mediaFileId=" << msg.mediaFileId << " localPath=" << msg.mediaLocalPath.ToStdString());
 
   bool neededRefresh = false;
+  int64_t oldId = msg.id;
+  int64_t newId = (msg.serverMessageId != 0) ? msg.serverMessageId : msg.id;
+  
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     for (auto &existingMsg : m_messages) {
@@ -821,7 +866,8 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
         if (existingMsg.mediaLocalPath != msg.mediaLocalPath ||
             existingMsg.mediaThumbnailPath != msg.mediaThumbnailPath ||
             existingMsg.text != msg.text ||
-            existingMsg.isEdited != msg.isEdited) {
+            existingMsg.isEdited != msg.isEdited ||
+            existingMsg.reactions != msg.reactions) {
 
           neededRefresh = true;
           CVWLOG(
@@ -831,6 +877,16 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
                     msg.mediaThumbnailFileId != 0)) {
           // ID appeared where there was none (completion of initial load)
           neededRefresh = true;
+        }
+        
+        // If server assigned a new ID, update the message ID and track in displayedMessageIds
+        if (msg.serverMessageId != 0 && existingMsg.id != msg.serverMessageId) {
+          CVWLOG("UpdateMessage: updating message ID from " << existingMsg.id 
+                 << " to " << msg.serverMessageId);
+          m_displayedMessageIds.erase(existingMsg.id);
+          existingMsg.id = msg.serverMessageId;
+          m_displayedMessageIds.insert(msg.serverMessageId);
+          neededRefresh = true;  // Need to refresh to update media spans
         }
 
         // Update all fields
@@ -843,8 +899,22 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
         existingMsg.text = msg.text;
         existingMsg.isEdited = msg.isEdited;
         existingMsg.editDate = msg.editDate;
+        existingMsg.reactions = msg.reactions;
 
         break;
+      }
+    }
+  }
+  
+  // Update media spans if message ID changed
+  if (msg.serverMessageId != 0 && oldId != newId) {
+    for (auto &span : m_mediaSpans) {
+      if (span.messageId == oldId) {
+        CVWLOG("UpdateMessage: updating media span messageId from " << oldId << " to " << newId);
+        span.messageId = newId;
+        // Also update fileId and thumbnailFileId from the new message data
+        span.fileId = msg.mediaFileId;
+        span.thumbnailFileId = msg.mediaThumbnailFileId;
       }
     }
   }
@@ -1046,11 +1116,22 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
   MediaInfo info;
   info.type = span.type;
 
+  CVWLOG("GetMediaInfoForSpan: span.messageId=" << span.messageId 
+         << " span.fileId=" << span.fileId 
+         << " span.thumbnailFileId=" << span.thumbnailFileId);
+
   // Look up the message to get current file IDs and paths (single source of
   // truth) The message may have been updated with file IDs since the span was
   // created
   const MessageInfo *msg = GetMessageById(span.messageId);
   if (msg) {
+    CVWLOG("GetMediaInfoForSpan: found message, mediaFileId=" << msg->mediaFileId
+           << " mediaThumbnailFileId=" << msg->mediaThumbnailFileId
+           << " mediaLocalPath=" << msg->mediaLocalPath.ToStdString()
+           << " mediaThumbnailPath=" << msg->mediaThumbnailPath.ToStdString()
+           << " hasPhoto=" << msg->hasPhoto << " hasVideo=" << msg->hasVideo
+           << " hasDocument=" << msg->hasDocument);
+    
     info.width = msg->width;
     info.height = msg->height;
     info.duration = msg->mediaDuration;
@@ -1071,7 +1152,8 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     // frequently (e.g. on hover) triggering network requests here would be
     // disastrous for performance
     if (info.fileId == 0 && info.thumbnailFileId == 0) {
-      // CVWLOG("GetMediaInfoForSpan: no file IDs for msgId=" << msg->id);
+      CVWLOG("GetMediaInfoForSpan: no file IDs for msgId=" << msg->id 
+             << " - message may still be uploading or failed");
     }
 
     // Accurate downloading state check
@@ -1102,11 +1184,18 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     }
   } else {
     // Fallback to span's file IDs if message not found
+    CVWLOG("GetMediaInfoForSpan: message NOT FOUND for id=" << span.messageId
+           << " - falling back to span data");
     info.fileId = span.fileId;
     info.thumbnailFileId = span.thumbnailFileId;
     info.width = span.width;
     info.height = span.height;
   }
+
+  CVWLOG("GetMediaInfoForSpan: returning fileId=" << info.fileId
+         << " thumbnailFileId=" << info.thumbnailFileId
+         << " localPath=" << info.localPath.ToStdString()
+         << " thumbnailPath=" << info.thumbnailPath.ToStdString());
 
   return info;
 }
@@ -2036,6 +2125,8 @@ void ChatViewWidget::OnOpenMedia(wxCommandEvent &event) {
     OpenMedia(m_contextMenuMedia);
   }
 }
+
+
 
 void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
   if (!m_chatArea || !m_chatArea->GetDisplay()) {
