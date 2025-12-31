@@ -868,8 +868,9 @@ void MessageFormatter::AppendMediaMessage(
 
   if (!caption.IsEmpty() && media.type != MediaType::Sticker) {
     // Don't repeat caption for stickers since emoji is already shown
+    m_chatArea->WriteText(" ");
     m_chatArea->BeginTextColour(m_chatArea->GetFgColor());
-    m_chatArea->WriteText(" " + caption);
+    WriteTextWithLinks(caption);
     m_chatArea->EndTextColour();
   }
 
