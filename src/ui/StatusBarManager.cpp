@@ -4,15 +4,12 @@
 #include <wx/settings.h>
 
 StatusBarManager::StatusBarManager(wxFrame *parent)
-    : wxEvtHandler(),
-      m_parent(parent), m_statusBar(nullptr),
-      m_isTypingIndicator(false),
-      m_typingAnimFrame(0),
-      m_typingAnimTimer(this, wxID_ANY),
-      m_connectionLabel(nullptr),
-      m_typingLabel(nullptr),
-      m_progressGauge(nullptr), m_progressLabel(nullptr),
-      m_transferAnimFrame(0), m_lastTransferredBytes(0), m_currentSpeed(0.0),
+    : wxEvtHandler(), m_parent(parent), m_statusBar(nullptr),
+      m_isTypingIndicator(false), m_typingAnimFrame(0),
+      m_typingAnimTimer(this, wxID_ANY), m_connectionLabel(nullptr),
+      m_typingLabel(nullptr), m_progressGauge(nullptr),
+      m_progressLabel(nullptr), m_transferAnimFrame(0),
+      m_lastTransferredBytes(0), m_currentSpeed(0.0),
       m_hasActiveTransfers(false), m_activeTransferCount(0), m_isOnline(false),
       m_isLoggedIn(false), m_currentChatId(0), m_currentChatMemberCount(0),
       m_totalChats(0), m_unreadChats(0),
@@ -28,9 +25,10 @@ StatusBarManager::StatusBarManager(wxFrame *parent)
       m_telegramClient(nullptr) {
   m_transferTimer.Start();
   m_sessionTimer.Start();
-  
+
   // Bind typing animation timer
-  Bind(wxEVT_TIMER, &StatusBarManager::OnTypingAnimTimer, this, m_typingAnimTimer.GetId());
+  Bind(wxEVT_TIMER, &StatusBarManager::OnTypingAnimTimer, this,
+       m_typingAnimTimer.GetId());
 }
 
 StatusBarManager::~StatusBarManager() {}
@@ -63,7 +61,7 @@ void StatusBarManager::Setup() {
 
   // Create typing indicator label (in field 0) with colored text for visibility
   m_typingLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
-  m_typingLabel->Hide();  // Initially hidden
+  m_typingLabel->Hide(); // Initially hidden
   // Font will be set from MainFrame via SetFont()
 
   // No separate progress label/gauge - we use the main status text field
@@ -86,13 +84,20 @@ void StatusBarManager::RepositionWidgets() {
     m_connectionLabel->SetPosition(wxPoint(connRect.x + 4, connRect.y + 2));
     m_connectionLabel->SetSize(connRect.width - 8, connRect.height - 4);
   }
-  
-  // Reposition typing label
+
+  // Reposition typing label - calculate proper vertical centering
   if (m_typingLabel) {
     wxRect mainRect;
     m_statusBar->GetFieldRect(0, mainRect);
-    m_typingLabel->SetPosition(wxPoint(mainRect.x + 4, mainRect.y + 2));
-    m_typingLabel->SetSize(mainRect.width - 8, mainRect.height - 4);
+
+    // Center the label vertically within the field
+    wxSize labelSize = m_typingLabel->GetBestSize();
+    int yOffset = (mainRect.height - labelSize.GetHeight()) / 2;
+    if (yOffset < 0)
+      yOffset = 0;
+
+    m_typingLabel->SetPosition(wxPoint(mainRect.x + 4, mainRect.y + yOffset));
+    m_typingLabel->SetSize(mainRect.width - 8, labelSize.GetHeight());
   }
 }
 
@@ -109,7 +114,7 @@ void StatusBarManager::SetFont(const wxFont &font) {
     m_connectionLabel->SetFont(font);
   }
   if (m_typingLabel && font.IsOk()) {
-    m_typingLabel->SetFont(font.Bold());
+    m_typingLabel->SetFont(font);
   }
 }
 
@@ -118,22 +123,16 @@ void StatusBarManager::UpdateStatusBar() {
     return;
 
   // Field 0: Chat info (only update if no active transfer)
-  // Handle typing indicator with colored label
+  // Handle typing indicator - use native SetStatusText for proper alignment
   if (m_isTypingIndicator && !m_overrideStatusText.IsEmpty()) {
     // Show typing indicator with animated dots
     static const wxString dotPatterns[] = {"", ".", "..", "..."};
     wxString dots = dotPatterns[m_typingAnimFrame % 4];
-    
+
     wxString typingText = "✏️ " + m_overrideStatusText + dots;
-    
-    if (m_typingLabel) {
-      m_typingLabel->SetForegroundColour(m_connectingColor);  // Use highlight color
-      m_typingLabel->SetLabel(typingText);
-      m_typingLabel->Show();
-      m_parent->SetStatusText("", 0);  // Clear underlying text
-    } else {
-      m_parent->SetStatusText(typingText, 0);
-    }
+
+    // Use native SetStatusText for proper vertical alignment
+    m_parent->SetStatusText(typingText, 0);
   } else if (!m_overrideStatusText.IsEmpty()) {
     if (m_typingLabel) {
       m_typingLabel->Hide();
@@ -188,37 +187,37 @@ void StatusBarManager::UpdateStatusBar() {
     // Use actual TDLib connection state for accurate status
     if (m_telegramClient) {
       ConnectionState state = m_telegramClient->GetConnectionState();
-      
+
       switch (state) {
-        case ConnectionState::Ready:
-          connStatus = "[*] Online";
-          if (!m_connectionDC.IsEmpty()) {
-            connStatus += " " + m_connectionDC;
-          }
-          connColor = m_onlineColor;
-          break;
-        case ConnectionState::Updating:
-          connStatus = "[~] Syncing...";
-          connColor = m_connectingColor;
-          break;
-        case ConnectionState::Connecting:
-        case ConnectionState::ConnectingToProxy: {
-          // Animated connecting indicator using ASCII
-          static const wxString spinners[] = {"|", "/", "-", "\\"};
-          static int spinFrame = 0;
-          spinFrame = (spinFrame + 1) % 4;
-          connStatus = "[" + spinners[spinFrame] + "] Connecting...";
-          connColor = m_connectingColor;
-          break;
+      case ConnectionState::Ready:
+        connStatus = "[*] Online";
+        if (!m_connectionDC.IsEmpty()) {
+          connStatus += " " + m_connectionDC;
         }
-        case ConnectionState::WaitingForNetwork:
-          connStatus = "[!] No Network";
-          connColor = m_offlineColor;
-          break;
-        default:
-          connStatus = "[ ] Offline";
-          connColor = m_offlineColor;
-          break;
+        connColor = m_onlineColor;
+        break;
+      case ConnectionState::Updating:
+        connStatus = "[~] Syncing...";
+        connColor = m_connectingColor;
+        break;
+      case ConnectionState::Connecting:
+      case ConnectionState::ConnectingToProxy: {
+        // Animated connecting indicator using ASCII
+        static const wxString spinners[] = {"|", "/", "-", "\\"};
+        static int spinFrame = 0;
+        spinFrame = (spinFrame + 1) % 4;
+        connStatus = "[" + spinners[spinFrame] + "] Connecting...";
+        connColor = m_connectingColor;
+        break;
+      }
+      case ConnectionState::WaitingForNetwork:
+        connStatus = "[!] No Network";
+        connColor = m_offlineColor;
+        break;
+      default:
+        connStatus = "[ ] Offline";
+        connColor = m_offlineColor;
+        break;
       }
     } else {
       connStatus = "[ ] Offline";
@@ -415,12 +414,12 @@ void StatusBarManager::SetTypingIndicator(const wxString &text) {
   m_overrideStatusText = text;
   m_isTypingIndicator = true;
   m_typingAnimFrame = 0;
-  
+
   // Start animation timer if not running
   if (!m_typingAnimTimer.IsRunning()) {
-    m_typingAnimTimer.Start(400);  // Update dots every 400ms
+    m_typingAnimTimer.Start(400); // Update dots every 400ms
   }
-  
+
   UpdateStatusBar();
 }
 
@@ -428,11 +427,11 @@ void StatusBarManager::ClearTypingIndicator() {
   m_overrideStatusText.clear();
   m_isTypingIndicator = false;
   m_typingAnimTimer.Stop();
-  
+
   if (m_typingLabel) {
     m_typingLabel->Hide();
   }
-  
+
   UpdateStatusBar();
 }
 
@@ -441,7 +440,7 @@ void StatusBarManager::OnTypingAnimTimer(wxTimerEvent &event) {
     m_typingAnimTimer.Stop();
     return;
   }
-  
+
   m_typingAnimFrame++;
   UpdateStatusBar();
 }

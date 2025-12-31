@@ -117,6 +117,8 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   // Setup status bar manager
   m_statusBar = new StatusBarManager(this);
   m_statusBar->Setup();
+  m_statusBar->SetFont(
+      m_uiFont); // Apply UI font (ApplySavedFonts ran before this was created)
 
   // Create TelegramClient and start it immediately for faster login
   m_telegramClient = new TelegramClient();
@@ -156,9 +158,10 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
     m_statusBar->OnTransferComplete(info);
     if (!m_transferManager.HasActiveTransfers()) {
       // Use a one-shot timer instead of blocking sleep to avoid UI hang
-      // Timer will fire after 2 seconds and hide progress if still no active transfers
-      wxTimer* hideTimer = new wxTimer();
-      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent&) {
+      // Timer will fire after 2 seconds and hide progress if still no active
+      // transfers
+      wxTimer *hideTimer = new wxTimer();
+      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent &) {
         if (!m_transferManager.HasActiveTransfers()) {
           m_statusBar->HideTransferProgress();
         }
@@ -172,9 +175,10 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
     m_statusBar->OnTransferError(info);
     if (!m_transferManager.HasActiveTransfers()) {
       // Use a one-shot timer instead of blocking sleep to avoid UI hang
-      // Timer will fire after 3 seconds and hide progress if still no active transfers
-      wxTimer* hideTimer = new wxTimer();
-      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent&) {
+      // Timer will fire after 3 seconds and hide progress if still no active
+      // transfers
+      wxTimer *hideTimer = new wxTimer();
+      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent &) {
         if (!m_transferManager.HasActiveTransfers()) {
           m_statusBar->HideTransferProgress();
         }

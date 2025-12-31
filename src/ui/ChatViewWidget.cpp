@@ -11,31 +11,32 @@
 // Cached file existence check to reduce disk I/O
 // Cache entries expire after 500ms to balance performance with freshness
 static bool CachedFileExists(const wxString &path) {
-  if (path.IsEmpty()) return false;
-  
+  if (path.IsEmpty())
+    return false;
+
   struct CacheEntry {
     bool exists;
     wxLongLong timestamp;
   };
-  
+
   static std::unordered_map<std::string, CacheEntry> s_cache;
   static const wxLongLong CACHE_DURATION_MS = 500;
-  
+
   std::string key = path.ToStdString();
   wxLongLong now = wxGetLocalTimeMillis();
-  
+
   auto it = s_cache.find(key);
   if (it != s_cache.end() && (now - it->second.timestamp) < CACHE_DURATION_MS) {
     return it->second.exists;
   }
-  
+
   // Cache miss or expired - do actual check
   bool exists = wxFileExists(path);
   s_cache[key] = {exists, now};
-  
+
   // Periodically clean old entries to prevent unbounded growth
   if (s_cache.size() > 1000) {
-    for (auto iter = s_cache.begin(); iter != s_cache.end(); ) {
+    for (auto iter = s_cache.begin(); iter != s_cache.end();) {
       if ((now - iter->second.timestamp) > CACHE_DURATION_MS * 10) {
         iter = s_cache.erase(iter);
       } else {
@@ -43,12 +44,16 @@ static bool CachedFileExists(const wxString &path) {
       }
     }
   }
-  
+
   return exists;
 }
 
 #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 // #define CVWLOG(msg) do {} while(0)
+
+// Global cache for per-chat read times (persists across chat switches)
+// Key: chatId, Value: map of messageId -> readTime
+static std::map<int64_t, std::map<int64_t, int64_t>> s_perChatReadTimes;
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
 #include "FileDropTarget.h"
@@ -402,7 +407,7 @@ void ChatViewWidget::RefreshDisplay() {
   // Single lock for all message operations to reduce lock contention
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
-    
+
     // Sort messages before rendering
     SortMessages();
 
@@ -610,7 +615,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -635,7 +641,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -658,7 +665,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -700,7 +708,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -723,7 +732,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -746,7 +756,8 @@ void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
         timestamp, sender, info, msg.mediaCaption, status, statusHighlight);
     long endPos = m_chatArea->GetLastPosition();
     // Only add span if we have valid media reference
-    if (info.fileId != 0 || info.thumbnailFileId != 0 || !info.localPath.IsEmpty()) {
+    if (info.fileId != 0 || info.thumbnailFileId != 0 ||
+        !info.localPath.IsEmpty()) {
       AddMediaSpan(startPos, endPos, info, msg.id);
     }
     if (hasReadMarker)
@@ -973,9 +984,9 @@ void ChatViewWidget::RemoveMessage(int64_t messageId) {
         m_messages.erase(m_messages.begin() + removedIndex);
         m_displayedMessageIds.erase(messageId);
         m_messageIdToIndex.erase(indexIt);
-        
+
         // Update indices for all messages after the removed one
-        for (auto& pair : m_messageIdToIndex) {
+        for (auto &pair : m_messageIdToIndex) {
           if (pair.second > removedIndex) {
             pair.second--;
           }
@@ -1062,9 +1073,10 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
       }
     }
   }
-  
+
   // Also update spans that have the same message ID but missing file IDs
-  // This handles the case where the message was created before file info was available
+  // This handles the case where the message was created before file info was
+  // available
   for (auto &span : m_mediaSpans) {
     if (span.messageId == msg.id || span.messageId == newId) {
       if (span.fileId == 0 && msg.mediaFileId != 0) {
@@ -1099,6 +1111,21 @@ void ChatViewWidget::EndBatchUpdate() {
 
 void ChatViewWidget::ClearMessages() {
   CVWLOG("ClearMessages: clearing all messages");
+
+  // Save read times to global cache before clearing (so they persist across
+  // chat switches)
+  if (m_mainFrame && !m_messageReadTimes.empty()) {
+    int64_t currentChatId = m_mainFrame->GetCurrentChatId();
+    if (currentChatId != 0) {
+      // Merge with existing cache (don't overwrite existing entries)
+      auto &chatCache = s_perChatReadTimes[currentChatId];
+      for (const auto &[msgId, readTime] : m_messageReadTimes) {
+        if (readTime > 0 && chatCache.find(msgId) == chatCache.end()) {
+          chatCache[msgId] = readTime;
+        }
+      }
+    }
+  }
 
   // Clear message storage
   {
@@ -1305,12 +1332,12 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     info.fileName = msg->mediaFileName;
     info.caption = msg->mediaCaption;
     // isDownloading will be set by caller (ShowMediaPopup) when needed
-    // We don't check TelegramClient here to avoid mutex contention on every hover
-    // The caller can check download state when actually showing the popup
+    // We don't check TelegramClient here to avoid mutex contention on every
+    // hover The caller can check download state when actually showing the popup
     info.isDownloading = info.localPath.IsEmpty() && info.fileId != 0;
   } else {
-    // Message not found in m_messages - this can happen briefly for new messages
-    // We already have span's file IDs from initialization above
+    // Message not found in m_messages - this can happen briefly for new
+    // messages We already have span's file IDs from initialization above
   }
 
   return info;
@@ -1611,8 +1638,8 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
   // Some stickers may only have thumbnailFileId (animated emoji, etc.)
   if (info.type == MediaType::Sticker) {
     // Try to download thumbnail first (for preview)
-    if (info.thumbnailFileId != 0 &&
-        (info.thumbnailPath.IsEmpty() || !CachedFileExists(info.thumbnailPath))) {
+    if (info.thumbnailFileId != 0 && (info.thumbnailPath.IsEmpty() ||
+                                      !CachedFileExists(info.thumbnailPath))) {
       if (m_mainFrame) {
         TelegramClient *client = m_mainFrame->GetTelegramClient();
         if (client) {
@@ -2096,17 +2123,33 @@ void ChatViewWidget::RecordReadMarker(long startPos, long endPos,
   if (it != m_messageReadTimes.end()) {
     span.readTime = it->second;
   } else {
-    // No recorded time for this specific message - fall back to the chat's
-    // overall lastReadOutboxTime which is when we last received a read receipt
-    // This handles the case when switching back to a chat where messages were
-    // already read before the current session
-    span.readTime = m_lastReadOutboxTime;
+    // No recorded time for this specific message - we don't know when it was
+    // read (it was already read before the current session started) Use 0 to
+    // indicate unknown time, tooltip will just show "Seen"
+    span.readTime = 0;
   }
 
   m_readMarkerSpans.push_back(span);
 }
 
 void ChatViewWidget::SetReadStatus(int64_t lastReadOutboxId, int64_t readTime) {
+  // Restore read times from global cache if we're just opening this chat
+  // (m_lastReadOutboxId == 0 means we just switched to this chat)
+  if (m_lastReadOutboxId == 0 && m_mainFrame) {
+    int64_t currentChatId = m_mainFrame->GetCurrentChatId();
+    if (currentChatId != 0) {
+      auto cacheIt = s_perChatReadTimes.find(currentChatId);
+      if (cacheIt != s_perChatReadTimes.end()) {
+        // Restore cached read times
+        for (const auto &[msgId, cachedTime] : cacheIt->second) {
+          if (m_messageReadTimes.find(msgId) == m_messageReadTimes.end()) {
+            m_messageReadTimes[msgId] = cachedTime;
+          }
+        }
+      }
+    }
+  }
+
   if (lastReadOutboxId <= m_lastReadOutboxId) {
     return;
   }
@@ -2288,7 +2331,7 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
   static wxLongLong s_lastProcessTime = 0;
   static wxString s_lastTooltip;
   static wxStockCursor s_lastCursor = wxCURSOR_ARROW;
-  
+
   wxLongLong now = wxGetLocalTimeMillis();
   if (now - s_lastProcessTime < 50) {
     event.Skip();
@@ -2308,9 +2351,9 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
       s_lastCursor = cursor;
     }
   };
-  
+
   // Helper to set tooltip only if changed
-  auto setTooltip = [display](const wxString& tip) {
+  auto setTooltip = [display](const wxString &tip) {
     if (tip != s_lastTooltip) {
       if (tip.IsEmpty()) {
         display->SetToolTip(NULL);
