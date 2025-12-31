@@ -485,13 +485,10 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
 void MainFrame::CreateMemberList(wxWindow *parent) {
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
 
-  // Member list - use native styling
+  // Member list - let macOS handle native dark mode colors
   m_memberList =
       new wxListCtrl(parent, ID_MEMBER_LIST, wxDefaultPosition, wxDefaultSize,
                      wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER);
-  // Explicitly set native window background
-  m_memberList->SetBackgroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
 
   // Single column for usernames
   m_memberList->InsertColumn(0, "Members", wxLIST_FORMAT_LEFT, 120);
@@ -1547,12 +1544,16 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
     }
   }
 
+  // Force scroll-to-bottom behavior BEFORE displaying messages
+  // This ensures the display logic knows to scroll to bottom after render
+  m_chatViewWidget->ForceScrollToBottom();
+
   // Display all messages in bulk
   // ChatViewWidget::DisplayMessages handles sorting internally
   m_chatViewWidget->DisplayMessages(messages);
 
-  // Scroll to bottom after loading
-  m_chatViewWidget->ScrollToBottom();
+  // Ensure we're at bottom after everything is rendered
+  m_chatViewWidget->ForceScrollToBottom();
 
   // Trigger auto-download for all media in loaded messages
   if (m_telegramClient) {
@@ -2035,7 +2036,7 @@ void MainFrame::ReactiveRefresh() {
       m_currentChatId != 0 && m_chatViewWidget) {
     // Begin batch update to prevent flicker from multiple individual updates
     m_chatViewWidget->BeginBatchUpdate();
-    
+
     // Update read status
     bool found = false;
     ChatInfo chat = m_telegramClient->GetChat(m_currentChatId, &found);
@@ -2054,16 +2055,18 @@ void MainFrame::ReactiveRefresh() {
     auto updatedMessages =
         m_telegramClient->GetUpdatedMessages(m_currentChatId);
     for (const auto &msg : updatedMessages) {
-      // Always update the message in storage (handles reactions, media updates, etc.)
+      // Always update the message in storage (handles reactions, media updates,
+      // etc.)
       OnMessageUpdated(msg.chatId, msg);
-      
+
       // Additionally show edit notification if the text was edited
       if (msg.isEdited) {
         OnMessageEdited(msg.chatId, msg.id, msg.text, msg.senderName);
       }
-      // Note: Reactions are displayed inline below messages, no separate notification needed
+      // Note: Reactions are displayed inline below messages, no separate
+      // notification needed
     }
-    
+
     // Handle deleted messages
     auto deletedIds = m_telegramClient->GetDeletedMessages(m_currentChatId);
     if (!deletedIds.empty()) {
@@ -2080,7 +2083,7 @@ void MainFrame::ReactiveRefresh() {
             wxString::Format("%zu messages were deleted", deletedIds.size()));
       }
     }
-    
+
     // Handle send failures
     auto sendFailures = m_telegramClient->GetSendFailures(m_currentChatId);
     for (const auto &[msgId, error] : sendFailures) {
@@ -2090,7 +2093,7 @@ void MainFrame::ReactiveRefresh() {
             wxString::Format("Message failed to send: %s", error));
       }
     }
-    
+
     // End batch update - this will handle scroll and single refresh
     m_chatViewWidget->EndBatchUpdate();
     m_chatViewWidget->ScrollToBottomIfAtBottom();
@@ -2156,7 +2159,7 @@ void MainFrame::ReactiveRefresh() {
         }
       }
     }
-    
+
     // For private chats, update the topic bar with current user status
     if (m_currentChatId != 0 && m_chatViewWidget) {
       bool found = false;
@@ -2262,4 +2265,10 @@ int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const {
   }
 
   return 0;
+}
+
+void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
+  if (m_telegramClient && m_currentChatId != 0) {
+    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 50);
+  }
 }

@@ -147,7 +147,9 @@ bool MessageFormatter::NeedsDateSeparator(int64_t timestamp) const {
 
   time_t t = static_cast<time_t>(timestamp);
   wxDateTime dt(t);
-  long newDay = dt.GetJulianDayNumber();
+  // Use local calendar day (YYYYMMDD) instead of Julian Day (which switches at
+  // noon UTC)
+  long newDay = dt.GetYear() * 10000 + (dt.GetMonth() + 1) * 100 + dt.GetDay();
 
   return newDay != m_lastDateDay;
 }
@@ -248,7 +250,8 @@ void MessageFormatter::SetLastMessage(const wxString &sender,
   if (timestamp > 0) {
     time_t t = static_cast<time_t>(timestamp);
     wxDateTime dt(t);
-    m_lastDateDay = dt.GetJulianDayNumber();
+    m_lastDateDay =
+        dt.GetYear() * 10000 + (dt.GetMonth() + 1) * 100 + dt.GetDay();
   }
 }
 
@@ -277,7 +280,9 @@ bool MessageFormatter::IsSameDay(int64_t time1, int64_t time2) {
     return false;
   wxDateTime dt1(static_cast<time_t>(time1));
   wxDateTime dt2(static_cast<time_t>(time2));
-  return dt1.GetJulianDayNumber() == dt2.GetJulianDayNumber();
+  long day1 = dt1.GetYear() * 10000 + (dt1.GetMonth() + 1) * 100 + dt1.GetDay();
+  long day2 = dt2.GetYear() * 10000 + (dt2.GetMonth() + 1) * 100 + dt2.GetDay();
+  return day1 == day2;
 }
 
 wxString MessageFormatter::GetDateString(int64_t unixTime) {
@@ -332,7 +337,8 @@ void MessageFormatter::AppendDateSeparatorForTime(int64_t unixTime) {
   if (unixTime > 0) {
     time_t t = static_cast<time_t>(unixTime);
     wxDateTime dt(t);
-    m_lastDateDay = dt.GetJulianDayNumber();
+    m_lastDateDay =
+        dt.GetYear() * 10000 + (dt.GetMonth() + 1) * 100 + dt.GetDay();
   }
 }
 
@@ -527,7 +533,7 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
   auto writeTextWithIndent = [this, &indentStr](const wxString &chunk) {
     if (chunk.IsEmpty())
       return;
-    
+
     // Split by newlines and add indentation for continuation lines
     wxArrayString lines = wxSplit(chunk, '\n');
     for (size_t i = 0; i < lines.size(); ++i) {
@@ -631,19 +637,19 @@ void MessageFormatter::AppendServiceMessage(const wxString &timestamp,
   // Handle multiline messages - first line gets timestamp and arrow,
   // continuation lines get aligned padding
   wxArrayString lines = wxSplit(message, '\n');
-  
+
   for (size_t i = 0; i < lines.size(); ++i) {
     m_chatArea->ResetStyles();
-    
+
     if (i == 0) {
       // First line: timestamp + padding + arrow
       m_chatArea->WriteTimestamp(timestamp);
-      
+
       int padding = m_usernameWidth - 3; // Account for arrow width
       if (padding > 0) {
         m_chatArea->WriteText(wxString(' ', padding));
       }
-      
+
       m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
       m_chatArea->WriteText(wxString::FromUTF8("——▶ ") + lines[i]);
       m_chatArea->EndTextColour();
@@ -651,14 +657,15 @@ void MessageFormatter::AppendServiceMessage(const wxString &timestamp,
       // Continuation lines: aligned padding (timestamp width + username width)
       // Timestamp is typically 10 chars "[HH:MM:SS]" + space
       int timestampWidth = 11;
-      int totalPadding = timestampWidth + m_usernameWidth + 1; // +1 for arrow spacing
+      int totalPadding =
+          timestampWidth + m_usernameWidth + 1; // +1 for arrow spacing
       m_chatArea->WriteText(wxString(' ', totalPadding));
-      
+
       m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
       m_chatArea->WriteText(lines[i]);
       m_chatArea->EndTextColour();
     }
-    
+
     m_chatArea->ResetStyles();
     m_chatArea->WriteText("\n");
   }
@@ -734,13 +741,13 @@ void MessageFormatter::AppendUserJoinedMessage(const wxString &timestamp,
 
   m_chatArea->ResetStyles();
   m_chatArea->WriteTimestamp(timestamp);
-  
+
   // Align with username column
   int padding = m_usernameWidth - 3;
   if (padding > 0) {
     m_chatArea->WriteText(wxString(' ', padding));
   }
-  
+
   m_chatArea->BeginTextColour(m_chatArea->GetSuccessColor());
   m_chatArea->WriteText(wxString::FromUTF8("——▶ "));
   m_chatArea->EndTextColour();
@@ -761,13 +768,13 @@ void MessageFormatter::AppendUserLeftMessage(const wxString &timestamp,
 
   m_chatArea->ResetStyles();
   m_chatArea->WriteTimestamp(timestamp);
-  
+
   // Align with username column
   int padding = m_usernameWidth - 3;
   if (padding > 0) {
     m_chatArea->WriteText(wxString(' ', padding));
   }
-  
+
   m_chatArea->BeginTextColour(m_chatArea->GetServiceColor());
   m_chatArea->WriteText(wxString::FromUTF8("◀—— "));
   m_chatArea->EndTextColour();

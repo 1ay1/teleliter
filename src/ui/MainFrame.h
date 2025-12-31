@@ -70,6 +70,9 @@ public:
   void UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount);
   int64_t GetLastReadMessageId(int64_t chatId) const;
 
+  // Load older messages (lazy loading)
+  void LoadMoreMessages(int64_t fromMessageId);
+
   TelegramClient *GetTelegramClient() { return m_telegramClient; }
   int64_t GetCurrentChatId() const { return m_currentChatId; }
   wxString GetCurrentUser() const { return m_currentUser; }

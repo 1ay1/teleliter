@@ -174,6 +174,7 @@ private:
   // Render a single message to the display (internal - assumes display is
   // ready)
   void RenderMessageToDisplay(const MessageInfo &msg);
+  void DoRenderMessage(const MessageInfo &msg);
 
   // Sort messages by ID (primary) and date (secondary)
   void SortMessages();
@@ -259,6 +260,8 @@ private:
   bool m_wasAtBottom;
   int m_newMessageCount;
   bool m_isLoading;
+  bool m_isLoadingHistory; // specific flag for loading older messages
+  bool m_allHistoryLoaded; // flag to stop requesting when no more messages
 
   // Highlight timer for fade animation on newly read messages
   wxTimer m_highlightTimer;
@@ -303,9 +306,14 @@ private:
     long startPos;
     long endPos;
     int64_t messageId;
-    int64_t readTime;  // When this specific message was read
+    int64_t readTime; // When this specific message was read
   };
   std::vector<ReadMarkerSpan> m_readMarkerSpans;
+
+  // Map to track character position ranges for each message
+  // Key: messageId, Value: {startPos, endPos}
+  // Used for anchor scrolling (keeping the same message visible after refresh)
+  std::map<int64_t, std::pair<long, long>> m_messageRangeMap;
 
   // Context menu state
   long m_contextMenuPos;

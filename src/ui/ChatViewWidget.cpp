@@ -25,6 +25,7 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_downloadLabel(nullptr), m_downloadGauge(nullptr),
       m_downloadHideTimer(this), m_refreshTimer(this), m_refreshPending(false),
       m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
+      m_isLoadingHistory(false), m_allHistoryLoaded(false),
       m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
       m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1) {
@@ -302,17 +303,30 @@ void ChatViewWidget::RefreshDisplay() {
   // and explicitly set when user sends a message
   bool shouldScrollToBottom = m_wasAtBottom;
 
-  // Capture current scroll position as a RATIO (0.0 to 1.0) rather than character position
-  // Character positions change after re-render, but ratio stays meaningful
-  double scrollRatio = 0.0;
+  // Capture current scroll position and find anchor message
+  int oldScrollPos = 0;
+  int oldVirtualHeight = 0;
+  bool wasLoadingHistory = m_isLoadingHistory; // Capture state before render
+  int64_t anchorMsgId = 0;
+
   if (!shouldScrollToBottom && m_chatArea && m_chatArea->GetDisplay()) {
     wxRichTextCtrl *display = m_chatArea->GetDisplay();
     int scrollPos = display->GetScrollPos(wxVERTICAL);
     int scrollRange = display->GetScrollRange(wxVERTICAL);
-    int scrollThumb = display->GetScrollThumb(wxVERTICAL);
-    int maxScroll = scrollRange - scrollThumb;
-    if (maxScroll > 0) {
-      scrollRatio = static_cast<double>(scrollPos) / static_cast<double>(maxScroll);
+
+    // Save for lazy load restoration
+    oldScrollPos = scrollPos;
+    oldVirtualHeight = scrollRange;
+
+    // Find absolute anchor message (the one currently at the top of view)
+    // This is more robust than scroll positions because content height changes
+    // when images load
+    long visPos = display->GetFirstVisiblePosition();
+    for (const auto &pair : m_messageRangeMap) {
+      if (visPos >= pair.second.first && visPos < pair.second.second) {
+        anchorMsgId = pair.first;
+        break;
+      }
     }
   }
 
@@ -322,6 +336,7 @@ void ChatViewWidget::RefreshDisplay() {
   ClearEditSpans();
   ClearLinkSpans();
   m_readMarkerSpans.clear();
+  m_messageRangeMap.clear();
 
   // Reset formatting state
   m_messageFormatter->ResetGroupingState();
@@ -382,22 +397,39 @@ void ChatViewWidget::RefreshDisplay() {
   EndBatchUpdate();
 
   // Restore scroll position - use CallAfter to ensure layout is complete
-  CallAfter([this, shouldScrollToBottom, scrollRatio]() {
+  CallAfter([this, shouldScrollToBottom, wasLoadingHistory, oldScrollPos,
+             oldVirtualHeight, anchorMsgId]() {
     if (!m_chatArea || !m_chatArea->GetDisplay())
       return;
 
+    // If we were loading history, reset the flag now
+    if (wasLoadingHistory) {
+      m_isLoadingHistory = false;
+    }
+
+    wxRichTextCtrl *display = m_chatArea->GetDisplay();
+
     if (shouldScrollToBottom) {
       m_chatArea->ScrollToBottom();
-    } else if (scrollRatio > 0.0) {
-      // Restore scroll position using the saved ratio
-      wxRichTextCtrl *display = m_chatArea->GetDisplay();
-      int scrollRange = display->GetScrollRange(wxVERTICAL);
-      int scrollThumb = display->GetScrollThumb(wxVERTICAL);
-      int maxScroll = scrollRange - scrollThumb;
-      if (maxScroll > 0) {
-        int newScrollPos = static_cast<int>(scrollRatio * maxScroll);
-        display->Scroll(0, newScrollPos);
+    }
+    // Anchor scrolling: If we found a specific message was at the top,
+    // ensure it IS at the top now, regardless of height changes above it
+    else if (anchorMsgId != 0 && m_messageRangeMap.count(anchorMsgId)) {
+      long newStartPos = m_messageRangeMap[anchorMsgId].first;
+      display->ShowPosition(newStartPos);
+    } else if (wasLoadingHistory && oldVirtualHeight > 0) {
+      // Lazy load restoration fallback (if anchor failed)
+      int newVirtualHeight = display->GetScrollRange(wxVERTICAL);
+      int heightDiff = newVirtualHeight - oldVirtualHeight;
+      if (heightDiff > 0) {
+        int newPos = oldScrollPos + heightDiff;
+        display->Scroll(0, newPos);
+      } else {
+        display->Scroll(0, oldScrollPos);
       }
+    } else if (oldScrollPos > 0) {
+      // Standard restore fallback
+      display->Scroll(0, oldScrollPos);
     }
   });
 }
@@ -409,6 +441,19 @@ void ChatViewWidget::ForceScrollToBottom() {
 }
 
 void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
+  if (!m_chatArea)
+    return;
+
+  long startPos = m_chatArea->GetLastPosition();
+  DoRenderMessage(msg);
+  long endPos = m_chatArea->GetLastPosition();
+
+  if (msg.id != 0 && endPos > startPos) {
+    m_messageRangeMap[msg.id] = {startPos, endPos};
+  }
+}
+
+void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
   if (!m_messageFormatter)
     return;
 
@@ -850,8 +895,9 @@ void ChatViewWidget::RemoveMessage(int64_t messageId) {
   bool needsRefresh = false;
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
-    auto it = std::find_if(m_messages.begin(), m_messages.end(),
-                           [messageId](const MessageInfo &m) { return m.id == messageId; });
+    auto it = std::find_if(
+        m_messages.begin(), m_messages.end(),
+        [messageId](const MessageInfo &m) { return m.id == messageId; });
     if (it != m_messages.end()) {
       m_messages.erase(it);
       m_displayedMessageIds.erase(messageId);
@@ -871,14 +917,15 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
   bool neededRefresh = false;
   int64_t oldId = msg.id;
   int64_t newId = (msg.serverMessageId != 0) ? msg.serverMessageId : msg.id;
-  
+
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     for (auto &existingMsg : m_messages) {
       if (existingMsg.id == msg.id) {
         // Check if meaningful changes occurred that require a redraw
-        // Note: mediaLocalPath and mediaThumbnailPath changes do NOT need refresh
-        // because they don't affect displayed text - paths are only used for popup
+        // Note: mediaLocalPath and mediaThumbnailPath changes do NOT need
+        // refresh because they don't affect displayed text - paths are only
+        // used for popup
         if (existingMsg.text != msg.text ||
             existingMsg.isEdited != msg.isEdited ||
             existingMsg.reactions != msg.reactions) {
@@ -890,13 +937,14 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
           // ID appeared where there was none (completion of initial load)
           neededRefresh = true;
         }
-        
-        // If server assigned a new ID, update the message ID and track in displayedMessageIds
+
+        // If server assigned a new ID, update the message ID and track in
+        // displayedMessageIds
         if (msg.serverMessageId != 0 && existingMsg.id != msg.serverMessageId) {
           m_displayedMessageIds.erase(existingMsg.id);
           existingMsg.id = msg.serverMessageId;
           m_displayedMessageIds.insert(msg.serverMessageId);
-          neededRefresh = true;  // Need to refresh to update media spans
+          neededRefresh = true; // Need to refresh to update media spans
         }
 
         // Update all fields
@@ -915,7 +963,7 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
       }
     }
   }
-  
+
   // Update media spans if message ID changed
   if (msg.serverMessageId != 0 && oldId != newId) {
     for (auto &span : m_mediaSpans) {
@@ -989,6 +1037,10 @@ void ChatViewWidget::ClearMessages() {
   m_lastDisplayedSender.Clear();
   m_lastDisplayedTimestamp = 0;
   m_lastDisplayedMessageId = 0;
+  m_lastReadOutboxId = 0;
+  m_lastReadOutboxTime = 0;
+  m_isLoadingHistory = false;
+  m_allHistoryLoaded = false;
 }
 
 bool ChatViewWidget::IsMessageOutOfOrder(int64_t messageId) const {
@@ -1125,8 +1177,6 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
   MediaInfo info;
   info.type = span.type;
 
-
-
   // Look up the message to get current file IDs and paths (single source of
   // truth) The message may have been updated with file IDs since the span was
   // created
@@ -1153,7 +1203,6 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     // frequently (e.g. on hover) triggering network requests here would be
     // disastrous for performance
     if (info.fileId == 0 && info.thumbnailFileId == 0) {
-
     }
 
     // Accurate downloading state check
@@ -1851,6 +1900,41 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime) {
 void ChatViewWidget::OnScroll(wxScrollWinEvent &event) {
   event.Skip();
 
+  // Lazy loading logic - check if we're near the top
+  if (!m_isLoadingHistory && !m_allHistoryLoaded && m_chatArea &&
+      m_chatArea->GetDisplay()) {
+    wxRichTextCtrl *display = m_chatArea->GetDisplay();
+    int scrollPos = display->GetScrollPos(wxVERTICAL);
+    int scrollRange = display->GetScrollRange(wxVERTICAL);
+
+    // If we are near top (within 5% or 100 units) and have enough content to
+    // scroll
+    if (scrollPos < 5 && scrollRange > 50) {
+      m_isLoadingHistory = true;
+
+      // Find the oldest message ID to load from
+      int64_t oldestId = 0;
+      {
+        std::lock_guard<std::mutex> lock(m_messagesMutex);
+        if (!m_messages.empty()) {
+          // m_messages is sorted by ID ascending, so front is oldest
+          oldestId = m_messages.front().id;
+        }
+      }
+
+      if (oldestId != 0 && m_mainFrame) {
+        // Trigger load more from main thread to be safe
+        CallAfter([this, oldestId]() {
+          if (m_mainFrame) {
+            m_mainFrame->LoadMoreMessages(oldestId);
+          }
+        });
+      } else {
+        m_isLoadingHistory = false;
+      }
+    }
+  }
+
   // Update scroll position tracking
   m_wasAtBottom = IsAtBottom();
 
@@ -1897,12 +1981,7 @@ void ChatViewWidget::OnNewMessageButtonClick(wxCommandEvent &event) {
 }
 
 void ChatViewWidget::OnKeyDown(wxKeyEvent &event) {
-  // Check for copy shortcut (Ctrl+C or Cmd+C)
-  if (event.GetModifiers() == wxMOD_CMD && event.GetKeyCode() == 'C') {
-    OnCopyText(reinterpret_cast<wxCommandEvent &>(event));
-    return;
-  }
-
+  // Let the native control handle shortcuts like Copy (Cmd+C)
   event.Skip();
 }
 
@@ -2121,8 +2200,6 @@ void ChatViewWidget::OnOpenMedia(wxCommandEvent &event) {
     OpenMedia(m_contextMenuMedia);
   }
 }
-
-
 
 void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
   if (!m_chatArea || !m_chatArea->GetDisplay()) {

@@ -10,7 +10,8 @@ const wxString ChatListWidget::ONLINE_INDICATOR =
     wxString::FromUTF8("\xF0\x9F\x9F\xA2 ");
 
 ChatListWidget::ChatListWidget(wxWindow *parent)
-    : wxPanel(parent, wxID_ANY), m_telegramClient(nullptr), m_searchBox(nullptr), m_chatTree(nullptr),
+    : wxPanel(parent, wxID_ANY), m_telegramClient(nullptr),
+      m_searchBox(nullptr), m_chatTree(nullptr),
       m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX)),
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT)),
       m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)) {
@@ -37,15 +38,16 @@ void ChatListWidget::CreateLayout() {
 
   sizer->Add(m_searchBox, 0, wxEXPAND | wxALL, 2);
 
-  // Tree control for chat list - use native styling
+  // Tree control for chat list - use default selection style for better text
+  // contrast
   m_chatTree =
       new wxTreeCtrl(this, ID_CHAT_TREE, wxDefaultPosition, wxDefaultSize,
-                     wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT | wxTR_NO_LINES |
-                         wxTR_FULL_ROW_HIGHLIGHT | wxTR_SINGLE);
+                     wxTR_HIDE_ROOT | wxTR_NO_LINES | wxTR_SINGLE |
+                         wxTR_HAS_BUTTONS | wxTR_FULL_ROW_HIGHLIGHT);
 
-  // Explicitly set native window background
-  m_chatTree->SetBackgroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+  // Bind selection change to update text colors for proper contrast
+  m_chatTree->Bind(wxEVT_TREE_SEL_CHANGED, &ChatListWidget::OnSelectionChanged,
+                   this);
 
   sizer->Add(m_chatTree, 1, wxEXPAND);
   SetSizer(sizer);
@@ -293,12 +295,9 @@ wxTreeItemId ChatListWidget::AddChatToCategory(const ChatInfo &chat) {
   // Add the item
   wxTreeItemId item = m_chatTree->AppendItem(parent, title);
 
-  // Set bold if unread
+  // Set bold if unread (don't set custom colors - breaks selection contrast)
   if (chat.unreadCount > 0) {
     m_chatTree->SetItemBold(item, true);
-    // Use highlight color for unread
-    m_chatTree->SetItemTextColour(
-        item, wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT));
   }
 
   // Store mappings
@@ -316,16 +315,9 @@ void ChatListWidget::UpdateChatItem(const wxTreeItemId &item,
 
   wxString title = FormatChatTitle(chat);
   m_chatTree->SetItemText(item, title);
+  // Only use bold for unread (don't set custom colors - breaks selection
+  // contrast)
   m_chatTree->SetItemBold(item, chat.unreadCount > 0);
-
-  // Update text color based on unread status
-  if (chat.unreadCount > 0) {
-    m_chatTree->SetItemTextColour(
-        item, wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT));
-  } else {
-    m_chatTree->SetItemTextColour(
-        item, wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT));
-  }
 }
 
 wxString ChatListWidget::FormatChatTitle(const ChatInfo &chat) const {
@@ -423,3 +415,21 @@ void ChatListWidget::OnSearchText(wxCommandEvent &event) {
 }
 
 void ChatListWidget::OnSearchCancel(wxCommandEvent &event) { ClearSearch(); }
+
+void ChatListWidget::OnSelectionChanged(wxTreeEvent &event) {
+  // Restore previous selection's text color to normal
+  if (m_previousSelection.IsOk() && m_chatTree) {
+    m_chatTree->SetItemTextColour(
+        m_previousSelection,
+        wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT));
+  }
+
+  // Set new selection's text color to white for contrast
+  wxTreeItemId newSelection = event.GetItem();
+  if (newSelection.IsOk() && m_chatTree) {
+    m_chatTree->SetItemTextColour(newSelection, *wxWHITE);
+    m_previousSelection = newSelection;
+  }
+
+  event.Skip(); // Allow event to propagate to MainFrame
+}
