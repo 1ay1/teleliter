@@ -8,7 +8,7 @@
 #include "MediaTypes.h"
 #include <memory>
 #include <functional>
-#include <set>
+#include <map>
 
 // Forward declarations
 class FFmpegPlayer;
@@ -68,6 +68,9 @@ public:
 
     // Set callback for when popup is clicked
     void SetClickCallback(std::function<void(const MediaInfo&)> callback) { m_clickCallback = callback; }
+
+    // Clear failure tracking for a specific path (call when file is re-downloaded)
+    void ClearFailedPath(const wxString& path);
 
 protected:
     void OnPaint(wxPaintEvent& event);
@@ -157,8 +160,12 @@ private:
     // Parent window bottom bound (in screen coordinates)
     int m_parentBottom;
 
-    // Track files that failed to load (to avoid repeated attempts)
-    std::set<wxString> m_failedLoads;
+    // Track files that failed to load with timestamps (to avoid repeated attempts)
+    // Map from path to failure time (wxGetUTCTime)
+    std::map<wxString, int64_t> m_failedLoads;
+    
+    // Failure expiration time in seconds (try again after this long)
+    static constexpr int FAILURE_EXPIRATION_SECONDS = 30;
 
     // Size constraints for stickers/emojis (smaller)
     static constexpr int STICKER_MAX_WIDTH = 180;

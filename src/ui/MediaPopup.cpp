@@ -258,13 +258,15 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
 
   // Handle video/animation formats with FFmpeg
   // Check both file extension AND media type (Telegram often downloads without extensions)
+  // But don't try to play if file is still downloading (incomplete file will fail)
   bool hasVideoExtension = IsVideoFormat(info.localPath);
   bool isVideoByType = IsVideoMediaType(info.type);
   bool noExtension = HasNoExtension(info.localPath);
+  bool fileReady = hasLocalFile && !info.isDownloading;
   
   // For files without extension, use media type to decide
   // For Sticker type without extension, try FFmpeg first (could be animated WebM)
-  bool tryAsVideo = hasLocalFile && (
+  bool tryAsVideo = fileReady && (
     hasVideoExtension || 
     isVideoByType || 
     (info.type == MediaType::Sticker && noExtension)
@@ -273,6 +275,7 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   MPLOG("ShowMedia: hasVideoExtension=" << hasVideoExtension 
         << " isVideoByType=" << isVideoByType 
         << " noExtension=" << noExtension
+        << " fileReady=" << fileReady
         << " tryAsVideo=" << tryAsVideo);
   
   if (tryAsVideo) {
@@ -284,9 +287,10 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   }
 
   // Handle static images (only if has image extension or is Photo type)
+  // Also check file is not still downloading
   bool hasImageExtension = IsSupportedImageFormat(info.localPath);
   bool isImageByType = (info.type == MediaType::Photo);
-  bool isImageFile = hasLocalFile && (hasImageExtension || (isImageByType && noExtension));
+  bool isImageFile = fileReady && (hasImageExtension || (isImageByType && noExtension));
   
   if (isImageFile) {
     m_isLoading = true;
@@ -1386,23 +1390,60 @@ void MediaPopup::OnAsyncLoadTimer(wxTimerEvent &event) {
 }
 
 bool MediaPopup::HasFailedRecently(const wxString &path) const {
-  return m_failedLoads.find(path) != m_failedLoads.end();
+  auto it = m_failedLoads.find(path);
+  if (it == m_failedLoads.end()) {
+    return false;
+  }
+  
+  // Check if failure has expired
+  int64_t now = wxGetUTCTime();
+  int64_t failureTime = it->second;
+  if (now - failureTime > FAILURE_EXPIRATION_SECONDS) {
+    // Expired - will be cleaned up on next MarkLoadFailed
+    return false;
+  }
+  
+  return true;
 }
 
 void MediaPopup::MarkLoadFailed(const wxString &path) {
   if (!path.IsEmpty()) {
-    m_failedLoads.insert(path);
+    int64_t now = wxGetUTCTime();
+    m_failedLoads[path] = now;
     MPLOG("MarkLoadFailed: " << path.ToStdString()
           << " (total failures: " << m_failedLoads.size() << ")");
 
-    if (m_failedLoads.size() > 100) {
-      m_failedLoads.clear();
+    // Clean up expired entries and limit size
+    if (m_failedLoads.size() > 50) {
+      std::vector<wxString> toRemove;
+      for (const auto& [p, t] : m_failedLoads) {
+        if (now - t > FAILURE_EXPIRATION_SECONDS) {
+          toRemove.push_back(p);
+        }
+      }
+      for (const auto& p : toRemove) {
+        m_failedLoads.erase(p);
+      }
+      // If still too many, clear all
+      if (m_failedLoads.size() > 100) {
+        m_failedLoads.clear();
+      }
     }
   }
 }
 
 void MediaPopup::ClearFailedLoads() {
   m_failedLoads.clear();
+}
+
+void MediaPopup::ClearFailedPath(const wxString &path) {
+  if (!path.IsEmpty()) {
+    auto it = m_failedLoads.find(path);
+    if (it != m_failedLoads.end()) {
+      MPLOG("ClearFailedPath: " << path.ToStdString());
+      m_failedLoads.erase(it);
+    }
+  }
 }
 
 // Decode TDLib waveform data (5-bit values packed into bytes)

@@ -1768,6 +1768,9 @@ void ChatViewWidget::UpdateMediaPopup(int32_t fileId,
     return;
   }
 
+  // Clear any previous failure tracking for this path since download succeeded
+  m_mediaPopup->ClearFailedPath(localPath);
+
   if (!m_mediaPopup->IsShown()) {
     CVWLOG("UpdateMediaPopup: popup not shown, skipping update");
     return;

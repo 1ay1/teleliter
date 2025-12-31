@@ -1455,24 +1455,95 @@ void TelegramClient::BoostDownloadPriority(int32_t fileId)
 
     TDLOG("BoostDownloadPriority: boosting fileId=%d to max priority", fileId);
 
-    // Check if already downloading
+    bool needsRestart = false;
+    
+    // Check download state
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
         auto it = m_activeDownloads.find(fileId);
         if (it != m_activeDownloads.end()) {
             if (it->second.state == DownloadState::Completed) {
+                TDLOG("BoostDownloadPriority: fileId=%d already completed", fileId);
                 return;  // Already done
             }
+            
+            // Check if download is stuck (Pending for more than 10 seconds or no progress for 30s)
+            int64_t now = wxGetUTCTime();
+            int64_t elapsed = now - it->second.startTime;
+            int64_t lastProgress = now - it->second.lastProgressTime;
+            
+            if (it->second.state == DownloadState::Pending && elapsed > 10) {
+                TDLOG("BoostDownloadPriority: fileId=%d stuck in Pending for %lld seconds, restarting", fileId, elapsed);
+                needsRestart = true;
+                it->second.startTime = now;
+                it->second.lastProgressTime = now;
+            } else if (it->second.state == DownloadState::Downloading && lastProgress > 30) {
+                TDLOG("BoostDownloadPriority: fileId=%d no progress for %lld seconds, restarting", fileId, lastProgress);
+                needsRestart = true;
+                it->second.lastProgressTime = now;
+            }
+        } else {
+            // Not tracked at all - start fresh
+            TDLOG("BoostDownloadPriority: fileId=%d not tracked, starting download", fileId);
+            needsRestart = true;
         }
     }
 
     // Send priority boost request to TDLib (priority 32 is max)
+    // This also restarts stuck downloads
     auto request = td_api::make_object<td_api::downloadFile>();
     request->file_id_ = fileId;
     request->priority_ = 32;  // Maximum priority
     request->synchronous_ = false;
 
-    Send(std::move(request), nullptr);
+    Send(std::move(request), [this, fileId, needsRestart](td_api::object_ptr<td_api::Object> response) {
+        if (!response) {
+            TDLOG("BoostDownloadPriority: no response for fileId=%d", fileId);
+            return;
+        }
+        
+        if (response->get_id() == td_api::error::ID) {
+            auto& error = static_cast<td_api::error&>(*response);
+            TDLOG("BoostDownloadPriority: error for fileId=%d: %s", fileId, error.message_.c_str());
+        } else if (response->get_id() == td_api::file::ID) {
+            auto& file = static_cast<td_api::file&>(*response);
+            TDLOG("BoostDownloadPriority: TDLib accepted boost for fileId=%d, is_downloading=%d, is_completed=%d",
+                  fileId, 
+                  file.local_ ? file.local_->is_downloading_active_ : false,
+                  file.local_ ? file.local_->is_downloading_completed_ : false);
+            
+            // If file is already complete, handle it now
+            if (file.local_ && file.local_->is_downloading_completed_ && !file.local_->path_.empty()) {
+                wxString localPath = wxString::FromUTF8(file.local_->path_);
+                {
+                    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+                    auto it = m_activeDownloads.find(fileId);
+                    if (it != m_activeDownloads.end()) {
+                        it->second.state = DownloadState::Completed;
+                        it->second.localPath = localPath;
+                    }
+                }
+                // Add to completed queue
+                {
+                    std::lock_guard<std::mutex> lock(m_completedDownloadsMutex);
+                    FileDownloadResult result;
+                    result.fileId = fileId;
+                    result.localPath = localPath;
+                    result.success = true;
+                    m_completedDownloads.push_back(result);
+                }
+                SetDirty(DirtyFlag::Downloads);
+            } else if (file.local_ && file.local_->is_downloading_active_) {
+                // Update state to Downloading
+                std::lock_guard<std::mutex> lock(m_downloadsMutex);
+                auto it = m_activeDownloads.find(fileId);
+                if (it != m_activeDownloads.end()) {
+                    it->second.state = DownloadState::Downloading;
+                    it->second.lastProgressTime = wxGetUTCTime();
+                }
+            }
+        }
+    });
 }
 
 bool TelegramClient::ShouldAutoDownloadMedia(MediaType type, int64_t fileSize) const
