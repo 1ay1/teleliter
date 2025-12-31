@@ -257,7 +257,8 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     m_isLoading = true;
     m_loadingFrame = 0;
     m_loadingTimer.Start(150);
-    ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
+    // Use LOADING_MIN dimensions to fit spinner + text while image loads
+    ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
     LoadImageAsync(info.localPath);
     Refresh();
     return;
@@ -274,8 +275,9 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     m_isLoading = true;
     m_loadingFrame = 0;
     m_loadingTimer.Start(150);
-    int width = (info.type == MediaType::Sticker) ? 180 : PHOTO_MAX_WIDTH;
-    int height = (info.type == MediaType::Sticker) ? 120 : PHOTO_MAX_HEIGHT;
+    // Use LOADING_MIN dimensions to ensure spinner + text + label all fit
+    int width = std::max((info.type == MediaType::Sticker) ? 180 : PHOTO_MAX_WIDTH, LOADING_MIN_WIDTH);
+    int height = std::max((info.type == MediaType::Sticker) ? LOADING_MIN_HEIGHT : PHOTO_MAX_HEIGHT, LOADING_MIN_HEIGHT);
     ApplySizeAndPosition(width, height);
     Refresh();
     return;
@@ -283,8 +285,8 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
 
   // Show placeholder
   m_hasImage = false;
-  int width = (info.type == MediaType::Sticker) ? 200 : PHOTO_MAX_WIDTH;
-  int height = (info.type == MediaType::Sticker) ? 150 : PHOTO_MAX_HEIGHT;
+  int width = std::max((info.type == MediaType::Sticker) ? 200 : PHOTO_MAX_WIDTH, LOADING_MIN_WIDTH);
+  int height = std::max((info.type == MediaType::Sticker) ? 150 : PHOTO_MAX_HEIGHT, LOADING_MIN_HEIGHT);
   ApplySizeAndPosition(width, height);
   Refresh();
 }
@@ -565,7 +567,20 @@ void MediaPopup::FallbackToThumbnail() {
   MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
         << " localPath=" << m_mediaInfo.localPath.ToStdString());
 
-  m_loadingTimer.Stop();
+  // Check if main file still needs downloading - if so, keep timer running for spinner overlay
+  bool mainFileNeedsDownload = m_mediaInfo.fileId != 0 &&
+      (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+  
+  if (mainFileNeedsDownload) {
+    // Keep timer running for the download spinner overlay on thumbnail
+    m_isDownloadingMedia = true;
+    if (!m_loadingTimer.IsRunning()) {
+      m_loadingTimer.Start(150);
+    }
+  } else {
+    m_loadingTimer.Stop();
+    m_isDownloadingMedia = false;
+  }
 
   if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
     // Try to play animated thumbnail (e.g. WebP) if it hasn't failed recently
@@ -705,6 +720,7 @@ void MediaPopup::OnLoadingTimer(wxTimerEvent &event) {
 
   if (IsShown()) {
     Refresh();
+    Update();  // Force immediate repaint for spinner animation
   }
 }
 
@@ -908,8 +924,14 @@ void MediaPopup::UpdateSize() {
     height = PHOTO_MAX_HEIGHT;
   }
 
-  width = std::max(width, MIN_WIDTH);
-  height = std::max(height, MIN_HEIGHT);
+  // Use larger minimums when in loading/downloading state to fit spinner + text + label
+  if (m_isLoading || m_isDownloadingMedia) {
+    width = std::max(width, LOADING_MIN_WIDTH);
+    height = std::max(height, LOADING_MIN_HEIGHT);
+  } else {
+    width = std::max(width, MIN_WIDTH);
+    height = std::max(height, MIN_HEIGHT);
+  }
 
   ApplySizeAndPosition(width, height);
 }

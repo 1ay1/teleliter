@@ -168,6 +168,8 @@ private:
 
     static constexpr int MIN_WIDTH = 100;
     static constexpr int MIN_HEIGHT = 60;
+    static constexpr int LOADING_MIN_WIDTH = 160;
+    static constexpr int LOADING_MIN_HEIGHT = 140;
     static constexpr int PADDING = 8;
     static constexpr int BORDER_WIDTH = 2;
 
