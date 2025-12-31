@@ -2148,14 +2148,14 @@ void MainFrame::ReactiveRefresh() {
           }
           typingText += name + " is " + action;
         }
-        // Update topic bar or show in status
+        // Update status bar with animated typing indicator
         if (m_statusBar && !typingText.IsEmpty()) {
-          m_statusBar->SetOverrideStatus(typingText + "...");
+          m_statusBar->SetTypingIndicator(typingText);
         }
       } else {
         // Clear typing indicator
-        if (m_statusBar) {
-          m_statusBar->ClearOverrideStatus();
+        if (m_statusBar && m_statusBar->HasTypingIndicator()) {
+          m_statusBar->ClearTypingIndicator();
         }
       }
     }

@@ -41,9 +41,15 @@ public:
     void PlayVideo(const wxString& path, bool loop = false, bool muted = true);
     void StopVideo();
     bool IsPlayingVideo() const { return m_isPlayingFFmpeg; }
+    
+    // Called on main thread after async FFmpeg loading completes
+    void FinishFFmpegPlayback(const wxString& path, bool loop, bool muted);
 
     // Lottie/TGS animation playback
     void PlayLottie(const wxString& path, bool loop = true);
+    
+    // Called on main thread after async Lottie loading completes
+    void FinishLottiePlayback(const wxString& path, bool loop);
     void StopLottie();
     bool IsPlayingLottie() const { return m_isPlayingLottie; }
 
@@ -168,8 +174,8 @@ private:
 
     static constexpr int MIN_WIDTH = 100;
     static constexpr int MIN_HEIGHT = 60;
-    static constexpr int LOADING_MIN_WIDTH = 160;
-    static constexpr int LOADING_MIN_HEIGHT = 140;
+    static constexpr int LOADING_MIN_WIDTH = 140;
+    static constexpr int LOADING_MIN_HEIGHT = 120;
     static constexpr int PADDING = 8;
     static constexpr int BORDER_WIDTH = 2;
 

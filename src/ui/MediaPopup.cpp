@@ -12,6 +12,8 @@ wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 
 #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
 
+#include <thread>
+
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString &path) {
   wxFileName fn(path);
@@ -40,6 +42,20 @@ static bool IsVideoFormat(const wxString &path) {
   }
 
   return false;
+}
+
+// Check if media type is a video-like format that should be played with FFmpeg
+// Note: Does NOT include Sticker - stickers need special handling (can be static WebP or animated)
+static bool IsVideoMediaType(MediaType type) {
+  return type == MediaType::Video || 
+         type == MediaType::VideoNote || 
+         type == MediaType::GIF;
+}
+
+// Check if file has no extension (Telegram temp files)
+static bool HasNoExtension(const wxString &path) {
+  wxFileName fn(path);
+  return fn.GetExt().IsEmpty();
 }
 
 // Helper to check if file is a Lottie/TGS animation
@@ -241,10 +257,25 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   }
 
   // Handle video/animation formats with FFmpeg
-  bool isVideoFile = hasLocalFile && IsVideoFormat(info.localPath);
-  bool isImageFile = hasLocalFile && IsSupportedImageFormat(info.localPath);
+  // Check both file extension AND media type (Telegram often downloads without extensions)
+  bool hasVideoExtension = IsVideoFormat(info.localPath);
+  bool isVideoByType = IsVideoMediaType(info.type);
+  bool noExtension = HasNoExtension(info.localPath);
   
-  if (isVideoFile) {
+  // For files without extension, use media type to decide
+  // For Sticker type without extension, try FFmpeg first (could be animated WebM)
+  bool tryAsVideo = hasLocalFile && (
+    hasVideoExtension || 
+    isVideoByType || 
+    (info.type == MediaType::Sticker && noExtension)
+  );
+  
+  MPLOG("ShowMedia: hasVideoExtension=" << hasVideoExtension 
+        << " isVideoByType=" << isVideoByType 
+        << " noExtension=" << noExtension
+        << " tryAsVideo=" << tryAsVideo);
+  
+  if (tryAsVideo) {
     bool shouldLoop = (info.type == MediaType::GIF || 
                        info.type == MediaType::Sticker ||
                        info.type == MediaType::VideoNote);
@@ -252,7 +283,11 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     return;
   }
 
-  // Handle static images
+  // Handle static images (only if has image extension or is Photo type)
+  bool hasImageExtension = IsSupportedImageFormat(info.localPath);
+  bool isImageByType = (info.type == MediaType::Photo);
+  bool isImageFile = hasLocalFile && (hasImageExtension || (isImageByType && noExtension));
+  
   if (isImageFile) {
     m_isLoading = true;
     m_loadingFrame = 0;
@@ -275,19 +310,15 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     m_isLoading = true;
     m_loadingFrame = 0;
     m_loadingTimer.Start(150);
-    // Use LOADING_MIN dimensions to ensure spinner + text + label all fit
-    int width = std::max((info.type == MediaType::Sticker) ? 180 : PHOTO_MAX_WIDTH, LOADING_MIN_WIDTH);
-    int height = std::max((info.type == MediaType::Sticker) ? LOADING_MIN_HEIGHT : PHOTO_MAX_HEIGHT, LOADING_MIN_HEIGHT);
-    ApplySizeAndPosition(width, height);
+    // Use compact loading dimensions - just enough for spinner + text
+    ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
     Refresh();
     return;
   }
 
   // Show placeholder
   m_hasImage = false;
-  int width = std::max((info.type == MediaType::Sticker) ? 200 : PHOTO_MAX_WIDTH, LOADING_MIN_WIDTH);
-  int height = std::max((info.type == MediaType::Sticker) ? 150 : PHOTO_MAX_HEIGHT, LOADING_MIN_HEIGHT);
-  ApplySizeAndPosition(width, height);
+  ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
   Refresh();
 }
 
@@ -306,43 +337,104 @@ void MediaPopup::PlayVideo(const wxString &path, bool loop, bool muted) {
     return;
   }
 
-  StopAllPlayback();
+  // Only stop if we were playing something different
+  if (m_isPlayingFFmpeg || m_isPlayingLottie || m_isPlayingVoice) {
+    StopAllPlayback();
+  } else {
+    // Just stop timers, don't reset state
+    m_ffmpegAnimTimer.Stop();
+    m_lottieAnimTimer.Stop();
+    m_loadingTimer.Stop();
+  }
 
   m_videoPath = path;
   m_loopVideo = loop;
   m_videoMuted = muted;
   m_videoLoadPending = true;  // Mark that we're loading a video
 
-  // Show loading state while initializing
+  // Show compact loading state while initializing
   m_isLoading = true;
   m_loadingFrame = 0;
   m_loadingTimer.Start(150);
-  ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
+  
+  // Use compact loading size
+  ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
   Refresh();
+  Update();
 
-  // Use CallAfter to prevent UI freeze during FFmpeg initialization
-  CallAfter([this, path, loop, muted]() {
-    PlayMediaWithFFmpeg(path, loop, muted);
-  });
+  // Load asynchronously in a separate thread to prevent UI blocking
+  // Capture media type before thread since m_mediaInfo could change
+  MediaType mediaType = m_mediaInfo.type;
+  
+  std::thread([this, path, loop, muted, mediaType]() {
+    // Create a new player in the background thread
+    auto ffmpegPlayer = std::make_unique<FFmpegPlayer>();
+
+    // Determine max size based on media type
+    int maxWidth, maxHeight;
+    if (mediaType == MediaType::Sticker) {
+      maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
+      maxHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
+    } else {
+      maxWidth = PHOTO_MAX_WIDTH - PADDING * 2 - BORDER_WIDTH * 2;
+      maxHeight = PHOTO_MAX_HEIGHT - PADDING * 2 - BORDER_WIDTH * 2 - 24;
+    }
+
+    ffmpegPlayer->SetRenderSize(maxWidth, maxHeight);
+    ffmpegPlayer->SetLoop(loop);
+    ffmpegPlayer->SetMuted(muted);
+
+    bool loadSuccess = ffmpegPlayer->LoadFile(path);
+
+    // Store result and notify main thread
+    // Use raw pointer transfer since CallAfter copies the lambda
+    FFmpegPlayer* playerPtr = loadSuccess ? ffmpegPlayer.release() : nullptr;
+
+    // Switch back to main thread for UI updates
+    CallAfter([this, path, loop, muted, loadSuccess, playerPtr]() {
+      // Take ownership of the player (may be null on failure)
+      std::unique_ptr<FFmpegPlayer> player(playerPtr);
+      
+      if (!m_videoLoadPending || m_videoPath != path) {
+        // User moved on to different media, discard this result
+        return;
+      }
+      
+      if (!loadSuccess || !player) {
+        MPLOG("PlayVideo async: failed to load: " << path.ToStdString());
+        MarkLoadFailed(path);
+        m_videoLoadPending = false;
+        FallbackToThumbnail();
+        return;
+      }
+
+      // Successfully loaded - take ownership and finish setup
+      m_ffmpegPlayer = std::move(player);
+      FinishFFmpegPlayback(path, loop, muted);
+    });
+  }).detach();
 }
 
-void MediaPopup::PlayMediaWithFFmpeg(const wxString &path, bool loop, bool muted) {
-  MPLOG("PlayMediaWithFFmpeg: " << path.ToStdString());
+void MediaPopup::FinishFFmpegPlayback(const wxString &path, bool loop, bool muted) {
+  MPLOG("FinishFFmpegPlayback: " << path.ToStdString());
 
   m_isLoading = false;
   m_loadingTimer.Stop();
-  m_videoLoadPending = false;  // No longer pending, we're actually loading now
+  m_videoLoadPending = false;
 
-  if (HasFailedRecently(path)) {
+  if (!m_ffmpegPlayer || !m_ffmpegPlayer->IsLoaded()) {
+    MPLOG("FinishFFmpegPlayback: player not ready");
     FallbackToThumbnail();
     return;
   }
 
-  if (!m_ffmpegPlayer) {
-    m_ffmpegPlayer = std::make_unique<FFmpegPlayer>();
-  }
+  m_ffmpegPlayer->SetFrameCallback(
+      [this](const wxBitmap &frame) { OnFFmpegFrame(frame); });
 
-  // Determine max size based on media type
+  // Get actual dimensions and scale
+  int vidWidth = m_ffmpegPlayer->GetWidth();
+  int vidHeight = m_ffmpegPlayer->GetHeight();
+
   int maxWidth, maxHeight;
   if (m_mediaInfo.type == MediaType::Sticker) {
     maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
@@ -352,25 +444,7 @@ void MediaPopup::PlayMediaWithFFmpeg(const wxString &path, bool loop, bool muted
     maxHeight = PHOTO_MAX_HEIGHT - PADDING * 2 - BORDER_WIDTH * 2 - 24;
   }
 
-  m_ffmpegPlayer->SetRenderSize(maxWidth, maxHeight);
-  m_ffmpegPlayer->SetLoop(loop);
-  m_ffmpegPlayer->SetMuted(muted);
-
-  m_ffmpegPlayer->SetFrameCallback(
-      [this](const wxBitmap &frame) { OnFFmpegFrame(frame); });
-
-  if (!m_ffmpegPlayer->LoadFile(path)) {
-    MPLOG("PlayMediaWithFFmpeg: failed to load: " << path.ToStdString());
-    MarkLoadFailed(path);
-    m_ffmpegPlayer.reset();
-    FallbackToThumbnail();
-    return;
-  }
-
-  // Get actual dimensions and scale
-  int vidWidth = m_ffmpegPlayer->GetWidth();
-  int vidHeight = m_ffmpegPlayer->GetHeight();
-
+  int popupWidth, popupHeight;
   if (vidWidth > 0 && vidHeight > 0) {
     double scaleX = (double)maxWidth / vidWidth;
     double scaleY = (double)maxHeight / vidHeight;
@@ -381,13 +455,22 @@ void MediaPopup::PlayMediaWithFFmpeg(const wxString &path, bool loop, bool muted
 
     m_ffmpegPlayer->SetRenderSize(scaledWidth, scaledHeight);
 
-    int popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
-    int popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
-    ApplySizeAndPosition(popupWidth, popupHeight);
+    popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
+    popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
   } else {
-    int defaultWidth = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_WIDTH : PHOTO_MAX_WIDTH;
-    int defaultHeight = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_HEIGHT : PHOTO_MAX_HEIGHT;
-    ApplySizeAndPosition(defaultWidth, defaultHeight);
+    popupWidth = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_WIDTH : PHOTO_MAX_WIDTH;
+    popupHeight = (m_mediaInfo.type == MediaType::Sticker) ? STICKER_MAX_HEIGHT : PHOTO_MAX_HEIGHT;
+  }
+
+  // Set size without Hide/Show dance
+  wxPoint currentPos = GetPosition();
+  if (currentPos.x < 0 || currentPos.y < 0) {
+    currentPos = m_originalPosition;
+  }
+  
+  SetSize(currentPos.x, currentPos.y, popupWidth, popupHeight);
+  if (!IsShown()) {
+    Show();
   }
 
   m_ffmpegPlayer->Play();
@@ -398,8 +481,13 @@ void MediaPopup::PlayMediaWithFFmpeg(const wxString &path, bool loop, bool muted
   m_ffmpegAnimTimer.Start(interval);
 
   Refresh();
-  MPLOG("PlayMediaWithFFmpeg: playback started, interval=" << interval << "ms");
+  Update();
+  
+  MPLOG("FinishFFmpegPlayback: playback started, interval=" << interval << "ms");
 }
+
+// PlayMediaWithFFmpeg is now replaced by async loading in PlayVideo
+// and FinishFFmpegPlayback for the UI thread completion
 
 void MediaPopup::StopVideo() {
   MPLOG("StopVideo called");
@@ -459,35 +547,72 @@ void MediaPopup::PlayLottie(const wxString &path, bool loop) {
   m_isLoading = true;
   m_loadingFrame = 0;
   m_loadingTimer.Start(150);
-  ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
+  ApplySizeAndPosition(LOADING_MIN_WIDTH, LOADING_MIN_HEIGHT);
   Refresh();
+  Update();
 
-  if (!m_lottiePlayer) {
-    m_lottiePlayer = std::make_unique<LottiePlayer>();
-  }
+  // Load asynchronously in a separate thread to prevent UI blocking
+  std::thread([this, path, loop]() {
+    // Do the heavy Lottie initialization in background thread
+    auto lottiePlayer = std::make_unique<LottiePlayer>();
 
-  // Determine max size for stickers
-  int maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
-  int maxHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
+    // Determine max size for stickers
+    int maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
+    int maxHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
 
-  m_lottiePlayer->SetRenderSize(maxWidth, maxHeight);
-  m_lottiePlayer->SetLoop(loop);
+    lottiePlayer->SetRenderSize(maxWidth, maxHeight);
+    lottiePlayer->SetLoop(loop);
 
-  m_lottiePlayer->SetFrameCallback(
-      [this](const wxBitmap &frame) { OnLottieFrame(frame); });
+    bool loadSuccess = lottiePlayer->LoadFile(path);
 
-  if (!m_lottiePlayer->LoadFile(path)) {
-    MPLOG("PlayLottie: failed to load: " << path.ToStdString());
-    MarkLoadFailed(path);
-    m_lottiePlayer.reset();
-    m_isLoading = false;
-    m_loadingTimer.Stop();
+    // Store result and notify main thread
+    // Use raw pointer transfer since CallAfter copies the lambda
+    LottiePlayer* playerPtr = loadSuccess ? lottiePlayer.release() : nullptr;
+
+    // Switch back to main thread for UI updates
+    CallAfter([this, path, loop, loadSuccess, playerPtr]() {
+      // Take ownership of the player (may be null on failure)
+      std::unique_ptr<LottiePlayer> player(playerPtr);
+      
+      if (m_lottiePath != path) {
+        // User moved on to different media, discard this result
+        return;
+      }
+
+      if (!loadSuccess || !player) {
+        MPLOG("PlayLottie async: failed to load: " << path.ToStdString());
+        MarkLoadFailed(path);
+        m_isLoading = false;
+        m_loadingTimer.Stop();
+        FallbackToThumbnail();
+        return;
+      }
+
+      // Successfully loaded - take ownership of the player
+      m_lottiePlayer = std::move(player);
+      FinishLottiePlayback(path, loop);
+    });
+  }).detach();
+}
+
+void MediaPopup::FinishLottiePlayback(const wxString &path, bool loop) {
+  MPLOG("FinishLottiePlayback: " << path.ToStdString());
+
+  m_isLoading = false;
+  m_loadingTimer.Stop();
+
+  if (!m_lottiePlayer || !m_lottiePlayer->IsLoaded()) {
+    MPLOG("FinishLottiePlayback: player not ready");
     FallbackToThumbnail();
     return;
   }
 
-  m_isLoading = false;
-  m_loadingTimer.Stop();
+  m_lottiePlayer->SetFrameCallback(
+      [this](const wxBitmap &frame) { OnLottieFrame(frame); });
+
+  // Determine max size for stickers
+  int maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
+  int maxHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
 
   // Get actual dimensions and calculate popup size
   size_t lotWidth = m_lottiePlayer->GetWidth();
@@ -594,19 +719,29 @@ void MediaPopup::FallbackToThumbnail() {
     LoadImageAsync(m_mediaInfo.thumbnailPath);
     Refresh();
   } else if (!m_mediaInfo.localPath.IsEmpty() &&
-             wxFileExists(m_mediaInfo.localPath) &&
-             IsSupportedImageFormat(m_mediaInfo.localPath)) {
-    m_hasError = false;
-    m_errorMessage.Clear();
-    LoadImageAsync(m_mediaInfo.localPath);
-    Refresh();
-  } else if (!m_mediaInfo.emoji.IsEmpty()) {
+             wxFileExists(m_mediaInfo.localPath)) {
+    // Try loading as image - either has image extension OR no extension (Telegram temp files)
+    // FFmpeg already failed if we're here, so try image loading as fallback
+    bool hasImageExt = IsSupportedImageFormat(m_mediaInfo.localPath);
+    bool noExt = HasNoExtension(m_mediaInfo.localPath);
+    
+    if (hasImageExt || noExt) {
+      MPLOG("FallbackToThumbnail: trying localPath as image (hasImageExt=" << hasImageExt << " noExt=" << noExt << ")");
+      m_hasError = false;
+      m_errorMessage.Clear();
+      LoadImageAsync(m_mediaInfo.localPath);
+      Refresh();
+      return;
+    }
+  }
+  
+  if (!m_mediaInfo.emoji.IsEmpty()) {
     m_hasError = false;
     m_errorMessage.Clear();
     m_hasImage = false;
     ApplySizeAndPosition(200, 150);
     Refresh();
-  } else {
+  } else if (m_mediaInfo.emoji.IsEmpty()) {
     m_hasError = false;
     m_errorMessage.Clear();
     m_hasImage = false;
@@ -890,12 +1025,24 @@ void MediaPopup::ApplySizeAndPosition(int width, int height) {
     }
   }
 
+  // Avoid Hide/Show dance during video playback - causes Gdk warnings and interrupts playback
+  bool isPlayingMedia = m_isPlayingFFmpeg || m_isPlayingLottie || m_isPlayingVoice;
+  
 #ifdef __WXGTK__
-  Hide();
-  Move(-5000, -5000);
-  wxYield();
-  SetSize(targetPos.x, targetPos.y, width, height);
-  Show();
+  if (!isPlayingMedia && IsShown()) {
+    // Only do Hide/Show dance when not playing - for initial positioning
+    Hide();
+    Move(-5000, -5000);
+    wxYield();
+    SetSize(targetPos.x, targetPos.y, width, height);
+    Show();
+  } else {
+    // During playback or when hidden, just set size directly
+    SetSize(targetPos.x, targetPos.y, width, height);
+    if (!IsShown()) {
+      Show();
+    }
+  }
 #else
   SetSize(targetPos.x, targetPos.y, width, height);
   if (!IsShown()) {

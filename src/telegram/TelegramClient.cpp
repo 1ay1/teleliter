@@ -2197,16 +2197,42 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file>& file)
         }
         SetDirty(DirtyFlag::Downloads);
     } else if (isDownloading) {
-        // Add to progress updates with actual byte counts for status bar
+        // Throttle progress updates to reduce UI refresh frequency
+        // Only update if progress changed significantly (every 2% or 100KB)
+        bool shouldUpdate = false;
         {
-            std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
-            FileDownloadProgress progress;
-            progress.fileId = fileId;
-            progress.downloadedSize = downloadedSize;
-            progress.totalSize = totalSize;
-            m_downloadProgressUpdates.push_back(progress);
+            std::lock_guard<std::mutex> lock(m_downloadsMutex);
+            auto it = m_activeDownloads.find(fileId);
+            if (it != m_activeDownloads.end()) {
+                int64_t lastReported = it->second.downloadedSize;
+                int64_t delta = downloadedSize - lastReported;
+                
+                // Update if: first update, or 2%+ change, or 100KB+ change
+                if (lastReported == 0 || delta < 0) {
+                    shouldUpdate = true;
+                } else if (totalSize > 0) {
+                    double percentChange = (delta * 100.0) / totalSize;
+                    shouldUpdate = (percentChange >= 2.0) || (delta >= 102400);
+                } else {
+                    shouldUpdate = (delta >= 102400);  // 100KB for unknown size
+                }
+            } else {
+                shouldUpdate = true;  // Not tracking, always update
+            }
         }
-        SetDirty(DirtyFlag::Downloads);
+        
+        if (shouldUpdate) {
+            // Add to progress updates with actual byte counts for status bar
+            {
+                std::lock_guard<std::mutex> lock(m_downloadProgressMutex);
+                FileDownloadProgress progress;
+                progress.fileId = fileId;
+                progress.downloadedSize = downloadedSize;
+                progress.totalSize = totalSize;
+                m_downloadProgressUpdates.push_back(progress);
+            }
+            SetDirty(DirtyFlag::Downloads);
+        }
     }
 }
 

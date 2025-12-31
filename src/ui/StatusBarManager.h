@@ -9,7 +9,7 @@
 // Forward declarations
 class TelegramClient;
 
-class StatusBarManager {
+class StatusBarManager : public wxEvtHandler {
 public:
   StatusBarManager(wxFrame *parent);
   ~StatusBarManager();
@@ -55,12 +55,19 @@ public:
   // Override status functionality (for tooltips etc.)
   void SetOverrideStatus(const wxString &text) {
     m_overrideStatusText = text;
+    m_isTypingIndicator = false;
     UpdateStatusBar();
   }
   void ClearOverrideStatus() {
     m_overrideStatusText.clear();
+    m_isTypingIndicator = false;
     UpdateStatusBar();
   }
+
+  // Typing indicator with animation
+  void SetTypingIndicator(const wxString &text);
+  void ClearTypingIndicator();
+  bool HasTypingIndicator() const { return m_isTypingIndicator; }
 
   // Font control
   void SetFont(const wxFont &font);
@@ -71,9 +78,15 @@ private:
 
   // Override status text (takes precedence over chat info)
   wxString m_overrideStatusText;
+  bool m_isTypingIndicator;
+  int m_typingAnimFrame;
+  wxTimer m_typingAnimTimer;
 
   // Status bar widgets (connection label for colored status)
   wxStaticText *m_connectionLabel;
+  
+  // Typing indicator label (in field 0, colored for visibility)
+  wxStaticText *m_typingLabel;
 
   // Legacy pointers (unused, kept for compatibility)
   wxGauge *m_progressGauge;
@@ -124,6 +137,7 @@ private:
   // Layout helpers
   void RepositionWidgets();
   void OnStatusBarResize(wxSizeEvent &event);
+  void OnTypingAnimTimer(wxTimerEvent &event);
 };
 
 #endif // STATUSBARMANAGER_H
