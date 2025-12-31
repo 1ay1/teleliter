@@ -9,9 +9,8 @@
 const wxString ChatListWidget::ONLINE_INDICATOR =
     wxString::FromUTF8("\xF0\x9F\x9F\xA2 ");
 
-ChatListWidget::ChatListWidget(wxWindow *parent, MainFrame *mainFrame)
-    : wxPanel(parent, wxID_ANY), m_mainFrame(mainFrame),
-      m_telegramClient(nullptr), m_searchBox(nullptr), m_chatTree(nullptr),
+ChatListWidget::ChatListWidget(wxWindow *parent)
+    : wxPanel(parent, wxID_ANY), m_telegramClient(nullptr), m_searchBox(nullptr), m_chatTree(nullptr),
       m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX)),
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT)),
       m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)) {

@@ -15,7 +15,7 @@ struct UserInfo;
 
 class ChatListWidget : public wxPanel {
 public:
-  ChatListWidget(wxWindow *parent, MainFrame *mainFrame);
+  ChatListWidget(wxWindow *parent);
   virtual ~ChatListWidget();
 
   // Chat management
@@ -68,7 +68,6 @@ private:
   void OnSearchText(wxCommandEvent &event);
   void OnSearchCancel(wxCommandEvent &event);
 
-  MainFrame *m_mainFrame;
   TelegramClient *m_telegramClient;
 
   wxSearchCtrl *m_searchBox;

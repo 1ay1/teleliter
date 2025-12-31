@@ -403,7 +403,7 @@ void MainFrame::CreateMainLayout() {
   // Use native background
 
   // Create chat list widget - uses native styling
-  m_chatListWidget = new ChatListWidget(m_leftPanel, this);
+  m_chatListWidget = new ChatListWidget(m_leftPanel);
 
   // Bind tree events directly to the tree control (since it's in a child
   // widget)
