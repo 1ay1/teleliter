@@ -263,6 +263,34 @@ else()
     message(WARNING "SDL2 not found - audio playback will be disabled. Install with: brew install sdl2 (macOS) or apt install libsdl2-dev (Linux)")
 endif()
 
+# Find rlottie for TGS (Lottie) sticker animation support
+set(RLOTTIE_FOUND FALSE)
+
+if(PkgConfig_FOUND)
+    pkg_check_modules(RLOTTIE rlottie)
+endif()
+
+if(NOT RLOTTIE_FOUND)
+    # Try to find manually
+    find_path(RLOTTIE_INCLUDE_DIRS rlottie.h
+        PATHS /usr/include /usr/local/include /opt/homebrew/include
+    )
+    find_library(RLOTTIE_LIBRARY rlottie
+        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib /usr/lib/x86_64-linux-gnu
+    )
+    if(RLOTTIE_INCLUDE_DIRS AND RLOTTIE_LIBRARY)
+        set(RLOTTIE_FOUND TRUE)
+        set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
+    endif()
+endif()
+
+if(RLOTTIE_FOUND)
+    message(STATUS "Found rlottie: ${RLOTTIE_LIBRARIES}")
+    add_definitions(-DHAVE_RLOTTIE)
+else()
+    message(WARNING "rlottie not found - TGS sticker animations will not be displayed. Install with: apt install librlottie-dev (Linux) or brew install rlottie (macOS)")
+endif()
+
 # Source files
 set(SOURCES
     src/ui/App.cpp
@@ -278,6 +306,7 @@ set(SOURCES
     src/ui/ChatViewWidget.cpp
     src/ui/InputBoxWidget.cpp
     src/ui/FFmpegPlayer.cpp
+    src/ui/LottiePlayer.cpp
     src/telegram/TransferManager.cpp
     src/telegram/TelegramClient.cpp
     src/main.cpp
@@ -293,6 +322,7 @@ target_include_directories(teleliter PRIVATE
     ${WEBP_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
+    ${RLOTTIE_INCLUDE_DIRS}
 )
 
 # Link libraries - order matters for static linking
@@ -305,6 +335,7 @@ target_link_libraries(teleliter
     ${WEBP_LIBRARIES}
     ${FFMPEG_LIBRARIES}
     ${SDL2_LIBRARIES}
+    ${RLOTTIE_LIBRARIES}
     m
 )
 

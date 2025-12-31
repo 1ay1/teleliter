@@ -1,5 +1,6 @@
 #include "MediaPopup.h"
 #include "FFmpegPlayer.h"
+#include "LottiePlayer.h"
 #include "FileUtils.h"
 #include <iostream>
 #include <thread>
@@ -34,12 +35,18 @@ static bool IsVideoFormat(const wxString &path) {
   wxString ext = fn.GetExt().Lower();
 
   if (ext == "mp4" || ext == "webm" || ext == "avi" || ext == "mov" ||
-      ext == "mkv" || ext == "gif" || ext == "m4v" || ext == "ogv" ||
-      ext == "tgs") {
+      ext == "mkv" || ext == "gif" || ext == "m4v" || ext == "ogv") {
     return true;
   }
 
   return false;
+}
+
+// Helper to check if file is a Lottie/TGS animation
+static bool IsLottieFormat(const wxString &path) {
+  wxFileName fn(path);
+  wxString ext = fn.GetExt().Lower();
+  return (ext == "tgs" || ext == "json");
 }
 
 wxBEGIN_EVENT_TABLE(MediaPopup, wxPopupWindow)
@@ -59,6 +66,8 @@ MediaPopup::MediaPopup(wxWindow *parent)
       m_ffmpegAnimTimer(this, FFMPEG_ANIM_TIMER_ID),
       m_loopVideo(false),
       m_videoMuted(true),
+      m_isPlayingLottie(false),
+      m_lottieAnimTimer(this, LOTTIE_ANIM_TIMER_ID),
       m_isPlayingVoice(false),
       m_voiceProgress(0.0),
       m_voiceDuration(0.0),
@@ -74,6 +83,7 @@ MediaPopup::MediaPopup(wxWindow *parent)
 
   Bind(wxEVT_TIMER, &MediaPopup::OnLoadingTimer, this, LOADING_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnFFmpegAnimTimer, this, FFMPEG_ANIM_TIMER_ID);
+  Bind(wxEVT_TIMER, &MediaPopup::OnLottieAnimTimer, this, LOTTIE_ANIM_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnAsyncLoadTimer, this, ASYNC_LOAD_TIMER_ID);
   Bind(wxEVT_TIMER, &MediaPopup::OnVoiceProgressTimer, this, VOICE_PROGRESS_TIMER_ID);
   Bind(wxEVT_IMAGE_LOADED, &MediaPopup::OnImageLoaded, this);
@@ -85,17 +95,21 @@ MediaPopup::~MediaPopup() {
   m_loadingTimer.Stop();
   m_asyncLoadTimer.Stop();
   m_ffmpegAnimTimer.Stop();
+  m_lottieAnimTimer.Stop();
   m_voiceProgressTimer.Stop();
   m_ffmpegPlayer.reset();
+  m_lottiePlayer.reset();
   ClearFailedLoads();
 }
 
 void MediaPopup::StopAllPlayback() {
   MPLOG("StopAllPlayback called, m_isPlayingFFmpeg=" << m_isPlayingFFmpeg 
+        << " m_isPlayingLottie=" << m_isPlayingLottie
         << " m_isPlayingVoice=" << m_isPlayingVoice
         << " m_videoLoadPending=" << m_videoLoadPending);
   
   m_ffmpegAnimTimer.Stop();
+  m_lottieAnimTimer.Stop();
   m_loadingTimer.Stop();
   m_asyncLoadTimer.Stop();
   m_voiceProgressTimer.Stop();
@@ -103,11 +117,16 @@ void MediaPopup::StopAllPlayback() {
   if (m_ffmpegPlayer) {
     m_ffmpegPlayer->Stop();
   }
+  if (m_lottiePlayer) {
+    m_lottiePlayer->Stop();
+  }
   m_isPlayingFFmpeg = false;
+  m_isPlayingLottie = false;
   m_isPlayingVoice = false;
   m_voiceProgress = 0.0;
   m_videoLoadPending = false;
   m_currentVoicePath.Clear();
+  m_lottiePath.Clear();
 
   m_isLoading = false;
   m_isDownloadingMedia = false;
@@ -117,7 +136,8 @@ void MediaPopup::StopAllPlayback() {
 
 void MediaPopup::ApplyHexChatStyle() {
   m_bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
-  m_borderColor = wxSystemSettings::GetColour(wxSYS_COLOUR_ACTIVEBORDER);
+  // Use a more visible border - darker than the window text for contrast
+  m_borderColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
   m_textColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
   m_labelColor = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
 
@@ -212,8 +232,19 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
     return;
   }
 
+  // Handle Lottie/TGS animations (stickers)
+  bool isLottieFile = hasLocalFile && IsLottieFormat(info.localPath);
+  if (isLottieFile) {
+    MPLOG("ShowMedia: dispatching to PlayLottie");
+    PlayLottie(info.localPath, true);
+    return;
+  }
+
   // Handle video/animation formats with FFmpeg
-  if (hasLocalFile && IsVideoFormat(info.localPath)) {
+  bool isVideoFile = hasLocalFile && IsVideoFormat(info.localPath);
+  bool isImageFile = hasLocalFile && IsSupportedImageFormat(info.localPath);
+  
+  if (isVideoFile) {
     bool shouldLoop = (info.type == MediaType::GIF || 
                        info.type == MediaType::Sticker ||
                        info.type == MediaType::VideoNote);
@@ -222,7 +253,7 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   }
 
   // Handle static images
-  if (hasLocalFile && IsSupportedImageFormat(info.localPath)) {
+  if (isImageFile) {
     m_isLoading = true;
     m_loadingFrame = 0;
     m_loadingTimer.Start(150);
@@ -234,13 +265,7 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
 
   // Fall back to thumbnail
   if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
-    MPLOG("ShowMedia: falling back to thumbnail: " << info.thumbnailPath.ToStdString());
-    m_isLoading = true;
-    m_loadingFrame = 0;
-    m_loadingTimer.Start(150);
-    ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
-    LoadImageAsync(info.thumbnailPath);
-    Refresh();
+    FallbackToThumbnail();
     return;
   }
 
@@ -408,6 +433,134 @@ void MediaPopup::OnFFmpegFrame(const wxBitmap &frame) {
   Refresh();
 }
 
+void MediaPopup::PlayLottie(const wxString &path, bool loop) {
+#ifdef HAVE_RLOTTIE
+  MPLOG("PlayLottie: path=" << path.ToStdString() << " loop=" << loop);
+
+  if (HasFailedRecently(path)) {
+    MPLOG("PlayLottie: skipping recently failed file");
+    FallbackToThumbnail();
+    return;
+  }
+
+  // Don't restart if already playing the same file
+  if (m_isPlayingLottie && m_lottiePath == path) {
+    MPLOG("PlayLottie: already playing same file, not restarting");
+    return;
+  }
+
+  StopAllPlayback();
+
+  m_lottiePath = path;
+
+  // Show loading state while initializing
+  m_isLoading = true;
+  m_loadingFrame = 0;
+  m_loadingTimer.Start(150);
+  ApplySizeAndPosition(MIN_WIDTH, MIN_HEIGHT);
+  Refresh();
+
+  if (!m_lottiePlayer) {
+    m_lottiePlayer = std::make_unique<LottiePlayer>();
+  }
+
+  // Determine max size for stickers
+  int maxWidth = STICKER_MAX_WIDTH - PADDING * 2;
+  int maxHeight = STICKER_MAX_HEIGHT - PADDING * 2 - 20;
+
+  m_lottiePlayer->SetRenderSize(maxWidth, maxHeight);
+  m_lottiePlayer->SetLoop(loop);
+
+  m_lottiePlayer->SetFrameCallback(
+      [this](const wxBitmap &frame) { OnLottieFrame(frame); });
+
+  if (!m_lottiePlayer->LoadFile(path)) {
+    MPLOG("PlayLottie: failed to load: " << path.ToStdString());
+    MarkLoadFailed(path);
+    m_lottiePlayer.reset();
+    m_isLoading = false;
+    m_loadingTimer.Stop();
+    FallbackToThumbnail();
+    return;
+  }
+
+  m_isLoading = false;
+  m_loadingTimer.Stop();
+
+  // Get actual dimensions and calculate popup size
+  size_t lotWidth = m_lottiePlayer->GetWidth();
+  size_t lotHeight = m_lottiePlayer->GetHeight();
+
+  if (lotWidth > 0 && lotHeight > 0) {
+    double scaleX = (double)maxWidth / lotWidth;
+    double scaleY = (double)maxHeight / lotHeight;
+    double scale = std::min(scaleX, scaleY);
+
+    int scaledWidth = (int)(lotWidth * scale);
+    int scaledHeight = (int)(lotHeight * scale);
+
+    m_lottiePlayer->SetRenderSize(scaledWidth, scaledHeight);
+
+    int popupWidth = scaledWidth + PADDING * 2 + BORDER_WIDTH * 2;
+    int popupHeight = scaledHeight + PADDING * 2 + BORDER_WIDTH * 2 + 24;
+    ApplySizeAndPosition(popupWidth, popupHeight);
+  } else {
+    ApplySizeAndPosition(STICKER_MAX_WIDTH, STICKER_MAX_HEIGHT);
+  }
+
+  // Get first frame
+  m_bitmap = m_lottiePlayer->GetCurrentFrame();
+  m_hasImage = m_bitmap.IsOk();
+
+  m_lottiePlayer->Play();
+  m_isPlayingLottie = true;
+
+  int interval = m_lottiePlayer->GetTimerIntervalMs();
+  m_lottieAnimTimer.Start(interval);
+
+  Refresh();
+  MPLOG("PlayLottie: playback started, interval=" << interval << "ms"
+        << " frames=" << m_lottiePlayer->GetTotalFrames()
+        << " fps=" << m_lottiePlayer->GetFrameRate());
+#else
+  MPLOG("PlayLottie: rlottie support not compiled in, falling back to thumbnail");
+  FallbackToThumbnail();
+#endif
+}
+
+void MediaPopup::StopLottie() {
+  MPLOG("StopLottie called");
+  m_lottieAnimTimer.Stop();
+
+  if (m_lottiePlayer) {
+    m_lottiePlayer->Stop();
+  }
+  m_isPlayingLottie = false;
+  m_lottiePath.Clear();
+}
+
+void MediaPopup::OnLottieAnimTimer(wxTimerEvent &event) {
+  if (!m_lottiePlayer || !m_isPlayingLottie) {
+    m_lottieAnimTimer.Stop();
+    return;
+  }
+
+  if (!m_lottiePlayer->AdvanceFrame()) {
+    m_lottieAnimTimer.Stop();
+    m_isPlayingLottie = false;
+    MPLOG("OnLottieAnimTimer: animation ended");
+  }
+}
+
+void MediaPopup::OnLottieFrame(const wxBitmap &frame) {
+  if (!frame.IsOk())
+    return;
+
+  m_bitmap = frame;
+  m_hasImage = true;
+  Refresh();
+}
+
 void MediaPopup::FallbackToThumbnail() {
   MPLOG("FallbackToThumbnail: thumbnailPath=" << m_mediaInfo.thumbnailPath.ToStdString()
         << " localPath=" << m_mediaInfo.localPath.ToStdString());
@@ -415,6 +568,12 @@ void MediaPopup::FallbackToThumbnail() {
   m_loadingTimer.Stop();
 
   if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
+    // Try to play animated thumbnail (e.g. WebP) if it hasn't failed recently
+    if (IsVideoFormat(m_mediaInfo.thumbnailPath) && !HasFailedRecently(m_mediaInfo.thumbnailPath)) {
+      PlayVideo(m_mediaInfo.thumbnailPath, true, true);
+      return;
+    }
+
     m_hasError = false;
     m_errorMessage.Clear();
     LoadImageAsync(m_mediaInfo.thumbnailPath);

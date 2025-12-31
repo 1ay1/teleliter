@@ -12,12 +12,14 @@
 
 // Forward declarations
 class FFmpegPlayer;
+class LottiePlayer;
 
 // Timer IDs
 static const int LOADING_TIMER_ID = 10001;
 static const int FFMPEG_ANIM_TIMER_ID = 10006;
 static const int ASYNC_LOAD_TIMER_ID = 10005;
 static const int VOICE_PROGRESS_TIMER_ID = 10007;
+static const int LOTTIE_ANIM_TIMER_ID = 10008;
 
 // Maximum number of failed load attempts before giving up on a file
 static const int MAX_LOAD_FAILURES = 3;
@@ -39,6 +41,11 @@ public:
     void PlayVideo(const wxString& path, bool loop = false, bool muted = true);
     void StopVideo();
     bool IsPlayingVideo() const { return m_isPlayingFFmpeg; }
+
+    // Lottie/TGS animation playback
+    void PlayLottie(const wxString& path, bool loop = true);
+    void StopLottie();
+    bool IsPlayingLottie() const { return m_isPlayingLottie; }
 
     // Stop all playback - call before switching media or hiding
     void StopAllPlayback();
@@ -62,6 +69,8 @@ protected:
     void OnLoadingTimer(wxTimerEvent& event);
     void OnFFmpegAnimTimer(wxTimerEvent& event);
     void OnFFmpegFrame(const wxBitmap& frame);
+    void OnLottieAnimTimer(wxTimerEvent& event);
+    void OnLottieFrame(const wxBitmap& frame);
 
 private:
     void UpdateSize();
@@ -114,6 +123,12 @@ private:
     bool m_loopVideo;
     bool m_videoMuted;
 
+    // Lottie player for TGS sticker animations
+    std::unique_ptr<LottiePlayer> m_lottiePlayer;
+    bool m_isPlayingLottie;
+    wxTimer m_lottieAnimTimer;
+    wxString m_lottiePath;
+
     // Click callback
     std::function<void(const MediaInfo&)> m_clickCallback;
     
@@ -154,7 +169,7 @@ private:
     static constexpr int MIN_WIDTH = 100;
     static constexpr int MIN_HEIGHT = 60;
     static constexpr int PADDING = 8;
-    static constexpr int BORDER_WIDTH = 1;
+    static constexpr int BORDER_WIDTH = 2;
 
     wxDECLARE_EVENT_TABLE();
 };
