@@ -281,6 +281,9 @@ private:
   std::vector<MessageInfo> m_messages;
   mutable std::mutex m_messagesMutex; // Protects m_messages
 
+  // Fast lookup: message ID -> index in m_messages for O(1) access
+  std::map<int64_t, size_t> m_messageIdToIndex;
+
   // Track displayed message IDs for ordering (derived from m_messages)
   std::set<int64_t> m_displayedMessageIds;
   int64_t m_lastDisplayedMessageId;

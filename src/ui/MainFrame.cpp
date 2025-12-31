@@ -155,23 +155,33 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   m_transferManager.SetCompleteCallback([this](const TransferInfo &info) {
     m_statusBar->OnTransferComplete(info);
     if (!m_transferManager.HasActiveTransfers()) {
-      CallAfter([this]() {
-        wxMilliSleep(2000);
+      // Use a one-shot timer instead of blocking sleep to avoid UI hang
+      // Timer will fire after 2 seconds and hide progress if still no active transfers
+      wxTimer* hideTimer = new wxTimer();
+      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent&) {
         if (!m_transferManager.HasActiveTransfers()) {
           m_statusBar->HideTransferProgress();
         }
+        hideTimer->Stop();
+        delete hideTimer;
       });
+      hideTimer->StartOnce(2000);
     }
   });
   m_transferManager.SetErrorCallback([this](const TransferInfo &info) {
     m_statusBar->OnTransferError(info);
     if (!m_transferManager.HasActiveTransfers()) {
-      CallAfter([this]() {
-        wxMilliSleep(3000);
+      // Use a one-shot timer instead of blocking sleep to avoid UI hang
+      // Timer will fire after 3 seconds and hide progress if still no active transfers
+      wxTimer* hideTimer = new wxTimer();
+      hideTimer->Bind(wxEVT_TIMER, [this, hideTimer](wxTimerEvent&) {
         if (!m_transferManager.HasActiveTransfers()) {
           m_statusBar->HideTransferProgress();
         }
+        hideTimer->Stop();
+        delete hideTimer;
       });
+      hideTimer->StartOnce(3000);
     }
   });
 

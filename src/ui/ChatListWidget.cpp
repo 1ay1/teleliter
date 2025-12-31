@@ -99,6 +99,10 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
   int64_t selectedChatId = GetSelectedChatId();
   bool wasOnTeleliter = IsTeleliterSelected();
 
+  // Freeze the tree to prevent UI updates during batch modifications
+  // This significantly improves performance for large chat lists
+  m_chatTree->Freeze();
+
   // Build a set of chat IDs we're about to display (after filtering)
   std::set<int64_t> newChatIds;
   for (const auto &chat : m_allChats) {
@@ -182,6 +186,9 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
       m_chatTree->SelectItem(it->second);
     }
   }
+
+  // Thaw the tree to allow UI updates again
+  m_chatTree->Thaw();
 }
 
 void ChatListWidget::ClearAllChats() {

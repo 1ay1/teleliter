@@ -217,6 +217,15 @@ void ChatViewWidget::SortMessages() {
               }
               return a.id < b.id;
             });
+
+  // Rebuild the message ID to index map after sorting
+  // This is necessary because sorting changes the indices
+  m_messageIdToIndex.clear();
+  for (size_t i = 0; i < m_messages.size(); ++i) {
+    if (m_messages[i].id != 0) {
+      m_messageIdToIndex[m_messages[i].id] = i;
+    }
+  }
 }
 
 bool ChatViewWidget::HasMessage(int64_t messageId) const {
@@ -233,9 +242,11 @@ void ChatViewWidget::AddMessage(const MessageInfo &msg) {
     return;
   }
 
+  size_t index = m_messages.size();
   m_messages.push_back(msg);
   if (msg.id != 0) {
     m_displayedMessageIds.insert(msg.id);
+    m_messageIdToIndex[msg.id] = index;
   }
 }
 
@@ -873,9 +884,11 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
       if (msg.id != 0 && m_displayedMessageIds.count(msg.id) > 0) {
         continue;
       }
+      size_t index = m_messages.size();
       m_messages.push_back(msg);
       if (msg.id != 0) {
         m_displayedMessageIds.insert(msg.id);
+        m_messageIdToIndex[msg.id] = index;
       }
 
       // Trigger download for media if needed
@@ -913,13 +926,22 @@ void ChatViewWidget::RemoveMessage(int64_t messageId) {
   bool needsRefresh = false;
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
-    auto it = std::find_if(
-        m_messages.begin(), m_messages.end(),
-        [messageId](const MessageInfo &m) { return m.id == messageId; });
-    if (it != m_messages.end()) {
-      m_messages.erase(it);
-      m_displayedMessageIds.erase(messageId);
-      needsRefresh = true;
+    auto indexIt = m_messageIdToIndex.find(messageId);
+    if (indexIt != m_messageIdToIndex.end()) {
+      size_t removedIndex = indexIt->second;
+      if (removedIndex < m_messages.size()) {
+        m_messages.erase(m_messages.begin() + removedIndex);
+        m_displayedMessageIds.erase(messageId);
+        m_messageIdToIndex.erase(indexIt);
+        
+        // Update indices for all messages after the removed one
+        for (auto& pair : m_messageIdToIndex) {
+          if (pair.second > removedIndex) {
+            pair.second--;
+          }
+        }
+        needsRefresh = true;
+      }
     }
   }
 
@@ -957,8 +979,15 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
         }
 
         // If server assigned a new ID, update the message ID and track in
-        // displayedMessageIds
+        // displayedMessageIds and messageIdToIndex
         if (msg.serverMessageId != 0 && existingMsg.id != msg.serverMessageId) {
+          // Update the index map with the new ID
+          auto indexIt = m_messageIdToIndex.find(existingMsg.id);
+          if (indexIt != m_messageIdToIndex.end()) {
+            size_t idx = indexIt->second;
+            m_messageIdToIndex.erase(indexIt);
+            m_messageIdToIndex[msg.serverMessageId] = idx;
+          }
           m_displayedMessageIds.erase(existingMsg.id);
           existingMsg.id = msg.serverMessageId;
           m_displayedMessageIds.insert(msg.serverMessageId);
@@ -1036,6 +1065,7 @@ void ChatViewWidget::ClearMessages() {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     m_messages.clear();
     m_displayedMessageIds.clear();
+    m_messageIdToIndex.clear();
   }
 
   // Clear per-message read times and read status (switching chats)
@@ -1178,19 +1208,19 @@ void ChatViewWidget::AddMediaSpan(long startPos, long endPos,
 }
 
 MessageInfo *ChatViewWidget::GetMessageById(int64_t messageId) {
-  for (auto &msg : m_messages) {
-    if (msg.id == messageId) {
-      return &msg;
-    }
+  // Use O(1) map lookup instead of O(n) linear search
+  auto it = m_messageIdToIndex.find(messageId);
+  if (it != m_messageIdToIndex.end() && it->second < m_messages.size()) {
+    return &m_messages[it->second];
   }
   return nullptr;
 }
 
 const MessageInfo *ChatViewWidget::GetMessageById(int64_t messageId) const {
-  for (const auto &msg : m_messages) {
-    if (msg.id == messageId) {
-      return &msg;
-    }
+  // Use O(1) map lookup instead of O(n) linear search
+  auto it = m_messageIdToIndex.find(messageId);
+  if (it != m_messageIdToIndex.end() && it->second < m_messages.size()) {
+    return &m_messages[it->second];
   }
   return nullptr;
 }

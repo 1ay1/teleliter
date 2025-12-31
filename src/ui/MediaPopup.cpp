@@ -1,4 +1,7 @@
 #include "MediaPopup.h"
+#ifdef __GNUC__
+#include <execinfo.h>
+#endif
 #include "FFmpegPlayer.h"
 #include "LottiePlayer.h"
 #include "FileUtils.h"
@@ -119,10 +122,26 @@ MediaPopup::~MediaPopup() {
 }
 
 void MediaPopup::StopAllPlayback() {
+  // Log stack context to help debug unexpected stops
   MPLOG("StopAllPlayback called, m_isPlayingFFmpeg=" << m_isPlayingFFmpeg 
         << " m_isPlayingLottie=" << m_isPlayingLottie
         << " m_isPlayingVoice=" << m_isPlayingVoice
-        << " m_videoLoadPending=" << m_videoLoadPending);
+        << " m_videoLoadPending=" << m_videoLoadPending
+        << " IsShown=" << IsShown()
+        << " videoPath=" << m_videoPath.ToStdString());
+  
+  // Print a mini stack trace for debugging
+  #ifdef __GNUC__
+  void* callstack[5];
+  int frames = backtrace(callstack, 5);
+  char** symbols = backtrace_symbols(callstack, frames);
+  if (symbols) {
+    for (int i = 1; i < frames && i < 4; i++) {
+      MPLOG("  caller[" << i << "]: " << symbols[i]);
+    }
+    free(symbols);
+  }
+  #endif
   
   m_ffmpegAnimTimer.Stop();
   m_lottieAnimTimer.Stop();
