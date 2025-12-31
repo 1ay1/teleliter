@@ -5,7 +5,47 @@
 #include "MessageFormatter.h"
 #include <algorithm>
 #include <iostream>
+#include <unordered_map>
 #include <wx/settings.h>
+
+// Cached file existence check to reduce disk I/O
+// Cache entries expire after 500ms to balance performance with freshness
+static bool CachedFileExists(const wxString &path) {
+  if (path.IsEmpty()) return false;
+  
+  struct CacheEntry {
+    bool exists;
+    wxLongLong timestamp;
+  };
+  
+  static std::unordered_map<std::string, CacheEntry> s_cache;
+  static const wxLongLong CACHE_DURATION_MS = 500;
+  
+  std::string key = path.ToStdString();
+  wxLongLong now = wxGetLocalTimeMillis();
+  
+  auto it = s_cache.find(key);
+  if (it != s_cache.end() && (now - it->second.timestamp) < CACHE_DURATION_MS) {
+    return it->second.exists;
+  }
+  
+  // Cache miss or expired - do actual check
+  bool exists = wxFileExists(path);
+  s_cache[key] = {exists, now};
+  
+  // Periodically clean old entries to prevent unbounded growth
+  if (s_cache.size() > 1000) {
+    for (auto iter = s_cache.begin(); iter != s_cache.end(); ) {
+      if ((now - iter->second.timestamp) > CACHE_DURATION_MS * 10) {
+        iter = s_cache.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+  }
+  
+  return exists;
+}
 
 #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 // #define CVWLOG(msg) do {} while(0)
@@ -1264,41 +1304,10 @@ MediaInfo ChatViewWidget::GetMediaInfoForSpan(const MediaSpan &span) const {
     info.thumbnailPath = msg->mediaThumbnailPath;
     info.fileName = msg->mediaFileName;
     info.caption = msg->mediaCaption;
-    info.isDownloading = false; // Will be set by caller if needed
-
-    // If still no file IDs, it might be loading or failed
-    // We do NOT trigger refetch here as this is a const getter called
-    // frequently (e.g. on hover) triggering network requests here would be
-    // disastrous for performance
-    if (info.fileId == 0 && info.thumbnailFileId == 0) {
-    }
-
-    // Accurate downloading state check
-    if (m_mainFrame) {
-      TelegramClient *client = m_mainFrame->GetTelegramClient();
-      if (client) {
-        // Check if main file is downloading
-        if (info.fileId != 0 && info.localPath.IsEmpty()) {
-          info.isDownloading = client->IsDownloading(info.fileId);
-
-          // If we just claimed it's NOT downloading, but localPath is empty,
-          // it might be completed but path update hasn't propagated?
-          // Or it hasn't started.
-          // If client says it's Completed, try to get the path now!
-          if (!info.isDownloading) {
-            DownloadState state = client->GetDownloadState(info.fileId);
-            if (state == DownloadState::Completed) {
-              // It's done! We might need to manually set localPath from client
-              // if possible But client struct is private. However,
-              // UpdateMediaPath should have been called. If we are here, it
-              // means race condition: Client has it, UI update pending. We can
-              // lie and say isDownloading=false (which it is), but MediaPopup
-              // will show spinner if path is empty.
-            }
-          }
-        }
-      }
-    }
+    // isDownloading will be set by caller (ShowMediaPopup) when needed
+    // We don't check TelegramClient here to avoid mutex contention on every hover
+    // The caller can check download state when actually showing the popup
+    info.isDownloading = info.localPath.IsEmpty() && info.fileId != 0;
   } else {
     // Message not found in m_messages - this can happen briefly for new messages
     // We already have span's file IDs from initialization above
@@ -1563,10 +1572,10 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
     // Check if paths have changed (download completed since last show)
     bool localPathChanged =
         (m_currentlyShowingMedia.localPath != info.localPath &&
-         !info.localPath.IsEmpty() && wxFileExists(info.localPath));
+         !info.localPath.IsEmpty() && CachedFileExists(info.localPath));
     bool thumbnailPathChanged =
         (m_currentlyShowingMedia.thumbnailPath != info.thumbnailPath &&
-         !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
+         !info.thumbnailPath.IsEmpty() && CachedFileExists(info.thumbnailPath));
 
     if (!localPathChanged && !thumbnailPathChanged) {
       // Same media, no path changes.
@@ -1603,7 +1612,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
   if (info.type == MediaType::Sticker) {
     // Try to download thumbnail first (for preview)
     if (info.thumbnailFileId != 0 &&
-        (info.thumbnailPath.IsEmpty() || !wxFileExists(info.thumbnailPath))) {
+        (info.thumbnailPath.IsEmpty() || !CachedFileExists(info.thumbnailPath))) {
       if (m_mainFrame) {
         TelegramClient *client = m_mainFrame->GetTelegramClient();
         if (client) {
@@ -1652,7 +1661,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
   if (info.type == MediaType::Video || info.type == MediaType::GIF ||
       info.type == MediaType::VideoNote) {
     // Check if localPath is a video file or just a thumbnail (image)
-    if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
+    if (!info.localPath.IsEmpty() && CachedFileExists(info.localPath)) {
       wxFileName fn(info.localPath);
       wxString ext = fn.GetExt().Lower();
       bool isVideoFile =
@@ -1670,7 +1679,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
 
   // If the file isn't downloaded yet, trigger a download
   // But only if we haven't already requested this download (prevent duplicates)
-  if (info.localPath.IsEmpty() || !wxFileExists(info.localPath) ||
+  if (info.localPath.IsEmpty() || !CachedFileExists(info.localPath) ||
       needsVideoDownload) {
     if (info.fileId != 0 && m_mainFrame) {
       TelegramClient *client = m_mainFrame->GetTelegramClient();
@@ -1862,7 +1871,7 @@ void ChatViewWidget::OpenMedia(const MediaInfo &info) {
     return;
   }
 
-  if (!info.localPath.IsEmpty() && wxFileExists(info.localPath)) {
+  if (!info.localPath.IsEmpty() && CachedFileExists(info.localPath)) {
     // Open with default application
     try {
       wxLaunchDefaultApplication(info.localPath);
@@ -1924,7 +1933,7 @@ void ChatViewWidget::OnMediaDownloadComplete(int32_t fileId,
     RemovePendingOpen(fileId);
 
     // Open the file now that it's downloaded
-    if (!localPath.IsEmpty() && wxFileExists(localPath)) {
+    if (!localPath.IsEmpty() && CachedFileExists(localPath)) {
       wxLaunchDefaultApplication(localPath);
     }
   }
@@ -2273,6 +2282,16 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
     event.Skip();
     return;
   }
+
+  // Throttle mouse move processing to reduce CPU usage
+  // Only process every 50ms to avoid excessive work on rapid mouse movements
+  static wxLongLong lastProcessTime = 0;
+  wxLongLong now = wxGetLocalTimeMillis();
+  if (now - lastProcessTime < 50) {
+    event.Skip();
+    return;
+  }
+  lastProcessTime = now;
 
   wxRichTextCtrl *display = m_chatArea->GetDisplay();
   wxPoint pos = event.GetPosition();

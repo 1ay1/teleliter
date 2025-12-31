@@ -7,6 +7,7 @@
 #include "FileUtils.h"
 #include <iostream>
 #include <thread>
+#include <unordered_map>
 #include <wx/display.h>
 #include <wx/filename.h>
 #include <wx/settings.h>
@@ -16,6 +17,45 @@ wxDEFINE_EVENT(wxEVT_IMAGE_LOADED, wxThreadEvent);
 #define MPLOG(msg) std::cerr << "[MediaPopup] " << msg << std::endl
 
 #include <thread>
+
+// Cached file existence check to reduce disk I/O
+// Cache entries expire after 500ms to balance performance with freshness
+static bool CachedFileExists(const wxString &path) {
+  if (path.IsEmpty()) return false;
+  
+  struct CacheEntry {
+    bool exists;
+    wxLongLong timestamp;
+  };
+  
+  static std::unordered_map<std::string, CacheEntry> s_cache;
+  static const wxLongLong CACHE_DURATION_MS = 500;
+  
+  std::string key = path.ToStdString();
+  wxLongLong now = wxGetLocalTimeMillis();
+  
+  auto it = s_cache.find(key);
+  if (it != s_cache.end() && (now - it->second.timestamp) < CACHE_DURATION_MS) {
+    return it->second.exists;
+  }
+  
+  // Cache miss or expired - do actual check
+  bool exists = CachedFileExists(path);
+  s_cache[key] = {exists, now};
+  
+  // Periodically clean old entries to prevent unbounded growth
+  if (s_cache.size() > 1000) {
+    for (auto iter = s_cache.begin(); iter != s_cache.end(); ) {
+      if ((now - iter->second.timestamp) > CACHE_DURATION_MS * 10) {
+        iter = s_cache.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+  }
+  
+  return exists;
+}
 
 // Helper to check if file extension is a supported image format
 static bool IsSupportedImageFormat(const wxString &path) {
@@ -216,10 +256,10 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   if (IsShown() && IsSameMedia(m_mediaInfo, info)) {
     bool localPathChanged =
         (m_mediaInfo.localPath != info.localPath && !info.localPath.IsEmpty() &&
-         wxFileExists(info.localPath));
+         CachedFileExists(info.localPath));
     bool thumbnailPathChanged =
         (m_mediaInfo.thumbnailPath != info.thumbnailPath &&
-         !info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath));
+         !info.thumbnailPath.IsEmpty() && CachedFileExists(info.thumbnailPath));
 
     if (!localPathChanged && !thumbnailPathChanged) {
       AdjustPositionToScreen(pos);
@@ -240,7 +280,7 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   m_hasImage = isSameFile ? hadImage : false;
   m_isDownloadingMedia = false;
 
-  bool hasLocalFile = !info.localPath.IsEmpty() && wxFileExists(info.localPath);
+  bool hasLocalFile = !info.localPath.IsEmpty() && CachedFileExists(info.localPath);
 
   // Handle voice notes specially - show waveform and play audio
   if (info.type == MediaType::Voice) {
@@ -323,7 +363,7 @@ void MediaPopup::ShowMedia(const MediaInfo &info, const wxPoint &pos) {
   }
 
   // Fall back to thumbnail
-  if (!info.thumbnailPath.IsEmpty() && wxFileExists(info.thumbnailPath)) {
+  if (!info.thumbnailPath.IsEmpty() && CachedFileExists(info.thumbnailPath)) {
     FallbackToThumbnail();
     return;
   }
@@ -717,7 +757,7 @@ void MediaPopup::FallbackToThumbnail() {
 
   // Check if main file still needs downloading - if so, keep timer running for spinner overlay
   bool mainFileNeedsDownload = m_mediaInfo.fileId != 0 &&
-      (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+      (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
   
   if (mainFileNeedsDownload) {
     // Keep timer running for the download spinner overlay on thumbnail
@@ -730,7 +770,7 @@ void MediaPopup::FallbackToThumbnail() {
     m_isDownloadingMedia = false;
   }
 
-  if (!m_mediaInfo.thumbnailPath.IsEmpty() && wxFileExists(m_mediaInfo.thumbnailPath)) {
+  if (!m_mediaInfo.thumbnailPath.IsEmpty() && CachedFileExists(m_mediaInfo.thumbnailPath)) {
     // Try to play animated thumbnail (e.g. WebP) if it hasn't failed recently
     if (IsVideoFormat(m_mediaInfo.thumbnailPath) && !HasFailedRecently(m_mediaInfo.thumbnailPath)) {
       PlayVideo(m_mediaInfo.thumbnailPath, true, true);
@@ -742,7 +782,7 @@ void MediaPopup::FallbackToThumbnail() {
     LoadImageAsync(m_mediaInfo.thumbnailPath);
     Refresh();
   } else if (!m_mediaInfo.localPath.IsEmpty() &&
-             wxFileExists(m_mediaInfo.localPath)) {
+             CachedFileExists(m_mediaInfo.localPath)) {
     // Try loading as image - either has image extension OR no extension (Telegram temp files)
     // FFmpeg already failed if we're here, so try image loading as fallback
     bool hasImageExt = IsSupportedImageFormat(m_mediaInfo.localPath);
@@ -783,7 +823,7 @@ void MediaPopup::SetImage(const wxImage &image) {
   m_isLoading = false;
 
   bool needsDownload = m_mediaInfo.fileId != 0 &&
-      (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+      (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
 
   if (!m_isDownloadingMedia && !needsDownload) {
     m_loadingTimer.Stop();
@@ -1142,11 +1182,11 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
                         m_mediaInfo.type == MediaType::VideoNote);
 
     bool isShowingThumbnail = !m_mediaInfo.thumbnailPath.IsEmpty() &&
-                              wxFileExists(m_mediaInfo.thumbnailPath) &&
+                              CachedFileExists(m_mediaInfo.thumbnailPath) &&
                               (m_mediaInfo.localPath.IsEmpty() ||
-                               !wxFileExists(m_mediaInfo.localPath));
+                               !CachedFileExists(m_mediaInfo.localPath));
     bool needsDownload = m_mediaInfo.fileId != 0 &&
-        (m_mediaInfo.localPath.IsEmpty() || !wxFileExists(m_mediaInfo.localPath));
+        (m_mediaInfo.localPath.IsEmpty() || !CachedFileExists(m_mediaInfo.localPath));
 
     int centerX = imgX + m_bitmap.GetWidth() / 2;
     int centerY = imgY + m_bitmap.GetHeight() / 2;
@@ -1341,7 +1381,7 @@ void MediaPopup::DrawMediaLabel(wxDC &dc, const wxSize &size) {
 }
 
 void MediaPopup::LoadImageAsync(const wxString &path) {
-  if (path.IsEmpty() || !wxFileExists(path)) {
+  if (path.IsEmpty() || !CachedFileExists(path)) {
     MPLOG("LoadImageAsync: invalid path");
     return;
   }
@@ -1582,7 +1622,7 @@ void MediaPopup::ToggleVoicePlayback() {
   
   if (needsLoad) {
     // Load and play the new file
-    if (!m_mediaInfo.localPath.IsEmpty() && wxFileExists(m_mediaInfo.localPath)) {
+    if (!m_mediaInfo.localPath.IsEmpty() && CachedFileExists(m_mediaInfo.localPath)) {
       PlayVoiceNote(m_mediaInfo.localPath);
     }
     return;
