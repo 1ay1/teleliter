@@ -298,10 +298,18 @@ void ChatViewWidget::RefreshDisplay() {
   // and explicitly set when user sends a message
   bool shouldScrollToBottom = m_wasAtBottom;
 
-  // Capture current scroll position to restore if not scrolling to bottom
-  long savedFirstVisiblePos = -1;
+  // Capture current scroll position as a RATIO (0.0 to 1.0) rather than character position
+  // Character positions change after re-render, but ratio stays meaningful
+  double scrollRatio = 0.0;
   if (!shouldScrollToBottom && m_chatArea && m_chatArea->GetDisplay()) {
-    savedFirstVisiblePos = m_chatArea->GetDisplay()->GetFirstVisiblePosition();
+    wxRichTextCtrl *display = m_chatArea->GetDisplay();
+    int scrollPos = display->GetScrollPos(wxVERTICAL);
+    int scrollRange = display->GetScrollRange(wxVERTICAL);
+    int scrollThumb = display->GetScrollThumb(wxVERTICAL);
+    int maxScroll = scrollRange - scrollThumb;
+    if (maxScroll > 0) {
+      scrollRatio = static_cast<double>(scrollPos) / static_cast<double>(maxScroll);
+    }
   }
 
   // Clear display but keep message storage
@@ -370,16 +378,22 @@ void ChatViewWidget::RefreshDisplay() {
   EndBatchUpdate();
 
   // Restore scroll position - use CallAfter to ensure layout is complete
-  CallAfter([this, shouldScrollToBottom, savedFirstVisiblePos]() {
-    if (!m_chatArea)
+  CallAfter([this, shouldScrollToBottom, scrollRatio]() {
+    if (!m_chatArea || !m_chatArea->GetDisplay())
       return;
 
     if (shouldScrollToBottom) {
       m_chatArea->ScrollToBottom();
-    } else if (savedFirstVisiblePos > 0) {
-      // Restore previous position if we weren't at bottom
-      // ShowPosition scrolls so the position is visible
-      m_chatArea->GetDisplay()->ShowPosition(savedFirstVisiblePos);
+    } else if (scrollRatio > 0.0) {
+      // Restore scroll position using the saved ratio
+      wxRichTextCtrl *display = m_chatArea->GetDisplay();
+      int scrollRange = display->GetScrollRange(wxVERTICAL);
+      int scrollThumb = display->GetScrollThumb(wxVERTICAL);
+      int maxScroll = scrollRange - scrollThumb;
+      if (maxScroll > 0) {
+        int newScrollPos = static_cast<int>(scrollRatio * maxScroll);
+        display->Scroll(0, newScrollPos);
+      }
     }
   });
 }
@@ -862,10 +876,9 @@ void ChatViewWidget::UpdateMessage(const MessageInfo &msg) {
     for (auto &existingMsg : m_messages) {
       if (existingMsg.id == msg.id) {
         // Check if meaningful changes occurred that require a redraw
-        // We don't care about internal ID changes if the content looks the same
-        if (existingMsg.mediaLocalPath != msg.mediaLocalPath ||
-            existingMsg.mediaThumbnailPath != msg.mediaThumbnailPath ||
-            existingMsg.text != msg.text ||
+        // Note: mediaLocalPath and mediaThumbnailPath changes do NOT need refresh
+        // because they don't affect displayed text - paths are only used for popup
+        if (existingMsg.text != msg.text ||
             existingMsg.isEdited != msg.isEdited ||
             existingMsg.reactions != msg.reactions) {
 
