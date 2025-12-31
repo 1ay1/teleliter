@@ -5,8 +5,9 @@
 #include "MenuIds.h"
 #include <wx/settings.h>
 
-// Online indicator - green circle emoji
-const wxString ChatListWidget::ONLINE_INDICATOR = wxString::FromUTF8("🟢 ");
+// Online indicator - green circle emoji (requires emoji font on system)
+const wxString ChatListWidget::ONLINE_INDICATOR =
+    wxString::FromUTF8("\xF0\x9F\x9F\xA2 ");
 
 ChatListWidget::ChatListWidget(wxWindow *parent, MainFrame *mainFrame)
     : wxPanel(parent, wxID_ANY), m_mainFrame(mainFrame),
@@ -59,12 +60,17 @@ void ChatListWidget::CreateCategories() {
   m_teleliterItem = m_chatTree->AppendItem(m_treeRoot, "Teleliter");
   m_chatTree->SetItemBold(m_teleliterItem, true);
 
-  // Create categories
-  m_pinnedChats = m_chatTree->AppendItem(m_treeRoot, "📌 Pinned");
-  m_privateChats = m_chatTree->AppendItem(m_treeRoot, "💬 Private Chats");
-  m_groups = m_chatTree->AppendItem(m_treeRoot, "👥 Groups");
-  m_channels = m_chatTree->AppendItem(m_treeRoot, "📢 Channels");
-  m_bots = m_chatTree->AppendItem(m_treeRoot, "🤖 Bots");
+  // Create categories with emoji icons
+  m_pinnedChats = m_chatTree->AppendItem(
+      m_treeRoot, wxString::FromUTF8("\xF0\x9F\x93\x8C Pinned")); // 📌
+  m_privateChats = m_chatTree->AppendItem(
+      m_treeRoot, wxString::FromUTF8("\xF0\x9F\x92\xAC Private Chats")); // 💬
+  m_groups = m_chatTree->AppendItem(
+      m_treeRoot, wxString::FromUTF8("\xF0\x9F\x91\xA5 Groups")); // 👥
+  m_channels = m_chatTree->AppendItem(
+      m_treeRoot, wxString::FromUTF8("\xF0\x9F\x93\xA2 Channels")); // 📢
+  m_bots = m_chatTree->AppendItem(
+      m_treeRoot, wxString::FromUTF8("\xF0\x9F\xA4\x96 Bots")); // 🤖
 
   // Make categories bold
   m_chatTree->SetItemBold(m_pinnedChats, true);
@@ -141,7 +147,9 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
     }
   }
 
-  // Expand categories that have items, collapse empty ones
+  // Expand Pinned and Private Chats if they have items (these are primary
+  // categories) Keep Groups, Channels, and Bots collapsed by default (user can
+  // expand manually)
   if (m_chatTree->GetChildrenCount(m_pinnedChats) > 0) {
     m_chatTree->Expand(m_pinnedChats);
   } else {
@@ -152,19 +160,15 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
   } else {
     m_chatTree->Collapse(m_privateChats);
   }
-  if (m_chatTree->GetChildrenCount(m_groups) > 0) {
-    m_chatTree->Expand(m_groups);
-  } else {
+  // Groups, Channels, Bots - collapse (don't auto-expand) unless already
+  // expanded by user Just ensure empty ones are collapsed
+  if (m_chatTree->GetChildrenCount(m_groups) == 0) {
     m_chatTree->Collapse(m_groups);
   }
-  if (m_chatTree->GetChildrenCount(m_channels) > 0) {
-    m_chatTree->Expand(m_channels);
-  } else {
+  if (m_chatTree->GetChildrenCount(m_channels) == 0) {
     m_chatTree->Collapse(m_channels);
   }
-  if (m_chatTree->GetChildrenCount(m_bots) > 0) {
-    m_chatTree->Expand(m_bots);
-  } else {
+  if (m_chatTree->GetChildrenCount(m_bots) == 0) {
     m_chatTree->Collapse(m_bots);
   }
 
