@@ -1,4 +1,5 @@
 #include "MainFrame.h"
+#include "VirtualizedChatWidget.h"
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
 #include "ChatListWidget.h"
@@ -205,11 +206,12 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   m_statusTimer->Start(1000);
 
   // Ensure welcome chat is visible on startup
-  if (m_welcomeChat && m_chatViewWidget && m_chatPanel) {
+  if (m_welcomeChat && m_chatPanel) {
     wxSizer *sizer = m_chatPanel->GetSizer();
     if (sizer) {
       sizer->Show(m_welcomeChat, true);
       sizer->Show(m_chatViewWidget, false);
+      sizer->Show(m_virtualizedChatWidget, false);
       m_chatPanel->Layout();
     }
   }
@@ -481,15 +483,26 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
   m_welcomeChat = new WelcomeChat(parent, this);
   sizer->Add(m_welcomeChat, 1, wxEXPAND);
 
-  // Chat view widget (hidden initially, shown when a chat is selected)
+  // Chat view widget (old implementation - hidden initially)
   // Uses ChatArea internally which handles colors and font consistently with
   // WelcomeChat
   m_chatViewWidget = new ChatViewWidget(parent, this);
   sizer->Add(m_chatViewWidget, 1, wxEXPAND);
 
-  // Hide chat view widget from sizer (not just visually) - welcome chat is
-  // shown initially
+  // Virtualized chat widget (new high-performance implementation)
+  m_virtualizedChatWidget = new VirtualizedChatWidget(parent, this);
+  sizer->Add(m_virtualizedChatWidget, 1, wxEXPAND);
+  
+  // Set up callbacks for virtualized widget
+  m_virtualizedChatWidget->SetLoadMoreCallback([this](int64_t oldestId) {
+    if (m_telegramClient && m_currentChatId != 0) {
+      m_telegramClient->LoadMoreMessages(m_currentChatId, oldestId, 20);
+    }
+  });
+
+  // Hide both chat widgets initially - welcome chat is shown
   sizer->Show(m_chatViewWidget, false);
+  sizer->Show(m_virtualizedChatWidget, false);
   sizer->Show(m_welcomeChat, true);
 
   // Input box widget - uses native styling
@@ -1049,6 +1062,9 @@ void MainFrame::OnClearWindow(wxCommandEvent &event) {
   if (m_chatViewWidget) {
     m_chatViewWidget->ClearMessages();
   }
+  if (m_virtualizedChatWidget) {
+    m_virtualizedChatWidget->ClearMessages();
+  }
 }
 
 void MainFrame::OnToggleChatList(wxCommandEvent &event) {
@@ -1126,6 +1142,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       if (sizer) {
         sizer->Show(m_welcomeChat, true);
         sizer->Show(m_chatViewWidget, false);
+        sizer->Show(m_virtualizedChatWidget, false);
       }
       m_chatPanel->Layout();
 
@@ -1184,7 +1201,13 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       wxSizer *sizer = m_chatPanel->GetSizer();
       if (sizer) {
         sizer->Show(m_welcomeChat, false);
-        sizer->Show(m_chatViewWidget, true);
+        if (m_useVirtualizedChat) {
+          sizer->Show(m_chatViewWidget, false);
+          sizer->Show(m_virtualizedChatWidget, true);
+        } else {
+          sizer->Show(m_chatViewWidget, true);
+          sizer->Show(m_virtualizedChatWidget, false);
+        }
       }
       m_chatPanel->Layout();
 
@@ -1213,6 +1236,9 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         DBGLOG("Test chat selected, loading dummy data");
         // Load dummy data for testing
         m_chatViewWidget->ClearMessages();
+        if (m_virtualizedChatWidget) {
+          m_virtualizedChatWidget->ClearMessages();
+        }
         m_chatViewWidget->SetTopicText("Test Chat",
                                        "Demo mode - Testing features");
         PopulateDummyData();
@@ -1221,6 +1247,9 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         // Clear the view and load messages (OpenChatAndLoadMessages handles
         // opening first)
         m_chatViewWidget->ClearMessages();
+        if (m_virtualizedChatWidget) {
+          m_virtualizedChatWidget->ClearMessages();
+        }
 
         // Set topic bar with chat info (HexChat-style)
         bool chatFound = false;
@@ -1296,7 +1325,13 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       wxSizer *sizer = m_chatPanel->GetSizer();
       if (sizer) {
         sizer->Show(m_welcomeChat, false);
-        sizer->Show(m_chatViewWidget, true);
+        if (m_useVirtualizedChat) {
+          sizer->Show(m_chatViewWidget, false);
+          sizer->Show(m_virtualizedChatWidget, true);
+        } else {
+          sizer->Show(m_chatViewWidget, true);
+          sizer->Show(m_virtualizedChatWidget, false);
+        }
       }
       m_chatPanel->Layout();
 
@@ -1438,6 +1473,7 @@ void MainFrame::OnLoggedOut() {
   if (sizer) {
     sizer->Show(m_welcomeChat, true);
     sizer->Show(m_chatViewWidget, false);
+    sizer->Show(m_virtualizedChatWidget, false);
   }
   m_chatPanel->Layout();
   if (m_chatListWidget) {
@@ -1555,8 +1591,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
     return; // Not the current chat, ignore
   }
 
-  if (!m_chatViewWidget) {
-    DBGLOG("ERROR: m_chatViewWidget is null!");
+  if (!m_chatViewWidget && !m_virtualizedChatWidget) {
+    DBGLOG("ERROR: both chat widgets are null!");
     return;
   }
 
@@ -1582,11 +1618,15 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   m_chatViewWidget->ForceScrollToBottom();
 
   // Display all messages in bulk
-  // ChatViewWidget::DisplayMessages handles sorting internally
-  m_chatViewWidget->DisplayMessages(messages);
-
-  // Ensure we're at bottom after everything is rendered
-  m_chatViewWidget->ForceScrollToBottom();
+  if (m_useVirtualizedChat && m_virtualizedChatWidget) {
+    // Use new virtualized widget
+    m_virtualizedChatWidget->AddMessages(messages);
+    m_virtualizedChatWidget->ScrollToBottom();
+  } else if (m_chatViewWidget) {
+    // Use old widget
+    m_chatViewWidget->DisplayMessages(messages);
+    m_chatViewWidget->ForceScrollToBottom();
+  }
 
   // LAZY LOADING: Only download thumbnails (small, ~10KB each)
   // Full media is downloaded on-demand when user hovers/clicks
@@ -1632,21 +1672,30 @@ void MainFrame::OnMoreMessagesLoaded(int64_t chatId,
                                      const std::vector<MessageInfo> &messages) {
   // This is called when loading older history (lazy loading)
   // DO NOT scroll to bottom - user is scrolling up
-  if (chatId != m_currentChatId || !m_chatViewWidget) {
+  if (chatId != m_currentChatId) {
     return;
   }
 
   if (messages.empty()) {
-    m_chatViewWidget->SetAllHistoryLoaded(true);
-    m_chatViewWidget->SetIsLoadingHistory(false);
+    if (m_chatViewWidget) {
+      m_chatViewWidget->SetAllHistoryLoaded(true);
+      m_chatViewWidget->SetIsLoadingHistory(false);
+    }
+    if (m_virtualizedChatWidget) {
+      m_virtualizedChatWidget->SetAllHistoryLoaded(true);
+      m_virtualizedChatWidget->SetLoadingHistory(false);
+    }
     return;
   }
 
   DBGLOG("OnMoreMessagesLoaded: " << messages.size() << " messages for chat " << chatId);
 
-  // Buffer messages without re-rendering - user clicks "Load more" to see them
-  // This is the efficient approach - no re-render until user explicitly requests
-  m_chatViewWidget->BufferOlderMessages(messages);
+  // Add to appropriate widget
+  if (m_useVirtualizedChat && m_virtualizedChatWidget) {
+    m_virtualizedChatWidget->PrependMessages(messages);
+  } else if (m_chatViewWidget) {
+    m_chatViewWidget->BufferOlderMessages(messages);
+  }
 
   // Download thumbnails for new messages
   if (m_telegramClient) {
@@ -2344,8 +2393,30 @@ void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
       if (m_chatViewWidget) {
         m_chatViewWidget->SetAllHistoryLoaded(true);
       }
+      if (m_virtualizedChatWidget) {
+        m_virtualizedChatWidget->SetAllHistoryLoaded(true);
+      }
       return;
     }
-    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 15);
+    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 20);
+  }
+}
+
+void MainFrame::SetUseVirtualizedChat(bool use) {
+  m_useVirtualizedChat = use;
+  
+  // If a chat is open, switch the visible widget
+  if (m_currentChatId != 0 && m_chatPanel) {
+    wxSizer *sizer = m_chatPanel->GetSizer();
+    if (sizer) {
+      if (use) {
+        sizer->Show(m_chatViewWidget, false);
+        sizer->Show(m_virtualizedChatWidget, true);
+      } else {
+        sizer->Show(m_chatViewWidget, true);
+        sizer->Show(m_virtualizedChatWidget, false);
+      }
+      m_chatPanel->Layout();
+    }
   }
 }

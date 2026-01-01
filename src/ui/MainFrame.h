@@ -25,6 +25,7 @@ class WelcomeChat;
 class TelegramClient;
 class ChatListWidget;
 class ChatViewWidget;
+class VirtualizedChatWidget;
 class InputBoxWidget;
 class MediaPopup;
 class MessageFormatter;
@@ -83,7 +84,12 @@ public:
   // Widget access
   ChatListWidget *GetChatListWidget() { return m_chatListWidget; }
   ChatViewWidget *GetChatViewWidget() { return m_chatViewWidget; }
+  VirtualizedChatWidget *GetVirtualizedChatWidget() { return m_virtualizedChatWidget; }
   InputBoxWidget *GetInputBoxWidget() { return m_inputBoxWidget; }
+  
+  // Toggle between old and new chat widget
+  void SetUseVirtualizedChat(bool use);
+  bool IsUsingVirtualizedChat() const { return m_useVirtualizedChat; }
   wxListCtrl *GetMemberList() { return m_memberList; }
   StatusBarManager *GetStatusBarManager() { return m_statusBar; }
 
@@ -169,7 +175,9 @@ private:
   wxPanel *m_chatPanel;
   WelcomeChat *m_welcomeChat;
   ChatViewWidget *m_chatViewWidget;
+  VirtualizedChatWidget *m_virtualizedChatWidget;
   InputBoxWidget *m_inputBoxWidget;
+  bool m_useVirtualizedChat = true;  // Use new virtualized widget by default
 
   // Right panel - Member list
   wxPanel *m_rightPanel;
