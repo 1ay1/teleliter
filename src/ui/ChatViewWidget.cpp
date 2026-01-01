@@ -375,10 +375,6 @@ void ChatViewWidget::RefreshDisplay() {
   // Only scroll to bottom if we're actually at bottom AND not loading history
   // When loading history, user is scrolling up - never force scroll down
   bool shouldScrollToBottom = actuallyAtBottom && !wasLoadingHistory;
-  
-  // For history loading: we use m_scrollAnchorMessageId which was set BEFORE
-  // adding new messages to track where to scroll back to
-  int64_t anchorMessageId = wasLoadingHistory ? m_scrollAnchorMessageId : 0;
 
   // Clear display but keep message storage
   m_chatArea->Clear();
@@ -447,22 +443,12 @@ void ChatViewWidget::RefreshDisplay() {
   EndBatchUpdate();
 
   // Scroll restoration - keep it simple
+  // Note: BufferOlderMessages handles its own scroll restoration for history loading
   if (wasLoadingHistory) {
-    // History was prepended - scroll to keep the same message visible
     m_isLoadingHistory = false;
-    m_scrollAnchorMessageId = 0;  // Clear anchor after use
-    if (anchorMessageId != 0) {
-      CallAfter([this, anchorMessageId]() {
-        if (!m_chatArea || !m_chatArea->GetDisplay())
-          return;
-        auto it = m_messageRangeMap.find(anchorMessageId);
-        if (it != m_messageRangeMap.end()) {
-          // Scroll to show the anchor message at the top
-          m_chatArea->GetDisplay()->ShowPosition(it->second.first);
-        }
-      });
-    }
-  } else if (shouldScrollToBottom) {
+  }
+  
+  if (shouldScrollToBottom) {
     // Only scroll to bottom if user was already there
     CallAfter([this]() {
       if (m_chatArea) {
@@ -954,8 +940,9 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
 }
 
 void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &messages) {
-  // Scroll-based lazy loading - immediately render older messages
-  // and preserve scroll position so user doesn't notice the prepend
+  // Scroll-based lazy loading with INCREMENTAL PREPENDING
+  // Instead of re-rendering everything, we prepend only new messages
+  // and adjust scroll position to maintain visual stability
   HideLoadingIndicator();
   
   if (messages.empty()) {
@@ -963,18 +950,6 @@ void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &message
     return;
   }
 
-  size_t addedCount = 0;
-  
-  // BEFORE adding new messages, record the first (oldest) currently displayed message
-  // This becomes our scroll anchor - we'll scroll back to it after rendering
-  {
-    std::lock_guard<std::mutex> lock(m_messagesMutex);
-    if (!m_messages.empty()) {
-      // Messages are sorted by ID, first one is the oldest currently displayed
-      m_scrollAnchorMessageId = m_messages.front().id;
-    }
-  }
-  
   // Get existing message IDs to avoid duplicates
   std::set<int64_t> existingIds;
   {
@@ -984,23 +959,133 @@ void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &message
     }
   }
   
-  // Collect new messages
+  // Collect and sort new messages (oldest first for prepending)
   std::vector<MessageInfo> newMessages;
   for (const auto &msg : messages) {
     if (msg.id != 0 && existingIds.find(msg.id) == existingIds.end()) {
       newMessages.push_back(msg);
-      addedCount++;
     }
   }
   
-  if (addedCount == 0) {
+  if (newMessages.empty()) {
     m_isLoadingHistory = false;
     return;
   }
   
-  CVWLOG("BufferOlderMessages: adding " << addedCount << " messages immediately");
+  // Sort new messages by ID (ascending - oldest first)
+  std::sort(newMessages.begin(), newMessages.end(),
+            [](const MessageInfo &a, const MessageInfo &b) {
+              return a.id < b.id;
+            });
   
-  // Add to main storage
+  CVWLOG("BufferOlderMessages: prepending " << newMessages.size() << " messages incrementally");
+  
+  // Capture current scroll state BEFORE modifying anything
+  wxRichTextCtrl *display = m_chatArea ? m_chatArea->GetDisplay() : nullptr;
+  if (!display) {
+    m_isLoadingHistory = false;
+    return;
+  }
+  
+  // Note: We don't need scroll metrics here - we use ShowPosition after rendering
+  
+  // Freeze the display for smooth update
+  display->Freeze();
+  display->BeginSuppressUndo();
+  
+  // Move insertion point to the very beginning
+  display->SetInsertionPoint(0);
+  
+  // Temporarily reset formatting state for the prepended messages
+  m_messageFormatter->ResetGroupingState();
+  m_lastDisplayedSender.Clear();
+  m_lastDisplayedTimestamp = 0;
+  
+  // Calculate username width for new messages
+  std::vector<wxString> usernames;
+  for (const auto &msg : newMessages) {
+    if (!msg.senderName.IsEmpty()) {
+      usernames.push_back(msg.senderName);
+    }
+  }
+  // Add existing usernames too for consistent width
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    for (const auto &msg : m_messages) {
+      if (!msg.senderName.IsEmpty()) {
+        usernames.push_back(msg.senderName);
+      }
+    }
+  }
+  m_messageFormatter->CalculateUsernameWidth(usernames);
+  
+  // Render new messages at the beginning
+  // We need to track position offsets for existing spans
+  long prependedLength = 0;
+  
+  for (size_t i = 0; i < newMessages.size(); i++) {
+    const auto &msg = newMessages[i];
+    
+    long startPos = display->GetInsertionPoint();
+    
+    // Render the message content
+    DoRenderMessage(msg);
+    
+    // Add newline after each message except the last one in the batch
+    // The last one will connect to the existing first message
+    display->WriteText("\n");
+    
+    long endPos = display->GetInsertionPoint();
+    prependedLength = endPos;  // Track total prepended content
+    
+    // Record message range (will need to be adjusted later)
+    if (msg.id != 0) {
+      m_messageRangeMap[msg.id] = {startPos, endPos - 1};  // -1 to exclude newline
+    }
+  }
+  
+  // Build a set of new message IDs for O(1) lookup
+  std::set<int64_t> newMessageIds;
+  for (const auto &msg : newMessages) {
+    if (msg.id != 0) {
+      newMessageIds.insert(msg.id);
+    }
+  }
+  
+  // Update all existing message ranges by adding the prepended offset
+  for (auto &entry : m_messageRangeMap) {
+    // Skip the messages we just added (O(1) lookup)
+    if (newMessageIds.count(entry.first) == 0) {
+      entry.second.first += prependedLength;
+      entry.second.second += prependedLength;
+    }
+  }
+  
+  // Update media spans with offset
+  for (auto &span : m_mediaSpans) {
+    span.startPos += prependedLength;
+    span.endPos += prependedLength;
+  }
+  
+  // Update edit spans with offset
+  for (auto &span : m_editSpans) {
+    span.startPos += prependedLength;
+    span.endPos += prependedLength;
+  }
+  
+  // Update link spans with offset
+  for (auto &span : m_linkSpans) {
+    span.startPos += prependedLength;
+    span.endPos += prependedLength;
+  }
+  
+  // Update read marker spans with offset
+  for (auto &span : m_readMarkerSpans) {
+    span.startPos += prependedLength;
+    span.endPos += prependedLength;
+  }
+  
+  // Add new messages to storage
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
     for (const auto &msg : newMessages) {
@@ -1023,9 +1108,37 @@ void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &message
     }
   }
   
-  // m_isLoadingHistory stays true - RefreshDisplay will handle scroll restoration
-  // and then clear it
-  RefreshDisplay();
+  display->EndSuppressUndo();
+  display->Thaw();
+  
+  // Adjust scroll position to maintain visual stability
+  // Use ShowPosition to scroll to the first "old" message (now shifted by prependedLength)
+  // This is more reliable than trying to calculate pixel offsets
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    if (!m_messages.empty()) {
+      // Find the first message that was there before (not in newMessages)
+      // Use the newMessageIds set for O(1) lookup
+      for (const auto &msg : m_messages) {
+        if (msg.id != 0 && newMessageIds.count(msg.id) == 0) {
+          // This is the first "old" message - scroll to it
+          auto it = m_messageRangeMap.find(msg.id);
+          if (it != m_messageRangeMap.end()) {
+            // Use CallAfter to ensure layout is complete before scrolling
+            long targetPos = it->second.first;
+            CallAfter([this, targetPos]() {
+              if (m_chatArea && m_chatArea->GetDisplay()) {
+                m_chatArea->GetDisplay()->ShowPosition(targetPos);
+              }
+            });
+          }
+          break;
+        }
+      }
+    }
+  }
+  
+  m_isLoadingHistory = false;
 }
 
 void ChatViewWidget::RenderBufferedMessages() {
@@ -2106,10 +2219,10 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
     return;
   }
   
-  // Cooldown: 500ms between loads for smoother experience
+  // Cooldown: 300ms between loads for smoother experience
   static wxLongLong lastLoadTime = 0;
   wxLongLong now = wxGetLocalTimeMillis();
-  if (now - lastLoadTime < 500) {
+  if (now - lastLoadTime < 300) {
     return;
   }
   
@@ -2122,14 +2235,14 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
   int scrollRange = display->GetScrollRange(wxVERTICAL);
   int thumbSize = display->GetScrollThumb(wxVERTICAL);
   
-  // Trigger when within top 20% for smoother scrolling experience
-  // This preloads before user hits the very top
+  // Trigger when within top 30% for smoother scrolling experience
+  // This preloads before user hits the very top, making it feel instant
   int maxScroll = scrollRange - thumbSize;
   bool nearTop = false;
   
   if (maxScroll > 0) {
     float scrollPercent = (float)scrollPos / (float)maxScroll;
-    nearTop = scrollPercent < 0.20f;
+    nearTop = scrollPercent < 0.30f;
   } else {
     // Very short content - always near top
     nearTop = true;

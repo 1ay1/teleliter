@@ -286,7 +286,6 @@ private:
   bool m_isLoading;
   bool m_isLoadingHistory; // specific flag for loading older messages
   bool m_allHistoryLoaded; // flag to stop requesting when no more messages
-  int64_t m_scrollAnchorMessageId = 0; // Message ID to scroll back to after loading history
 
   // Highlight timer for fade animation on newly read messages
   wxTimer m_highlightTimer;
