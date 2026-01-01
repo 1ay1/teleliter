@@ -958,36 +958,7 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
       }
     }
     
-    // Enforce message limit - keep only the most recent messages
-    if (m_messageLimit > 0 && m_messages.size() > static_cast<size_t>(m_messageLimit)) {
-      // Sort first to ensure we keep the newest
-      std::sort(m_messages.begin(), m_messages.end(),
-                [](const MessageInfo &a, const MessageInfo &b) {
-                  if (a.date != b.date) return a.date < b.date;
-                  return a.id < b.id;
-                });
-      
-      // Remove oldest messages
-      size_t toRemove = m_messages.size() - m_messageLimit;
-      for (size_t i = 0; i < toRemove; i++) {
-        int64_t msgId = m_messages[i].id;
-        if (msgId != 0) {
-          m_displayedMessageIds.erase(msgId);
-          m_messageIdToIndex.erase(msgId);
-        }
-      }
-      m_messages.erase(m_messages.begin(), m_messages.begin() + toRemove);
-      
-      // Rebuild index
-      m_messageIdToIndex.clear();
-      for (size_t i = 0; i < m_messages.size(); i++) {
-        if (m_messages[i].id != 0) {
-          m_messageIdToIndex[m_messages[i].id] = i;
-        }
-      }
-      
-      CVWLOG("DisplayMessages: trimmed to " << m_messages.size() << " messages (limit=" << m_messageLimit << ")");
-    }
+
   }
   // Lock released - now safe to make external calls
 

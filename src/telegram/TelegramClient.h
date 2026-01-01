@@ -123,8 +123,6 @@ public:
   void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 30);
   void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
   void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 30);
-  void LoadMessagesBatch(int64_t chatId, int64_t fromMessageId, int remainingLimit,
-                         std::shared_ptr<std::vector<MessageInfo>> accumulator);
   
   // Lazy loading state for messages
   bool HasMoreMessages(int64_t chatId) const;

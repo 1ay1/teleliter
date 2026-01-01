@@ -1002,126 +1002,52 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
         }
       }
 
-      // Step 3: Start loading messages - TDLib limits to 100 per request
-      // So we need to load in batches to reach the desired limit
-      LoadMessagesBatch(chatId, 0, limit, std::make_shared<std::vector<MessageInfo>>());
-    });
-  });
-}
+      // Step 3: Fetch 100 messages (TDLib max per request)
+      auto historyRequest = td_api::make_object<td_api::getChatHistory>();
+      historyRequest->chat_id_ = chatId;
+      historyRequest->from_message_id_ = 0;
+      historyRequest->offset_ = 0;
+      historyRequest->limit_ = 100;
+      historyRequest->only_local_ = false;
 
-// Helper function to load messages in batches (TDLib limits to 100 per request)
-void TelegramClient::LoadMessagesBatch(int64_t chatId, int64_t fromMessageId, 
-                                        int remainingLimit,
-                                        std::shared_ptr<std::vector<MessageInfo>> accumulator) {
-  if (remainingLimit <= 0) {
-    // We've loaded enough messages, send to UI
-    if (!accumulator->empty()) {
-      std::vector<MessageInfo> msgList = *accumulator;
-      {
-        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-        m_messages[chatId] = msgList;
-      }
-      PostToMainThread([this, chatId, msgList]() {
-        if (m_mainFrame) {
-          m_mainFrame->OnMessagesLoaded(chatId, msgList);
-        }
-      });
-    }
-    return;
-  }
+      Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+        TDLOG("getChatHistory response for chatId=%lld", (long long)chatId);
 
-  // TDLib limits to 100 messages per request
-  int batchSize = std::min(remainingLimit, 100);
-  
-  auto historyRequest = td_api::make_object<td_api::getChatHistory>();
-  historyRequest->chat_id_ = chatId;
-  historyRequest->from_message_id_ = fromMessageId;
-  historyRequest->offset_ = 0;
-  historyRequest->limit_ = batchSize;
-  historyRequest->only_local_ = false;
+        if (result->get_id() == td_api::messages::ID) {
+          auto messages = td_api::move_object_as<td_api::messages>(result);
+          TDLOG("Got %d total, %zu in batch", messages->total_count_, messages->messages_.size());
 
-  Send(std::move(historyRequest), [this, chatId, remainingLimit, batchSize, accumulator](
-                                       td_api::object_ptr<td_api::Object> result) {
-    if (result->get_id() == td_api::messages::ID) {
-      auto messages = td_api::move_object_as<td_api::messages>(result);
-      size_t count = messages->messages_.size();
-      TDLOG("LoadMessagesBatch: got %zu messages, remaining limit=%d", count, remainingLimit);
+          std::vector<MessageInfo> msgList;
+          for (auto &msg : messages->messages_) {
+            if (msg) {
+              msgList.push_back(ConvertMessage(msg.get()));
+            }
+          }
 
-      if (count == 0) {
-        // No more messages available, mark as all loaded and send what we have
-        SetAllMessagesLoaded(chatId, true);
-        if (!accumulator->empty()) {
-          std::vector<MessageInfo> msgList = *accumulator;
+          // Sort by date/id
+          std::sort(msgList.begin(), msgList.end(),
+                    [](const MessageInfo &a, const MessageInfo &b) {
+                      if (a.date != b.date) return a.date < b.date;
+                      return a.id < b.id;
+                    });
+
+          // Store and display
           {
             std::unique_lock<std::shared_mutex> lock(m_dataMutex);
             m_messages[chatId] = msgList;
           }
+
           PostToMainThread([this, chatId, msgList]() {
             if (m_mainFrame) {
               m_mainFrame->OnMessagesLoaded(chatId, msgList);
             }
           });
-        }
-        return;
-      }
-
-      // Add messages to accumulator
-      int64_t oldestMsgId = 0;
-      for (auto &msg : messages->messages_) {
-        if (msg) {
-          accumulator->push_back(ConvertMessage(msg.get()));
-          oldestMsgId = msg->id_;
-        }
-      }
-
-      int newRemaining = remainingLimit - static_cast<int>(count);
-      
-      // If we got fewer messages than requested, we've hit the end
-      if (static_cast<int>(count) < batchSize) {
-        SetAllMessagesLoaded(chatId, true);
-        newRemaining = 0;
-      }
-
-      // Sort accumulated messages by date/id
-      std::sort(accumulator->begin(), accumulator->end(),
-                [](const MessageInfo &a, const MessageInfo &b) {
-                  if (a.date != b.date) return a.date < b.date;
-                  return a.id < b.id;
-                });
-
-      // Send current batch to UI for immediate display
-      std::vector<MessageInfo> msgList = *accumulator;
-      {
-        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-        m_messages[chatId] = msgList;
-      }
-      PostToMainThread([this, chatId, msgList]() {
-        if (m_mainFrame) {
-          m_mainFrame->OnMessagesLoaded(chatId, msgList);
+        } else if (result->get_id() == td_api::error::ID) {
+          auto error = td_api::move_object_as<td_api::error>(result);
+          TDLOG("getChatHistory ERROR: %d - %s", error->code_, error->message_.c_str());
         }
       });
-
-      // Continue loading more if needed
-      if (newRemaining > 0 && oldestMsgId != 0) {
-        LoadMessagesBatch(chatId, oldestMsgId, newRemaining, accumulator);
-      }
-    } else if (result->get_id() == td_api::error::ID) {
-      auto error = td_api::move_object_as<td_api::error>(result);
-      TDLOG("LoadMessagesBatch ERROR: %d - %s", error->code_, error->message_.c_str());
-      // Send what we have so far
-      if (!accumulator->empty()) {
-        std::vector<MessageInfo> msgList = *accumulator;
-        {
-          std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-          m_messages[chatId] = msgList;
-        }
-        PostToMainThread([this, chatId, msgList]() {
-          if (m_mainFrame) {
-            m_mainFrame->OnMessagesLoaded(chatId, msgList);
-          }
-        });
-      }
-    }
+    });
   });
 }
 

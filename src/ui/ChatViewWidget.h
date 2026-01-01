@@ -33,10 +33,6 @@ public:
   // Add older messages to the display (called when history is loaded)
   void BufferOlderMessages(const std::vector<MessageInfo> &messages);
   
-  // Set the maximum number of messages to display
-  void SetMessageLimit(int limit) { m_messageLimit = limit; }
-  int GetMessageLimit() const { return m_messageLimit; }
-  
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
 
@@ -291,9 +287,6 @@ private:
   bool m_isLoading;
   std::atomic<bool> m_isLoadingHistory{false}; // specific flag for loading older messages (atomic for thread safety)
   bool m_allHistoryLoaded; // flag to stop requesting when no more messages
-  
-  // Message limit - maximum number of messages to display
-  int m_messageLimit = 200;  // Default, can be changed via SetMessageLimit
   
   // Instance-level debounce timers
   wxLongLong m_lastHistoryLoadTime = 0;

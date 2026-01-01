@@ -14,7 +14,6 @@
 #include <wx/filename.h>
 #include <wx/fontpicker.h>
 #include <wx/settings.h>
-#include <wx/spinctrl.h>
 #include <wx/statbox.h>
 
 // Helper function to format last seen time
@@ -140,11 +139,6 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   if (config) {
     bool sendReadReceipts = config->ReadBool("/Privacy/SendReadReceipts", true);
     m_telegramClient->SetSendReadReceipts(sendReadReceipts);
-    
-    // Load message history limit
-    m_messageHistoryLimit = config->ReadLong("/Chat/MessageHistoryLimit", DEFAULT_MESSAGE_HISTORY_LIMIT);
-    if (m_messageHistoryLimit < 50) m_messageHistoryLimit = 50;
-    if (m_messageHistoryLimit > 1000) m_messageHistoryLimit = 1000;
   }
 
   // Connect status bar to telegram client
@@ -491,7 +485,6 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
   // Uses ChatArea internally which handles colors and font consistently with
   // WelcomeChat
   m_chatViewWidget = new ChatViewWidget(parent, this);
-  m_chatViewWidget->SetMessageLimit(m_messageHistoryLimit);
   sizer->Add(m_chatViewWidget, 1, wxEXPAND);
 
   // Hide chat widget initially - welcome chat is shown
@@ -890,7 +883,7 @@ void MainFrame::OnSavedMessages(wxCommandEvent &event) {
 
 void MainFrame::OnPreferences(wxCommandEvent &event) {
   wxDialog dialog(this, wxID_ANY, "Preferences", wxDefaultPosition,
-                  wxSize(500, 420));
+                  wxSize(500, 350));
   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
 
   // Fonts section
@@ -952,26 +945,6 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
 
   mainSizer->Add(fontsSizer, 0, wxEXPAND | wxALL, 10);
 
-  // Chat section
-  wxStaticBoxSizer *chatSizer =
-      new wxStaticBoxSizer(wxVERTICAL, &dialog, "Chat");
-
-  wxBoxSizer *historyLimitSizer = new wxBoxSizer(wxHORIZONTAL);
-  wxStaticText *historyLimitLabel =
-      new wxStaticText(&dialog, wxID_ANY, "Message History Limit:");
-  historyLimitLabel->SetMinSize(wxSize(150, -1));
-  
-  wxSpinCtrl *historyLimitSpinner = new wxSpinCtrl(&dialog, wxID_ANY, 
-      wxEmptyString, wxDefaultPosition, wxSize(100, -1), 
-      wxSP_ARROW_KEYS, 50, 1000, m_messageHistoryLimit);
-  historyLimitSpinner->SetToolTip("Maximum number of messages to load per chat (50-1000)");
-  
-  historyLimitSizer->Add(historyLimitLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
-  historyLimitSizer->Add(historyLimitSpinner, 0, wxALIGN_CENTER_VERTICAL);
-  chatSizer->Add(historyLimitSizer, 0, wxEXPAND | wxALL, 10);
-
-  mainSizer->Add(chatSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
-
   // Privacy section
   wxStaticBoxSizer *privacySizer =
       new wxStaticBoxSizer(wxVERTICAL, &dialog, "Privacy");
@@ -999,14 +972,10 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
 
   if (dialog.ShowModal() == wxID_OK) {
     bool sendReadReceipts = readReceiptsCheckbox->GetValue();
-    int newHistoryLimit = historyLimitSpinner->GetValue();
 
     if (m_telegramClient) {
       m_telegramClient->SetSendReadReceipts(sendReadReceipts);
     }
-    
-    // Update message history limit
-    m_messageHistoryLimit = newHistoryLimit;
 
     // Get selected fonts
     wxFont newChatFont = chatFontPicker->GetSelectedFont();
@@ -1061,7 +1030,6 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
     wxConfigBase *config = wxConfigBase::Get();
     if (config) {
       config->Write("/Privacy/SendReadReceipts", sendReadReceipts);
-      config->Write("/Chat/MessageHistoryLimit", m_messageHistoryLimit);
 
       // Save fonts
       if (m_chatFont.IsOk()) {
@@ -1305,7 +1273,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         }
         
         m_telegramClient->OpenChatAndLoadMessages(
-            chatId, m_messageHistoryLimit); // Load up to the configured message limit
+            chatId, 100); // Load 100 messages
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
       } else {

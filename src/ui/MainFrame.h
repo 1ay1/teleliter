@@ -1,9 +1,6 @@
 #ifndef MAINFRAME_H
 #define MAINFRAME_H
 
-// Default message history limit
-static const int DEFAULT_MESSAGE_HISTORY_LIMIT = 200;
-
 #include <map>
 #include <set>
 #include <vector>
@@ -190,9 +187,6 @@ private:
   wxFont m_chatFont; // For chat display and input box
   wxFont
       m_uiFont; // For everything else (tree, member list, status bar, labels)
-
-  // Settings
-  int m_messageHistoryLimit = DEFAULT_MESSAGE_HISTORY_LIMIT;
 
   // State
   bool m_showChatList;
