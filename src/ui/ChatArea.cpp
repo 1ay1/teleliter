@@ -59,16 +59,10 @@ void ChatArea::CreateUI() {
   // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
   m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
 
-  // Set font and line spacing in default style to prevent text overlap
-  wxRichTextAttr defaultStyle;
-  defaultStyle.SetFont(m_chatFont);
-  // Set proper line spacing to avoid overlap issues
-  defaultStyle.SetLineSpacing(
-      10); // 10 = single line spacing (wxTEXT_ATTR_LINE_SPACING_NORMAL)
-  defaultStyle.SetParagraphSpacingBefore(0);
-  defaultStyle.SetParagraphSpacingAfter(0);
-  m_chatDisplay->SetDefaultStyle(defaultStyle);
-  m_chatDisplay->SetBasicStyle(defaultStyle);
+  // Build cached default style and apply it
+  RebuildCachedStyle();
+  m_chatDisplay->SetDefaultStyle(m_cachedDefaultStyle);
+  m_chatDisplay->SetBasicStyle(m_cachedDefaultStyle);
 
   sizer->Add(m_chatDisplay, 1, wxEXPAND);
   SetSizer(sizer);
@@ -93,14 +87,21 @@ void ChatArea::ResetStyles() {
   // Force end any potentially open style blocks
   m_chatDisplay->EndAllStyles();
 
-  // Reset text styles - only set font, let colors be native
-  wxRichTextAttr defaultStyle;
-  defaultStyle.SetFont(m_chatFont);
-  defaultStyle.SetFontUnderlined(false);
-  defaultStyle.SetFontWeight(wxFONTWEIGHT_NORMAL);
-  defaultStyle.SetFontStyle(wxFONTSTYLE_NORMAL);
-  m_chatDisplay->SetDefaultStyle(defaultStyle);
-  m_chatDisplay->SetBasicStyle(defaultStyle);
+  // Use cached default style to avoid repeated allocations
+  // The style is rebuilt only when font changes (in SetChatFont)
+  m_chatDisplay->SetDefaultStyle(m_cachedDefaultStyle);
+}
+
+void ChatArea::RebuildCachedStyle() {
+  // Rebuild the cached default style - called when font changes
+  m_cachedDefaultStyle = wxRichTextAttr();
+  m_cachedDefaultStyle.SetFont(m_chatFont);
+  m_cachedDefaultStyle.SetFontUnderlined(false);
+  m_cachedDefaultStyle.SetFontWeight(wxFONTWEIGHT_NORMAL);
+  m_cachedDefaultStyle.SetFontStyle(wxFONTSTYLE_NORMAL);
+  m_cachedDefaultStyle.SetLineSpacing(10);
+  m_cachedDefaultStyle.SetParagraphSpacingBefore(0);
+  m_cachedDefaultStyle.SetParagraphSpacingAfter(0);
 }
 
 void ChatArea::SetChatFont(const wxFont &font) {
@@ -108,6 +109,7 @@ void ChatArea::SetChatFont(const wxFont &font) {
     return;
 
   m_chatFont = font;
+  RebuildCachedStyle();
 
   if (m_chatDisplay) {
     // Freeze to prevent rendering issues during font change

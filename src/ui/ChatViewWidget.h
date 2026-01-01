@@ -1,6 +1,7 @@
 #ifndef CHATVIEWWIDGET_H
 #define CHATVIEWWIDGET_H
 
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <set>
@@ -29,20 +30,13 @@ public:
   void DisplayMessages(const std::vector<MessageInfo> &messages);
   void ClearMessages();
   
-  // Scroll-based lazy loading - immediately renders older messages with scroll preservation
+  // Add older messages to the display (called when history is loaded)
   void BufferOlderMessages(const std::vector<MessageInfo> &messages);
-  void RenderBufferedMessages();  // Legacy - now a no-op, BufferOlderMessages renders immediately
-  size_t GetBufferedMessageCount() const { return 0; }  // Always 0 - no buffering
-  bool HasBufferedMessages() const { return false; }    // Always false - no buffering
   
-  // Virtual window display - only renders a subset of messages for performance
-  void RefreshDisplayWindow();  // Render only messages in current window
-  void AdjustDisplayWindow(bool scrollingUp);  // Shift window when scrolling
+  // Set the maximum number of messages to display
+  void SetMessageLimit(int limit) { m_messageLimit = limit; }
+  int GetMessageLimit() const { return m_messageLimit; }
   
-private:
-  void RefreshDisplayInternal(bool preserveWindowPosition);  // Internal refresh with window control
-  
-public:
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
 
@@ -277,9 +271,11 @@ private:
 
   // Pending downloads - just tracks which fileIds are being downloaded
   std::set<int32_t> m_pendingDownloads;
+  mutable std::mutex m_pendingDownloadsMutex;  // Protects m_pendingDownloads
 
   // Pending opens - fileIds that should be opened when download completes
   std::set<int32_t> m_pendingOpens;
+  mutable std::mutex m_pendingOpensMutex;  // Protects m_pendingOpens
 
   // Debounced refresh timer - coalesces multiple rapid message updates
   wxTimer m_refreshTimer;
@@ -293,14 +289,15 @@ private:
   bool m_wasAtBottom;
   int m_newMessageCount;
   bool m_isLoading;
-  bool m_isLoadingHistory; // specific flag for loading older messages
+  std::atomic<bool> m_isLoadingHistory{false}; // specific flag for loading older messages (atomic for thread safety)
   bool m_allHistoryLoaded; // flag to stop requesting when no more messages
   
-  // Virtual window - limit displayed messages for performance
-  // Only render MAX_DISPLAYED_MESSAGES, keep rest in m_messages storage
-  static const size_t MAX_DISPLAYED_MESSAGES = 150;
-  size_t m_displayWindowStart = 0;  // Index in m_messages where display window starts
-  size_t m_displayWindowEnd = 0;    // Index in m_messages where display window ends
+  // Message limit - maximum number of messages to display
+  int m_messageLimit = 200;  // Default, can be changed via SetMessageLimit
+  
+  // Instance-level debounce timers
+  wxLongLong m_lastHistoryLoadTime = 0;
+  wxLongLong m_lastScrollCheckTime = 0;
 
   // Highlight timer for fade animation on newly read messages
   wxTimer m_highlightTimer;

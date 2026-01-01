@@ -175,6 +175,7 @@ protected:
   void SetupColors();
   void CreateUI();
   void OnSetCursor(wxSetCursorEvent &event);
+  void RebuildCachedStyle();  // Rebuild cached default style after font change
 
   // Helper to schedule a coalesced refresh (avoids excessive repaints)
   void ScheduleRefresh();
@@ -182,6 +183,7 @@ protected:
 
   wxRichTextCtrl *m_chatDisplay;
   wxFont m_chatFont;
+  wxRichTextAttr m_cachedDefaultStyle;  // Cached for fast ResetStyles()
   wxString m_currentUsername; // Current user gets gray color
 
   // Semantic colors that have no system equivalent

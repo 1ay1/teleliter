@@ -1,5 +1,4 @@
 #include "MainFrame.h"
-#include "VirtualizedChatWidget.h"
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
 #include "ChatListWidget.h"
@@ -15,6 +14,7 @@
 #include <wx/filename.h>
 #include <wx/fontpicker.h>
 #include <wx/settings.h>
+#include <wx/spinctrl.h>
 #include <wx/statbox.h>
 
 // Helper function to format last seen time
@@ -140,6 +140,11 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   if (config) {
     bool sendReadReceipts = config->ReadBool("/Privacy/SendReadReceipts", true);
     m_telegramClient->SetSendReadReceipts(sendReadReceipts);
+    
+    // Load message history limit
+    m_messageHistoryLimit = config->ReadLong("/Chat/MessageHistoryLimit", DEFAULT_MESSAGE_HISTORY_LIMIT);
+    if (m_messageHistoryLimit < 50) m_messageHistoryLimit = 50;
+    if (m_messageHistoryLimit > 1000) m_messageHistoryLimit = 1000;
   }
 
   // Connect status bar to telegram client
@@ -211,7 +216,6 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
     if (sizer) {
       sizer->Show(m_welcomeChat, true);
       sizer->Show(m_chatViewWidget, false);
-      sizer->Show(m_virtualizedChatWidget, false);
       m_chatPanel->Layout();
     }
   }
@@ -483,26 +487,15 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
   m_welcomeChat = new WelcomeChat(parent, this);
   sizer->Add(m_welcomeChat, 1, wxEXPAND);
 
-  // Chat view widget (old implementation - hidden initially)
+  // Chat view widget - HexChat-style terminal look
   // Uses ChatArea internally which handles colors and font consistently with
   // WelcomeChat
   m_chatViewWidget = new ChatViewWidget(parent, this);
+  m_chatViewWidget->SetMessageLimit(m_messageHistoryLimit);
   sizer->Add(m_chatViewWidget, 1, wxEXPAND);
 
-  // Virtualized chat widget (new high-performance implementation)
-  m_virtualizedChatWidget = new VirtualizedChatWidget(parent, this);
-  sizer->Add(m_virtualizedChatWidget, 1, wxEXPAND);
-  
-  // Set up callbacks for virtualized widget
-  m_virtualizedChatWidget->SetLoadMoreCallback([this](int64_t oldestId) {
-    if (m_telegramClient && m_currentChatId != 0) {
-      m_telegramClient->LoadMoreMessages(m_currentChatId, oldestId, 20);
-    }
-  });
-
-  // Hide both chat widgets initially - welcome chat is shown
+  // Hide chat widget initially - welcome chat is shown
   sizer->Show(m_chatViewWidget, false);
-  sizer->Show(m_virtualizedChatWidget, false);
   sizer->Show(m_welcomeChat, true);
 
   // Input box widget - uses native styling
@@ -897,7 +890,7 @@ void MainFrame::OnSavedMessages(wxCommandEvent &event) {
 
 void MainFrame::OnPreferences(wxCommandEvent &event) {
   wxDialog dialog(this, wxID_ANY, "Preferences", wxDefaultPosition,
-                  wxSize(500, 350));
+                  wxSize(500, 420));
   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
 
   // Fonts section
@@ -959,6 +952,26 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
 
   mainSizer->Add(fontsSizer, 0, wxEXPAND | wxALL, 10);
 
+  // Chat section
+  wxStaticBoxSizer *chatSizer =
+      new wxStaticBoxSizer(wxVERTICAL, &dialog, "Chat");
+
+  wxBoxSizer *historyLimitSizer = new wxBoxSizer(wxHORIZONTAL);
+  wxStaticText *historyLimitLabel =
+      new wxStaticText(&dialog, wxID_ANY, "Message History Limit:");
+  historyLimitLabel->SetMinSize(wxSize(150, -1));
+  
+  wxSpinCtrl *historyLimitSpinner = new wxSpinCtrl(&dialog, wxID_ANY, 
+      wxEmptyString, wxDefaultPosition, wxSize(100, -1), 
+      wxSP_ARROW_KEYS, 50, 1000, m_messageHistoryLimit);
+  historyLimitSpinner->SetToolTip("Maximum number of messages to load per chat (50-1000)");
+  
+  historyLimitSizer->Add(historyLimitLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
+  historyLimitSizer->Add(historyLimitSpinner, 0, wxALIGN_CENTER_VERTICAL);
+  chatSizer->Add(historyLimitSizer, 0, wxEXPAND | wxALL, 10);
+
+  mainSizer->Add(chatSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
   // Privacy section
   wxStaticBoxSizer *privacySizer =
       new wxStaticBoxSizer(wxVERTICAL, &dialog, "Privacy");
@@ -986,10 +999,14 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
 
   if (dialog.ShowModal() == wxID_OK) {
     bool sendReadReceipts = readReceiptsCheckbox->GetValue();
+    int newHistoryLimit = historyLimitSpinner->GetValue();
 
     if (m_telegramClient) {
       m_telegramClient->SetSendReadReceipts(sendReadReceipts);
     }
+    
+    // Update message history limit
+    m_messageHistoryLimit = newHistoryLimit;
 
     // Get selected fonts
     wxFont newChatFont = chatFontPicker->GetSelectedFont();
@@ -1044,6 +1061,7 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
     wxConfigBase *config = wxConfigBase::Get();
     if (config) {
       config->Write("/Privacy/SendReadReceipts", sendReadReceipts);
+      config->Write("/Chat/MessageHistoryLimit", m_messageHistoryLimit);
 
       // Save fonts
       if (m_chatFont.IsOk()) {
@@ -1061,9 +1079,6 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
 void MainFrame::OnClearWindow(wxCommandEvent &event) {
   if (m_chatViewWidget) {
     m_chatViewWidget->ClearMessages();
-  }
-  if (m_virtualizedChatWidget) {
-    m_virtualizedChatWidget->ClearMessages();
   }
 }
 
@@ -1142,7 +1157,6 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       if (sizer) {
         sizer->Show(m_welcomeChat, true);
         sizer->Show(m_chatViewWidget, false);
-        sizer->Show(m_virtualizedChatWidget, false);
       }
       m_chatPanel->Layout();
 
@@ -1201,13 +1215,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       wxSizer *sizer = m_chatPanel->GetSizer();
       if (sizer) {
         sizer->Show(m_welcomeChat, false);
-        if (m_useVirtualizedChat) {
-          sizer->Show(m_chatViewWidget, false);
-          sizer->Show(m_virtualizedChatWidget, true);
-        } else {
-          sizer->Show(m_chatViewWidget, true);
-          sizer->Show(m_virtualizedChatWidget, false);
-        }
+        sizer->Show(m_chatViewWidget, true);
       }
       m_chatPanel->Layout();
 
@@ -1236,9 +1244,6 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         DBGLOG("Test chat selected, loading dummy data");
         // Load dummy data for testing
         m_chatViewWidget->ClearMessages();
-        if (m_virtualizedChatWidget) {
-          m_virtualizedChatWidget->ClearMessages();
-        }
         m_chatViewWidget->SetTopicText("Test Chat",
                                        "Demo mode - Testing features");
         PopulateDummyData();
@@ -1247,9 +1252,6 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         // Clear the view and load messages (OpenChatAndLoadMessages handles
         // opening first)
         m_chatViewWidget->ClearMessages();
-        if (m_virtualizedChatWidget) {
-          m_virtualizedChatWidget->ClearMessages();
-        }
 
         // Set topic bar with chat info (HexChat-style)
         bool chatFound = false;
@@ -1303,7 +1305,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         }
         
         m_telegramClient->OpenChatAndLoadMessages(
-            chatId, 30); // Load 30 initially (lazy loading), more on scroll
+            chatId, m_messageHistoryLimit); // Load up to the configured message limit
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
       } else {
@@ -1325,13 +1327,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
       wxSizer *sizer = m_chatPanel->GetSizer();
       if (sizer) {
         sizer->Show(m_welcomeChat, false);
-        if (m_useVirtualizedChat) {
-          sizer->Show(m_chatViewWidget, false);
-          sizer->Show(m_virtualizedChatWidget, true);
-        } else {
-          sizer->Show(m_chatViewWidget, true);
-          sizer->Show(m_virtualizedChatWidget, false);
-        }
+        sizer->Show(m_chatViewWidget, true);
       }
       m_chatPanel->Layout();
 
@@ -1473,7 +1469,6 @@ void MainFrame::OnLoggedOut() {
   if (sizer) {
     sizer->Show(m_welcomeChat, true);
     sizer->Show(m_chatViewWidget, false);
-    sizer->Show(m_virtualizedChatWidget, false);
   }
   m_chatPanel->Layout();
   if (m_chatListWidget) {
@@ -1591,8 +1586,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
     return; // Not the current chat, ignore
   }
 
-  if (!m_chatViewWidget && !m_virtualizedChatWidget) {
-    DBGLOG("ERROR: both chat widgets are null!");
+  if (!m_chatViewWidget) {
+    DBGLOG("ERROR: chat widget is null!");
     return;
   }
 
@@ -1618,15 +1613,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   m_chatViewWidget->ForceScrollToBottom();
 
   // Display all messages in bulk
-  if (m_useVirtualizedChat && m_virtualizedChatWidget) {
-    // Use new virtualized widget
-    m_virtualizedChatWidget->AddMessages(messages);
-    m_virtualizedChatWidget->ScrollToBottom();
-  } else if (m_chatViewWidget) {
-    // Use old widget
-    m_chatViewWidget->DisplayMessages(messages);
-    m_chatViewWidget->ForceScrollToBottom();
-  }
+  m_chatViewWidget->DisplayMessages(messages);
+  m_chatViewWidget->ForceScrollToBottom();
 
   // LAZY LOADING: Only download thumbnails (small, ~10KB each)
   // Full media is downloaded on-demand when user hovers/clicks
@@ -1681,19 +1669,13 @@ void MainFrame::OnMoreMessagesLoaded(int64_t chatId,
       m_chatViewWidget->SetAllHistoryLoaded(true);
       m_chatViewWidget->SetIsLoadingHistory(false);
     }
-    if (m_virtualizedChatWidget) {
-      m_virtualizedChatWidget->SetAllHistoryLoaded(true);
-      m_virtualizedChatWidget->SetLoadingHistory(false);
-    }
     return;
   }
 
   DBGLOG("OnMoreMessagesLoaded: " << messages.size() << " messages for chat " << chatId);
 
-  // Add to appropriate widget
-  if (m_useVirtualizedChat && m_virtualizedChatWidget) {
-    m_virtualizedChatWidget->PrependMessages(messages);
-  } else if (m_chatViewWidget) {
+  // Add to chat widget using HexChat-style prepending
+  if (m_chatViewWidget) {
     m_chatViewWidget->BufferOlderMessages(messages);
   }
 
@@ -2393,30 +2375,10 @@ void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
       if (m_chatViewWidget) {
         m_chatViewWidget->SetAllHistoryLoaded(true);
       }
-      if (m_virtualizedChatWidget) {
-        m_virtualizedChatWidget->SetAllHistoryLoaded(true);
-      }
       return;
     }
     m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 20);
   }
 }
 
-void MainFrame::SetUseVirtualizedChat(bool use) {
-  m_useVirtualizedChat = use;
-  
-  // If a chat is open, switch the visible widget
-  if (m_currentChatId != 0 && m_chatPanel) {
-    wxSizer *sizer = m_chatPanel->GetSizer();
-    if (sizer) {
-      if (use) {
-        sizer->Show(m_chatViewWidget, false);
-        sizer->Show(m_virtualizedChatWidget, true);
-      } else {
-        sizer->Show(m_chatViewWidget, true);
-        sizer->Show(m_virtualizedChatWidget, false);
-      }
-      m_chatPanel->Layout();
-    }
-  }
-}
+

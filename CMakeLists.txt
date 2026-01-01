@@ -300,7 +300,6 @@ set(SOURCES
     src/ui/FileUtils.cpp
     src/ui/ChatArea.cpp
     src/ui/MessageFormatter.cpp
-    src/ui/VirtualizedChatWidget.cpp
     src/ui/StatusBarManager.cpp
     src/ui/WelcomeChat.cpp
     src/ui/ChatListWidget.cpp
