@@ -2220,15 +2220,8 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime) {
 }
 
 void ChatViewWidget::CheckAndTriggerHistoryLoad() {
-  // Don't load if already loading or all loaded
-  if (m_isLoadingHistory || m_allHistoryLoaded) {
-    return;
-  }
-  
-  // Cooldown: 800ms between loads - fast enough for smooth scrolling
-  static wxLongLong lastLoadTime = 0;
-  wxLongLong now = wxGetLocalTimeMillis();
-  if (now - lastLoadTime < 800) {
+  // Don't load if already loading
+  if (m_isLoadingHistory) {
     return;
   }
   
@@ -2241,7 +2234,7 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
   int scrollRange = display->GetScrollRange(wxVERTICAL);
   int thumbSize = display->GetScrollThumb(wxVERTICAL);
   
-  // Trigger when within top 15% for smoother preloading
+  // Check if near the top of the display
   int maxScroll = scrollRange - thumbSize;
   bool nearTop = false;
   
@@ -2257,7 +2250,44 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
     return;
   }
   
-  // Find oldest rendered message to load from
+  // VIRTUAL WINDOW: First check if we have more messages in memory to show
+  // before loading from TDLib
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    
+    // If window start is not at the beginning, we have older messages in memory
+    if (m_displayWindowStart > 0) {
+      // Shift window to show older messages from memory (no network needed)
+      size_t shiftAmount = std::min(m_displayWindowStart, (size_t)30);
+      m_displayWindowStart -= shiftAmount;
+      m_displayWindowEnd -= shiftAmount;
+      
+      // Keep window size within limits
+      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
+        m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
+      }
+      
+      // Refresh to show the shifted window
+      CallAfter([this]() {
+        RefreshDisplay();
+      });
+      return;
+    }
+  }
+  
+  // Window is at the beginning of stored messages - need to load from TDLib
+  if (m_allHistoryLoaded) {
+    return;
+  }
+  
+  // Cooldown: 800ms between TDLib loads
+  static wxLongLong lastLoadTime = 0;
+  wxLongLong now = wxGetLocalTimeMillis();
+  if (now - lastLoadTime < 800) {
+    return;
+  }
+  
+  // Find oldest stored message to load from
   int64_t oldestId = 0;
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
