@@ -291,51 +291,75 @@ void ChatViewWidget::SetTopicText(const wxString &chatName,
 void ChatViewWidget::SetTopicUserInfo(const UserInfo &user) {
   if (!m_userDetailsBar) return;
   
+  // Track if anything changed to avoid unnecessary layout updates
+  bool needsLayout = false;
+  
+  // Check if this is a different user or first time showing
+  if (m_currentUserId != user.id || !m_userDetailsBar->IsShown()) {
+    needsLayout = true;
+  }
+  
   m_currentUserId = user.id;
   
   // Hide regular topic bar
-  if (m_topicBar) {
+  if (m_topicBar && m_topicBar->IsShown()) {
     m_topicBar->Hide();
+    needsLayout = true;
   }
   
-  // Update user name
-  m_userName->SetLabel(user.GetDisplayName());
-  
-  // Update username
-  if (!user.username.IsEmpty()) {
-    m_userUsername->SetLabel("@" + user.username);
-  } else {
-    m_userUsername->SetLabel("");
+  // Update user name only if changed
+  wxString newName = user.GetDisplayName();
+  if (m_userName->GetLabel() != newName) {
+    m_userName->SetLabel(newName);
+    needsLayout = true;
   }
   
-  // Update phone
-  if (!user.phoneNumber.IsEmpty()) {
-    wxString phone = "+" + user.phoneNumber;
-    m_userPhone->SetLabel(phone);
-  } else {
-    m_userPhone->SetLabel("");
+  // Update username only if changed
+  wxString newUsername = user.username.IsEmpty() ? "" : "@" + user.username;
+  if (m_userUsername->GetLabel() != newUsername) {
+    m_userUsername->SetLabel(newUsername);
+    needsLayout = true;
   }
   
-  // Update status
-  if (user.IsCurrentlyOnline()) {
-    m_userStatus->SetLabel("online");
-    m_userStatus->SetForegroundColour(wxColour(76, 175, 80)); // Green
-  } else {
-    m_userStatus->SetLabel(user.GetLastSeenString());
-    m_userStatus->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  // Update phone only if changed
+  wxString newPhone = user.phoneNumber.IsEmpty() ? "" : "+" + user.phoneNumber;
+  if (m_userPhone->GetLabel() != newPhone) {
+    m_userPhone->SetLabel(newPhone);
+    needsLayout = true;
   }
   
-  // Update photo
-  if (!user.profilePhotoSmallPath.IsEmpty()) {
+  // Update status only if changed
+  wxString newStatus = user.IsCurrentlyOnline() ? "online" : user.GetLastSeenString();
+  if (m_userStatus->GetLabel() != newStatus) {
+    m_userStatus->SetLabel(newStatus);
+    if (user.IsCurrentlyOnline()) {
+      m_userStatus->SetForegroundColour(wxColour(76, 175, 80)); // Green
+    } else {
+      m_userStatus->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+    }
+    needsLayout = true;
+  }
+  
+  // Update photo only on first load or user change
+  static wxString s_lastPhotoPath;
+  if (!user.profilePhotoSmallPath.IsEmpty() && user.profilePhotoSmallPath != s_lastPhotoPath) {
     UpdateUserPhoto(user.profilePhotoSmallPath);
-  } else {
+    s_lastPhotoPath = user.profilePhotoSmallPath;
+  } else if (user.profilePhotoSmallPath.IsEmpty() && needsLayout) {
     m_userPhotoBitmap = CreateInitialsAvatar(user.GetDisplayName(), 40);
     m_userPhoto->SetBitmap(m_userPhotoBitmap);
   }
   
-  m_userDetailsBar->Show();
-  m_userDetailsBar->Layout();
-  Layout();
+  if (!m_userDetailsBar->IsShown()) {
+    m_userDetailsBar->Show();
+    needsLayout = true;
+  }
+  
+  // Only trigger layout if something actually changed
+  if (needsLayout) {
+    m_userDetailsBar->Layout();
+    Layout();
+  }
 }
 
 void ChatViewWidget::UpdateUserPhoto(const wxString &photoPath) {

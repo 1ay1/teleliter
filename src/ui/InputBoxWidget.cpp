@@ -283,6 +283,11 @@ wxString InputBoxWidget::GetValue() const {
 
 void InputBoxWidget::SetFocus() {
   if (m_inputBox) {
+    // Don't do anything if we already have focus - prevents clearing typed text
+    if (m_inputBox->HasFocus()) {
+      return;
+    }
+    
     // Clear placeholder when gaining focus
     if (m_showingPlaceholder) {
       m_showingPlaceholder = false;
