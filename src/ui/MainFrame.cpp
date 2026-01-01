@@ -1265,6 +1265,22 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
           }
         }
 
+        // Set up lazy loading callback for older messages BEFORE loading
+        // so it's ready when DisplayMessages triggers a lazy load check
+        m_chatViewWidget->SetLoadOlderCallback([this, chatId](int64_t oldestMsgId) {
+          if (m_telegramClient && m_telegramClient->HasMoreMessages(chatId)) {
+            m_telegramClient->LoadOlderMessages(chatId, oldestMsgId, 50);
+          } else {
+            // No more messages to load
+            if (m_chatViewWidget) {
+              m_chatViewWidget->SetHasMoreMessages(false);
+              m_chatViewWidget->SetIsLoadingOlder(false);
+            }
+          }
+        });
+        m_chatViewWidget->SetHasMoreMessages(true);
+        m_chatViewWidget->SetIsLoadingOlder(false);
+
         m_telegramClient->OpenChatAndLoadMessages(chatId);
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
@@ -1615,6 +1631,58 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
 
   DBGLOG("Finished displaying messages, scrolled to bottom");
 }
+
+void MainFrame::OnOlderMessagesLoaded(int64_t chatId,
+                                      const std::vector<MessageInfo> &messages) {
+  DBGLOG("OnOlderMessagesLoaded called: chatId="
+         << chatId << " m_currentChatId=" << m_currentChatId
+         << " messages.size()=" << messages.size());
+
+  if (chatId != m_currentChatId) {
+    DBGLOG("Ignoring older messages - chatId mismatch");
+    return;
+  }
+
+  if (!m_chatViewWidget || messages.empty()) {
+    return;
+  }
+
+  // Add older messages without clearing existing ones
+  // The ChatViewWidget will merge and re-sort
+  for (const auto &msg : messages) {
+    m_chatViewWidget->AddMessage(msg);
+  }
+
+  // IMPORTANT: Keep m_isLoadingOlder TRUE during the refresh so anchor scrolling works
+  // The RefreshDisplay checks this flag to know whether to do anchor scrolling
+  // We call RefreshDisplay directly (not scheduled) to ensure flag is still set
+  m_chatViewWidget->RefreshDisplay();
+  
+  // NOW set loading to false, after the refresh has completed
+  if (m_chatViewWidget) {
+    m_chatViewWidget->SetIsLoadingOlder(false);
+    // Check if there are more messages
+    if (m_telegramClient) {
+      m_chatViewWidget->SetHasMoreMessages(m_telegramClient->HasMoreMessages(chatId));
+    }
+  }
+
+  // Download thumbnails for newly loaded messages
+  if (m_telegramClient) {
+    for (const auto &msg : messages) {
+      if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
+        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail", 0);
+      }
+      if (msg.hasSticker && msg.mediaFileId != 0 &&
+          msg.mediaLocalPath.IsEmpty() && msg.mediaThumbnailFileId == 0) {
+        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker", msg.mediaFileSize);
+      }
+    }
+  }
+
+  DBGLOG("Finished adding older messages");
+}
+
 
 
 

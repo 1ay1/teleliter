@@ -50,6 +50,8 @@ static bool CachedFileExists(const wxString &path) {
 
 // #define CVWLOG(msg) std::cerr << "[ChatViewWidget] " << msg << std::endl
 #define CVWLOG(msg) do {} while(0)
+// #define SCROLL_LOG(msg) std::cerr << "[CVW:Scroll] " << msg << std::endl
+#define SCROLL_LOG(msg) do {} while(0)
 
 // Global cache for per-chat read times (persists across chat switches)
 // Key: chatId, Value: map of messageId -> readTime
@@ -74,7 +76,8 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
       m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
       m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
-      m_lastDisplayedMessageId(0), m_contextMenuPos(-1) {
+      m_lastDisplayedMessageId(0), m_contextMenuPos(-1),
+      m_lazyLoadTimer(this) {
   // Bind timer events
   Bind(
       wxEVT_TIMER, [this](wxTimerEvent &) { HideDownloadProgress(); },
@@ -83,6 +86,8 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
        m_refreshTimer.GetId());
   Bind(wxEVT_TIMER, &ChatViewWidget::OnHighlightTimer, this,
        HIGHLIGHT_TIMER_ID);
+  Bind(wxEVT_TIMER, &ChatViewWidget::OnLazyLoadTimer, this,
+       m_lazyLoadTimer.GetId());
 
   // Bind size event for repositioning the new message button
   Bind(wxEVT_SIZE, &ChatViewWidget::OnSize, this);
@@ -126,6 +131,18 @@ void ChatViewWidget::CreateLayout() {
   m_topicBar->Hide(); // Hidden until a chat is selected
 
   mainSizer->Add(m_topicBar, 0, wxEXPAND);
+
+  // Loading indicator for older messages (shown when scrolling up)
+  m_loadingOlderPanel = new wxPanel(this, wxID_ANY);
+  wxBoxSizer *loadingOlderSizer = new wxBoxSizer(wxHORIZONTAL);
+  m_loadingOlderText = new wxStaticText(m_loadingOlderPanel, wxID_ANY, "Loading older messages...");
+  m_loadingOlderText->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  loadingOlderSizer->AddStretchSpacer();
+  loadingOlderSizer->Add(m_loadingOlderText, 0, wxALIGN_CENTER_VERTICAL | wxALL, 4);
+  loadingOlderSizer->AddStretchSpacer();
+  m_loadingOlderPanel->SetSizer(loadingOlderSizer);
+  m_loadingOlderPanel->Hide();
+  mainSizer->Add(m_loadingOlderPanel, 0, wxEXPAND);
 
   // Download progress is now shown in status bar, not here
   m_downloadBar = nullptr;
@@ -385,9 +402,39 @@ void ChatViewWidget::RefreshDisplay() {
 
   // Check if we should scroll to bottom after refresh
   bool shouldScrollToBottom = IsAtBottom();
+  
+  // Remember scroll state for anchor-based scrolling
+  int oldScrollPos = display->GetScrollPos(wxVERTICAL);
+  int oldScrollRange = display->GetScrollRange(wxVERTICAL);
+  int oldThumbSize = display->GetScrollThumb(wxVERTICAL);
+  int oldMaxScroll = oldScrollRange - oldThumbSize;
+  
+  // Calculate scroll percentage (how far through the content we are)
+  // This is more stable than pixel-based restoration when content changes
+  double scrollPercent = 0.0;
+  if (oldMaxScroll > 0) {
+    scrollPercent = static_cast<double>(oldScrollPos) / oldMaxScroll;
+  }
+  
+  // Also track distance from bottom for anchor scrolling when loading older
+  int oldDistanceFromBottom = 0;
+  if (oldMaxScroll > 0) {
+    oldDistanceFromBottom = oldMaxScroll - oldScrollPos;
+  }
+  
+  // Track if user has scrolled up (not at bottom)
+  bool userScrolledUp = !shouldScrollToBottom && oldMaxScroll > 0;
+  
+  SCROLL_LOG("RefreshDisplay: shouldScrollToBottom=" << shouldScrollToBottom 
+             << " oldScrollPos=" << oldScrollPos << " oldMaxScroll=" << oldMaxScroll
+             << " scrollPercent=" << scrollPercent
+             << " userScrolledUp=" << userScrolledUp
+             << " isLoadingOlder=" << m_isLoadingOlder);
 
-  // Freeze UI during update
-  display->Freeze();
+
+
+  // Freeze UI during update - use batch update for better performance
+  m_chatArea->BeginBatchUpdate();
   display->BeginSuppressUndo();
   
   // Clear display
@@ -453,10 +500,56 @@ void ChatViewWidget::RefreshDisplay() {
 
   
   display->EndSuppressUndo();
-  display->Thaw();
+  m_chatArea->EndBatchUpdate();
 
+  // Handle scroll position
+  int newScrollRange = display->GetScrollRange(wxVERTICAL);
+  int newThumbSize = display->GetScrollThumb(wxVERTICAL);
+  int newMaxScroll = newScrollRange - newThumbSize;
+  
+  SCROLL_LOG("RefreshDisplay post-batch: shouldScrollToBottom=" << shouldScrollToBottom
+             << " newMaxScroll=" << newMaxScroll);
+  
   if (shouldScrollToBottom) {
+    SCROLL_LOG("  -> calling ScrollToBottom (smooth disabled)");
+    // Disable smooth scroll for programmatic scrolls to avoid lag
+    m_chatArea->SetSmoothScrollEnabled(false);
     m_chatArea->ScrollToBottom();
+    m_chatArea->SetSmoothScrollEnabled(true);
+  } else if (m_isLoadingOlder && oldDistanceFromBottom > 0) {
+    // When loading older messages, maintain same distance from bottom
+    // This keeps the visible content stable while new content loads above
+    if (newMaxScroll > 0) {
+      int newScrollPos = newMaxScroll - oldDistanceFromBottom;
+      newScrollPos = std::max(0, std::min(newScrollPos, newMaxScroll));
+      
+      SCROLL_LOG("  -> anchor scroll (loading older): newScrollPos=" << newScrollPos << " newMaxScroll=" << newMaxScroll);
+      
+      // Force layout update first, then scroll
+      display->LayoutContent();
+      
+      // Use Scroll() which works better than SetScrollPos for wxRichTextCtrl
+      display->Scroll(0, newScrollPos);
+      display->Refresh();
+      display->Update();
+    }
+  } else if (userScrolledUp && newMaxScroll > 0) {
+    // User was scrolled up - restore same percentage position
+    // This keeps them at roughly the same relative position in the content
+    int newScrollPos = static_cast<int>(scrollPercent * newMaxScroll);
+    newScrollPos = std::max(0, std::min(newScrollPos, newMaxScroll));
+    
+    SCROLL_LOG("  -> restoring scroll percent: " << scrollPercent << " -> newScrollPos=" << newScrollPos);
+    
+    // Force layout update first, then scroll
+    display->LayoutContent();
+    
+    // Use Scroll() which works better than SetScrollPos for wxRichTextCtrl
+    display->Scroll(0, newScrollPos);
+    display->Refresh();
+    display->Update();
+  } else {
+    SCROLL_LOG("  -> no scroll adjustment needed");
   }
 }
 
@@ -898,7 +991,7 @@ void ChatViewWidget::DisplayMessage(const MessageInfo &msg) {
 }
 
 void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
-  CVWLOG("DisplayMessages: adding " << messages.size() << " messages");
+  CVWLOG("DisplayMessages: called with " << messages.size() << " messages");
 
   // Collect media to download outside the lock to avoid holding mutex during external calls
   std::vector<MediaInfo> mediaToDownload;
@@ -939,8 +1032,6 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
         mediaToDownload.push_back(info);
       }
     }
-    
-
   }
   // Lock released - now safe to make external calls
 
@@ -949,9 +1040,28 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
     EnsureMediaDownloaded(info);
   }
 
-  // Render all messages in proper order immediately (not debounced for bulk
-  // loads)
+  // Render all messages in proper order immediately (not debounced for bulk loads)
   RefreshDisplay();
+  
+  // After displaying messages, check if we need to load more
+  // This handles the case where initial load returns few messages
+  CallAfter([this]() {
+    size_t msgCount = 0;
+    {
+      std::lock_guard<std::mutex> lock(m_messagesMutex);
+      msgCount = m_messages.size();
+    }
+    
+    // If we have few messages and there might be more, trigger lazy load
+    if (msgCount < 50 && m_hasMoreMessages && !m_isLoadingOlder && m_loadOlderCallback) {
+      int64_t oldestId = GetOldestMessageId();
+      if (oldestId > 0) {
+        m_isLoadingOlder = true;
+        ShowLoadingOlderIndicator();
+        m_loadOlderCallback(oldestId);
+      }
+    }
+  });
 }
 
 void ChatViewWidget::RemoveMessage(int64_t messageId) {
@@ -1171,13 +1281,25 @@ void ChatViewWidget::ScrollToBottom() {
   m_chatArea->ScrollToBottom();
   m_wasAtBottom = true;
   HideNewMessageIndicator();
+  
+  // Ensure the display is updated reactively
+  if (wxRichTextCtrl *display = m_chatArea->GetDisplay()) {
+    display->Refresh();
+  }
 }
 
 void ChatViewWidget::ScrollToBottomIfAtBottom() {
   // Check ACTUAL scroll position, not cached flag
   // This prevents jumping down when user is actively scrolling up
   if (IsAtBottom()) {
-    ScrollToBottom();
+    // Use instant scroll for new messages to feel snappy
+    if (m_chatArea) {
+      m_chatArea->SetSmoothScrollEnabled(false);
+      ScrollToBottom();
+      m_chatArea->SetSmoothScrollEnabled(true);
+    } else {
+      ScrollToBottom();
+    }
   } else {
     // User is scrolled up, show new message indicator
     m_newMessageCount++;
@@ -1205,23 +1327,43 @@ void ChatViewWidget::ShowNewMessageIndicator() {
   } else {
     label = wxString::Format("%s 99+ New Messages", arrow);
   }
-  m_newMessageButton->SetLabel(label);
+  
+  // Only update label if it changed (avoids flicker during rapid updates)
+  if (m_newMessageButton->GetLabel() != label) {
+    m_newMessageButton->SetLabel(label);
+  }
 
-  // Position button at bottom center of chat display
+  // Position button at bottom center of chat display with padding
   if (m_chatArea) {
     wxSize displaySize = m_chatArea->GetSize();
     wxSize btnSize = m_newMessageButton->GetBestSize();
+    
+    // Center horizontally with clamping to stay within bounds
     int x = (displaySize.GetWidth() - btnSize.GetWidth()) / 2;
-    int y = displaySize.GetHeight() - btnSize.GetHeight() - 10;
-    m_newMessageButton->SetPosition(wxPoint(x, y));
+    x = std::max(5, std::min(x, displaySize.GetWidth() - btnSize.GetWidth() - 5));
+    
+    // Position near bottom with comfortable padding
+    int y = displaySize.GetHeight() - btnSize.GetHeight() - 15;
+    y = std::max(5, y);
+    
+    wxPoint currentPos = m_newMessageButton->GetPosition();
+    wxPoint newPos(x, y);
+    
+    // Only reposition if position changed significantly (reduces layout thrashing)
+    if (std::abs(currentPos.x - newPos.x) > 2 || std::abs(currentPos.y - newPos.y) > 2) {
+      m_newMessageButton->SetPosition(newPos);
+    }
   }
 
-  m_newMessageButton->Show();
-  m_newMessageButton->Raise();
+  // Show and raise the button if not already visible
+  if (!m_newMessageButton->IsShown()) {
+    m_newMessageButton->Show();
+    m_newMessageButton->Raise();
+  }
 }
 
 void ChatViewWidget::HideNewMessageIndicator() {
-  if (m_newMessageButton) {
+  if (m_newMessageButton && m_newMessageButton->IsShown()) {
     m_newMessageButton->Hide();
   }
   m_newMessageCount = 0;
@@ -1345,9 +1487,8 @@ void ChatViewWidget::UpdateMediaPath(int32_t fileId,
   if (fileId == 0 || localPath.IsEmpty())
     return;
 
-  int updatedCount = 0;
-
   // Update m_messages - the SINGLE SOURCE OF TRUTH
+  int updatedCount = 0;
   for (auto &msg : m_messages) {
     if (msg.mediaFileId == fileId) {
       msg.mediaLocalPath = localPath;
@@ -1995,34 +2136,171 @@ void ChatViewWidget::OnScroll(wxScrollWinEvent &event) {
   event.Skip();
 
   // Update scroll state
+  bool wasAtBottom = m_wasAtBottom;
   m_wasAtBottom = IsAtBottom();
+  SCROLL_LOG("OnScroll: wasAtBottom changed " << wasAtBottom << " -> " << m_wasAtBottom);
   if (m_wasAtBottom) {
     HideNewMessageIndicator();
   }
+  
+  // Debounced lazy load check for smooth experience
+  ScheduleLazyLoadCheck();
 }
 
 void ChatViewWidget::OnMouseWheel(wxMouseEvent &event) {
   event.Skip();
 
-  // Update scroll state after the scroll happens
+  // Use CallAfter for scroll state update to avoid blocking the scroll
   CallAfter([this]() {
+    bool wasAtBottom = m_wasAtBottom;
     m_wasAtBottom = IsAtBottom();
+    SCROLL_LOG("OnMouseWheel (CallAfter): wasAtBottom changed " << wasAtBottom << " -> " << m_wasAtBottom);
     if (m_wasAtBottom) {
       HideNewMessageIndicator();
     }
   });
+  
+  // Debounced lazy load check - slightly longer debounce for mouse wheel
+  // to avoid triggering during rapid scrolling
+  ScheduleLazyLoadCheck();
 }
 
 void ChatViewWidget::OnSize(wxSizeEvent &event) {
   event.Skip();
 
-  // Reposition the new message button
-  if (m_newMessageButton && m_newMessageButton->IsShown() && m_chatArea) {
+  // Track if we were at bottom before resize
+  bool wasAtBottom = IsAtBottom();
+
+  // Reposition the new message button reactively
+  if (m_newMessageButton && m_chatArea) {
     wxSize displaySize = m_chatArea->GetSize();
     wxSize btnSize = m_newMessageButton->GetBestSize();
     int x = (displaySize.GetWidth() - btnSize.GetWidth()) / 2;
     int y = displaySize.GetHeight() - btnSize.GetHeight() - 10;
+    
+    // Clamp to valid positions
+    x = std::max(0, x);
+    y = std::max(0, y);
+    
     m_newMessageButton->SetPosition(wxPoint(x, y));
+  }
+
+  // Update topic bar layout if visible
+  if (m_topicBar && m_topicBar->IsShown()) {
+    m_topicBar->Layout();
+  }
+
+  // Use CallAfter to defer scroll adjustment until after layout completes
+  // This ensures smooth reactive behavior during window resize
+  if (wasAtBottom && m_chatArea) {
+    CallAfter([this]() {
+      if (m_chatArea && IsShown()) {
+        // Instant scroll during resize for responsiveness (no animation)
+        m_chatArea->SetSmoothScrollEnabled(false);
+        m_chatArea->ScrollToBottom();
+        m_chatArea->SetSmoothScrollEnabled(true);
+      }
+    });
+  }
+}
+
+void ChatViewWidget::ScheduleLazyLoadCheck() {
+  // Debounce scroll events to avoid excessive checks and provide smooth experience
+  // Use a slightly longer debounce to let scrolling settle before triggering load
+  if (m_lazyLoadTimer.IsRunning()) {
+    m_lazyLoadTimer.Stop();
+  }
+  m_lazyLoadTimer.StartOnce(LAZY_LOAD_DEBOUNCE_MS);
+}
+
+void ChatViewWidget::OnLazyLoadTimer(wxTimerEvent &event) {
+  CheckAndTriggerLazyLoad();
+}
+
+void ChatViewWidget::CheckAndTriggerLazyLoad() {
+  if (!m_loadOlderCallback || !m_hasMoreMessages || m_isLoadingOlder) {
+    return;
+  }
+  
+  if (IsNearTop()) {
+    int64_t oldestId = GetOldestMessageId();
+    if (oldestId > 0) {
+      m_isLoadingOlder = true;
+      // Show loading indicator smoothly
+      ShowLoadingOlderIndicator();
+      m_loadOlderCallback(oldestId);
+    }
+  }
+}
+
+bool ChatViewWidget::IsNearTop() const {
+  if (!m_chatArea) {
+    return false;
+  }
+  
+  wxRichTextCtrl *display = m_chatArea->GetDisplay();
+  if (!display) {
+    return false;
+  }
+  
+  int scrollPos = display->GetScrollPos(wxVERTICAL);
+  int scrollRange = display->GetScrollRange(wxVERTICAL);
+  int thumbSize = display->GetScrollThumb(wxVERTICAL);
+  
+  // If there's very little content (no scrollbar), we should try to load more
+  // This handles the case where only a few messages are loaded initially
+  if (scrollRange <= thumbSize) {
+    // Check if we have very few messages - if so, trigger load
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    size_t msgCount = m_messages.size();
+    // If we have fewer than 100 messages and there might be more, try loading
+    return msgCount < 100 && m_hasMoreMessages;
+  }
+  
+  // Trigger when within top 10% of scroll range (less aggressive to avoid constant loading)
+  int maxScroll = scrollRange - thumbSize;
+  if (maxScroll <= 0) {
+    return false;
+  }
+  
+  float scrollPercent = (float)scrollPos / (float)maxScroll;
+  return scrollPercent < 0.10f;
+}
+
+int64_t ChatViewWidget::GetOldestMessageId() const {
+  std::lock_guard<std::mutex> lock(m_messagesMutex);
+  
+  if (m_messages.empty()) {
+    return 0;
+  }
+  
+  // Messages are sorted by date/id, so first one is oldest
+  return m_messages.front().id;
+}
+
+void ChatViewWidget::SetIsLoadingOlder(bool loading) {
+  bool wasLoading = m_isLoadingOlder;
+  m_isLoadingOlder = loading;
+  
+  // Show/hide loading indicator
+  if (loading && !wasLoading) {
+    ShowLoadingOlderIndicator();
+  } else if (!loading && wasLoading) {
+    HideLoadingOlderIndicator();
+  }
+}
+
+void ChatViewWidget::ShowLoadingOlderIndicator() {
+  if (m_loadingOlderPanel && !m_loadingOlderPanel->IsShown()) {
+    m_loadingOlderPanel->Show();
+    Layout();
+  }
+}
+
+void ChatViewWidget::HideLoadingOlderIndicator() {
+  if (m_loadingOlderPanel && m_loadingOlderPanel->IsShown()) {
+    m_loadingOlderPanel->Hide();
+    Layout();
   }
 }
 

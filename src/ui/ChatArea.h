@@ -3,6 +3,7 @@
 
 #include <wx/richtext/richtextctrl.h>
 #include <wx/settings.h>
+#include <wx/timer.h>
 #include <wx/wx.h>
 
 // Message delivery/read status for outgoing messages
@@ -29,8 +30,13 @@ public:
 
   // Scroll control
   void ScrollToBottom();
+  void ScrollToBottomSmooth();  // Animated smooth scroll
   void ScrollToBottomIfAtBottom();
   bool IsAtBottom() const;
+  
+  // Smooth scroll animation control
+  void SetSmoothScrollEnabled(bool enabled) { m_smoothScrollEnabled = enabled; }
+  bool IsSmoothScrollEnabled() const { return m_smoothScrollEnabled; }
 
   // Suppress undo (for initial content)
   void BeginSuppressUndo() { m_chatDisplay->BeginSuppressUndo(); }
@@ -180,6 +186,10 @@ protected:
   // Helper to schedule a coalesced refresh (avoids excessive repaints)
   void ScheduleRefresh();
   void DoRefresh();
+  
+  // Smooth scroll animation
+  void OnScrollTimer(wxTimerEvent &event);
+  void OnIdleRefresh(wxIdleEvent &event);
 
   wxRichTextCtrl *m_chatDisplay;
   wxFont m_chatFont;
@@ -202,6 +212,21 @@ protected:
 
   // Cursor tracking (to override wxRichTextCtrl's I-beam default)
   wxStockCursor m_currentCursor = wxCURSOR_ARROW;
+  
+  // Smooth scroll animation state
+  wxTimer m_scrollTimer;
+  int m_scrollTargetPos;
+  int m_scrollCurrentPos;
+  int m_scrollStartPos;
+  int m_scrollSteps;
+  int m_scrollStepCount;
+  bool m_smoothScrollEnabled;
+  static constexpr int SCROLL_ANIMATION_STEPS = 12;  // ~120ms for smoother animation
+  static constexpr int SCROLL_TIMER_INTERVAL_MS = 10;
+  static constexpr int MIN_SCROLL_DISTANCE_FOR_ANIMATION = 20;  // Skip animation for small scrolls
+  
+  // Idle event coalescing for layout updates
+  bool m_needsIdleRefresh;
 };
 
 #endif // CHATAREA_H

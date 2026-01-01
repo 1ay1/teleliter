@@ -4,6 +4,11 @@
 #include "MainFrame.h"
 #include "MenuIds.h"
 #include <wx/settings.h>
+#include <wx/sizer.h>
+#include <iostream>
+
+// #define CLWLOG(msg) std::cerr << "[ChatListWidget] " << msg << std::endl
+#define CLWLOG(msg) do {} while(0)
 
 // Online indicator - green circle emoji (requires emoji font on system)
 const wxString ChatListWidget::ONLINE_INDICATOR =
@@ -14,9 +19,20 @@ ChatListWidget::ChatListWidget(wxWindow *parent)
       m_searchBox(nullptr), m_chatTree(nullptr),
       m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX)),
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT)),
-      m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)) {
+      m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)),
+      m_loadingAnimTimer(this),
+      m_scrollDebounceTimer(this) {
   CreateLayout();
   CreateCategories();
+  
+  // Bind timers
+  Bind(wxEVT_TIMER, &ChatListWidget::OnLoadingTimer, this, m_loadingAnimTimer.GetId());
+  Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+    CheckAndTriggerLazyLoad();
+  }, m_scrollDebounceTimer.GetId());
+  
+  // Bind idle event for deferred lazy load checks
+  Bind(wxEVT_IDLE, &ChatListWidget::OnIdleCheck, this);
 }
 
 ChatListWidget::~ChatListWidget() {}
@@ -53,9 +69,25 @@ void ChatListWidget::CreateLayout() {
   m_chatTree->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, &ChatListWidget::OnTreeScrolled, this);
   m_chatTree->Bind(wxEVT_SCROLLWIN_LINEDOWN, &ChatListWidget::OnTreeScrolled, this);
   m_chatTree->Bind(wxEVT_SCROLLWIN_PAGEDOWN, &ChatListWidget::OnTreeScrolled, this);
+  m_chatTree->Bind(wxEVT_SCROLLWIN_LINEUP, &ChatListWidget::OnTreeScrolled, this);
+  m_chatTree->Bind(wxEVT_SCROLLWIN_PAGEUP, &ChatListWidget::OnTreeScrolled, this);
   m_chatTree->Bind(wxEVT_TREE_ITEM_EXPANDED, &ChatListWidget::OnTreeExpanded, this);
+  m_chatTree->Bind(wxEVT_MOUSEWHEEL, &ChatListWidget::OnMouseWheel, this);
 
   sizer->Add(m_chatTree, 1, wxEXPAND);
+  
+  // Create loading indicator panel (hidden initially)
+  m_loadingPanel = new wxPanel(this, wxID_ANY);
+  wxBoxSizer *loadingSizer = new wxBoxSizer(wxHORIZONTAL);
+  m_loadingText = new wxStaticText(m_loadingPanel, wxID_ANY, "Loading chats...");
+  m_loadingText->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  loadingSizer->AddStretchSpacer();
+  loadingSizer->Add(m_loadingText, 0, wxALIGN_CENTER_VERTICAL | wxALL, 4);
+  loadingSizer->AddStretchSpacer();
+  m_loadingPanel->SetSizer(loadingSizer);
+  m_loadingPanel->Hide();
+  
+  sizer->Add(m_loadingPanel, 0, wxEXPAND);
   SetSizer(sizer);
 }
 
@@ -465,59 +497,153 @@ void ChatListWidget::OnSelectionChanged(wxTreeEvent &event) {
 
 void ChatListWidget::OnTreeScrolled(wxScrollWinEvent &event) {
   event.Skip();
-  
-  // Check if we need to load more chats
-  CheckAndTriggerLazyLoad();
+  ScheduleLazyLoadCheck();
 }
 
 void ChatListWidget::OnTreeExpanded(wxTreeEvent &event) {
   event.Skip();
+  ScheduleLazyLoadCheck();
+}
+
+void ChatListWidget::OnMouseWheel(wxMouseEvent &event) {
+  event.Skip();
+  ScheduleLazyLoadCheck();
+}
+
+void ChatListWidget::OnLoadingTimer(wxTimerEvent &event) {
+  // Animate the loading text with dots
+  m_loadingDots = (m_loadingDots + 1) % 4;
+  wxString dots;
+  for (int i = 0; i < m_loadingDots; ++i) {
+    dots += ".";
+  }
+  if (m_loadingText) {
+    m_loadingText->SetLabel("Loading chats" + dots);
+  }
+}
+
+void ChatListWidget::OnIdleCheck(wxIdleEvent &event) {
+  event.Skip();
   
-  // When a category is expanded, check if we need more chats
-  CheckAndTriggerLazyLoad();
+  if (m_lazyLoadCheckPending) {
+    m_lazyLoadCheckPending = false;
+    CheckAndTriggerLazyLoad();
+  }
+}
+
+void ChatListWidget::ScheduleLazyLoadCheck() {
+  // Use debounce timer to coalesce rapid scroll events
+  if (m_scrollDebounceTimer.IsRunning()) {
+    m_scrollDebounceTimer.Stop();
+  }
+  m_scrollDebounceTimer.StartOnce(SCROLL_DEBOUNCE_MS);
 }
 
 void ChatListWidget::CheckAndTriggerLazyLoad() {
-  if (!m_hasMoreChats || m_isLoadingChats || !m_loadMoreCallback) {
+  if (!m_loadMoreCallback || !m_hasMoreChats || m_isLoadingChats) {
+    CLWLOG("CheckAndTriggerLazyLoad: skip (callback=" << (m_loadMoreCallback ? "yes" : "no")
+           << " hasMore=" << m_hasMoreChats << " loading=" << m_isLoadingChats << ")");
     return;
   }
   
-  if (IsNearBottom()) {
+  if (ShouldLoadMoreChats()) {
+    CLWLOG("CheckAndTriggerLazyLoad: TRIGGERING load more chats!");
     m_isLoadingChats = true;
+    ShowLoadingIndicator();
     m_loadMoreCallback();
   }
 }
 
-bool ChatListWidget::IsNearBottom() const {
+bool ChatListWidget::ShouldLoadMoreChats() const {
   if (!m_chatTree) {
     return false;
   }
   
-  // Get scroll position info
+  // Count total visible chat items
+  size_t totalItems = 0;
+  wxTreeItemIdValue cookie;
+  for (wxTreeItemId cat = m_chatTree->GetFirstChild(m_treeRoot, cookie);
+       cat.IsOk();
+       cat = m_chatTree->GetNextChild(m_treeRoot, cookie)) {
+    totalItems += m_chatTree->GetChildrenCount(cat, false);
+  }
+  
+  CLWLOG("ShouldLoadMoreChats: totalItems=" << totalItems << " hasMore=" << m_hasMoreChats);
+  
+  // Always load more if we have fewer than minimum visible chats
+  if (totalItems < 50 && m_hasMoreChats) {
+    CLWLOG("ShouldLoadMoreChats: YES (need more items)");
+    return true;
+  }
+  
+  // Check scroll position
   int scrollPos = m_chatTree->GetScrollPos(wxVERTICAL);
   int scrollRange = m_chatTree->GetScrollRange(wxVERTICAL);
   int thumbSize = m_chatTree->GetScrollThumb(wxVERTICAL);
   
-  // If there's no scrollbar or very little content, don't trigger
+  CLWLOG("ShouldLoadMoreChats: scrollPos=" << scrollPos << " scrollRange=" << scrollRange << " thumbSize=" << thumbSize);
+  
+  // If there's no scrollbar, we might need more content
   if (scrollRange <= thumbSize) {
-    // Not enough content to scroll - might need more chats if we just started
-    // Trigger load if we have very few chats displayed
-    size_t totalItems = 0;
-    wxTreeItemIdValue cookie;
-    for (wxTreeItemId cat = m_chatTree->GetFirstChild(m_treeRoot, cookie);
-         cat.IsOk();
-         cat = m_chatTree->GetNextChild(m_treeRoot, cookie)) {
-      totalItems += m_chatTree->GetChildrenCount(cat, false);
-    }
-    return totalItems < 20;  // Load more if we have fewer than 20 visible chats
+    CLWLOG("ShouldLoadMoreChats: no scrollbar, hasMore=" << m_hasMoreChats);
+    return m_hasMoreChats;
   }
   
-  // Check if we're within 20% of the bottom
+  // Check if we're within 30% of the bottom
   int maxScroll = scrollRange - thumbSize;
   if (maxScroll <= 0) {
+    CLWLOG("ShouldLoadMoreChats: maxScroll<=0");
     return false;
   }
   
   float scrollPercent = (float)scrollPos / (float)maxScroll;
-  return scrollPercent > 0.8f;  // Within last 20%
+  CLWLOG("ShouldLoadMoreChats: scrollPercent=" << scrollPercent << " (threshold=0.70)");
+  return scrollPercent > 0.70f;
+}
+
+void ChatListWidget::SetHasMoreChats(bool hasMore) {
+  m_hasMoreChats = hasMore;
+  if (!hasMore) {
+    HideLoadingIndicator();
+  }
+}
+
+void ChatListWidget::SetIsLoadingChats(bool loading) {
+  bool wasLoading = m_isLoadingChats;
+  m_isLoadingChats = loading;
+  
+  if (loading && !wasLoading) {
+    ShowLoadingIndicator();
+  } else if (!loading && wasLoading) {
+    HideLoadingIndicator();
+    // After loading completes, check if we need to load more
+    // (user might have scrolled while loading)
+    m_lazyLoadCheckPending = true;
+  }
+}
+
+void ChatListWidget::ShowLoadingIndicator() {
+  if (m_loadingPanel && !m_loadingPanel->IsShown()) {
+    m_loadingDots = 0;
+    m_loadingText->SetLabel("Loading chats...");
+    m_loadingPanel->Show();
+    m_loadingAnimTimer.Start(LOADING_ANIM_MS);
+    Layout();
+  }
+}
+
+void ChatListWidget::HideLoadingIndicator() {
+  if (m_loadingPanel && m_loadingPanel->IsShown()) {
+    m_loadingAnimTimer.Stop();
+    m_loadingPanel->Hide();
+    Layout();
+  }
+}
+
+bool ChatListWidget::IsLoadingVisible() const {
+  return m_loadingPanel && m_loadingPanel->IsShown();
+}
+
+bool ChatListWidget::IsNearBottom() const {
+  return ShouldLoadMoreChats();
 }

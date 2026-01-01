@@ -2,6 +2,7 @@
 #define CHATVIEWWIDGET_H
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -67,8 +68,20 @@ public:
   // Smart scrolling - only auto-scroll if at bottom
   void ScrollToBottomIfAtBottom();
   bool IsAtBottom() const;
+  bool IsNearTop() const;  // For lazy loading older messages
   void ShowNewMessageIndicator();
   void HideNewMessageIndicator();
+  
+  // Lazy loading for older messages
+  void SetLoadOlderCallback(std::function<void(int64_t)> callback) { m_loadOlderCallback = callback; }
+  void SetHasMoreMessages(bool hasMore) { m_hasMoreMessages = hasMore; }
+  void SetIsLoadingOlder(bool loading);
+  bool IsLoadingOlder() const { return m_isLoadingOlder; }
+  int64_t GetOldestMessageId() const;
+  
+  // Loading indicator for older messages
+  void ShowLoadingOlderIndicator();
+  void HideLoadingOlderIndicator();
 
   // Batch updates (freeze/thaw for performance)
   void BeginBatchUpdate();
@@ -195,6 +208,11 @@ private:
   void OnKeyDown(wxKeyEvent &event);
   void OnScroll(wxScrollWinEvent &event);
   void OnMouseWheel(wxMouseEvent &event);
+  
+  // Lazy loading helpers
+  void CheckAndTriggerLazyLoad();
+  void ScheduleLazyLoadCheck();
+  void OnLazyLoadTimer(wxTimerEvent &event);
   void OnNewMessageButtonClick(wxCommandEvent &event);
   void OnSize(wxSizeEvent &event);
 
@@ -255,7 +273,7 @@ private:
   // Debounced refresh timer - coalesces multiple rapid message updates
   wxTimer m_refreshTimer;
   bool m_refreshPending;
-  static const int REFRESH_DEBOUNCE_MS = 50; // 50ms debounce
+  static const int REFRESH_DEBOUNCE_MS = 150; // 150ms debounce - longer to reduce jitter
 
   // Popup management (click-only, no hover)
   MediaInfo m_currentlyShowingMedia;
@@ -324,6 +342,17 @@ private:
   long m_contextMenuPos;
   wxString m_contextMenuLink;
   MediaInfo m_contextMenuMedia;
+
+  // Lazy loading for older messages
+  std::function<void(int64_t)> m_loadOlderCallback;
+  bool m_hasMoreMessages = true;
+  bool m_isLoadingOlder = false;
+  wxTimer m_lazyLoadTimer;
+  static constexpr int LAZY_LOAD_DEBOUNCE_MS = 500;  // Much longer debounce - wait for scrolling to settle
+  
+  // Loading indicator for older messages
+  wxPanel *m_loadingOlderPanel = nullptr;
+  wxStaticText *m_loadingOlderText = nullptr;
 
   // Menu IDs
   enum {

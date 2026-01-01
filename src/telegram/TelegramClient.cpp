@@ -1011,9 +1011,11 @@ void TelegramClient::FetchChatMessages(int64_t chatId) {
   Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
       TDLOG("getChatHistory response for chatId=%lld result_id=%d", (long long)chatId, result->get_id());
 
+
       if (result->get_id() == td_api::messages::ID) {
         auto messages = td_api::move_object_as<td_api::messages>(result);
         TDLOG("Got total_count=%d messages_.size()=%zu", messages->total_count_, messages->messages_.size());
+
 
         std::vector<MessageInfo> msgList;
         for (auto &msg : messages->messages_) {
@@ -1021,6 +1023,7 @@ void TelegramClient::FetchChatMessages(int64_t chatId) {
             msgList.push_back(ConvertMessage(msg.get()));
           }
         }
+
 
         // Sort by date/id
         std::sort(msgList.begin(), msgList.end(),
@@ -1035,6 +1038,17 @@ void TelegramClient::FetchChatMessages(int64_t chatId) {
           m_messages[chatId] = msgList;
         }
 
+        // Mark that this chat might have more messages
+        // We assume there ARE more messages unless we got 0 messages back
+        // (getting fewer than requested just means we hit a sync boundary)
+        {
+          std::lock_guard<std::mutex> lock(m_messageLoadingMutex);
+          // Only mark as "no more" if we got absolutely nothing
+          // Otherwise assume there might be older messages to fetch
+          m_chatHasMoreMessages[chatId] = (msgList.size() > 0);
+
+        }
+
         PostToMainThread([this, chatId, msgList]() {
           if (m_mainFrame) {
             m_mainFrame->OnMessagesLoaded(chatId, msgList);
@@ -1045,6 +1059,129 @@ void TelegramClient::FetchChatMessages(int64_t chatId) {
       TDLOG("getChatHistory ERROR: %d - %s", error->code_, error->message_.c_str());
     }
   });
+}
+
+void TelegramClient::LoadOlderMessages(int64_t chatId, int64_t fromMessageId, int limit) {
+
+  
+  // Prevent concurrent loads
+  if (m_isLoadingMessages.exchange(true)) {
+    TDLOG("LoadOlderMessages: Already loading, skipping");
+
+    return;
+  }
+  
+  // Check if we know there are no more messages
+  {
+    std::lock_guard<std::mutex> lock(m_messageLoadingMutex);
+    auto it = m_chatHasMoreMessages.find(chatId);
+    if (it != m_chatHasMoreMessages.end() && !it->second) {
+      TDLOG("LoadOlderMessages: No more messages for chatId=%lld", (long long)chatId);
+
+      m_isLoadingMessages = false;
+      return;
+    }
+  }
+  
+
+  
+  TDLOG("LoadOlderMessages: chatId=%lld fromMessageId=%lld limit=%d",
+        (long long)chatId, (long long)fromMessageId, limit);
+  
+  auto historyRequest = td_api::make_object<td_api::getChatHistory>();
+  historyRequest->chat_id_ = chatId;
+  historyRequest->from_message_id_ = fromMessageId;
+  historyRequest->offset_ = 0;
+  historyRequest->limit_ = limit;
+  historyRequest->only_local_ = false;
+  
+  Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+
+    
+    if (result->get_id() == td_api::messages::ID) {
+      auto messages = td_api::move_object_as<td_api::messages>(result);
+      TDLOG("LoadOlderMessages: Got %zu messages", messages->messages_.size());
+
+      
+      std::vector<MessageInfo> msgList;
+      for (auto &msg : messages->messages_) {
+        if (msg) {
+          msgList.push_back(ConvertMessage(msg.get()));
+        }
+      }
+      
+      // Update hasMoreMessages flag
+      // If we got 0 messages, there are definitely no more older messages
+      // If we got fewer than requested, there might still be more (sync boundary)
+      {
+        std::lock_guard<std::mutex> lock(m_messageLoadingMutex);
+        bool hasMore = (msgList.size() > 0);
+        m_chatHasMoreMessages[chatId] = hasMore;
+
+      }
+      
+      // Sort by date/id
+      std::sort(msgList.begin(), msgList.end(),
+                [](const MessageInfo &a, const MessageInfo &b) {
+                  if (a.date != b.date) return a.date < b.date;
+                  return a.id < b.id;
+                });
+      
+      // Merge with existing messages
+      {
+        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+        auto &existingMessages = m_messages[chatId];
+        
+        // Create a set of existing message IDs for fast lookup
+        std::set<int64_t> existingIds;
+        for (const auto &msg : existingMessages) {
+          existingIds.insert(msg.id);
+        }
+        
+        // Add only new messages
+        for (const auto &msg : msgList) {
+          if (existingIds.find(msg.id) == existingIds.end()) {
+            existingMessages.push_back(msg);
+          }
+        }
+        
+        // Re-sort the combined list
+        std::sort(existingMessages.begin(), existingMessages.end(),
+                  [](const MessageInfo &a, const MessageInfo &b) {
+                    if (a.date != b.date) return a.date < b.date;
+                    return a.id < b.id;
+                  });
+      }
+      
+      // Notify UI about older messages loaded
+      PostToMainThread([this, chatId, msgList]() {
+        if (m_mainFrame) {
+          m_mainFrame->OnOlderMessagesLoaded(chatId, msgList);
+        }
+      });
+    } else if (result->get_id() == td_api::error::ID) {
+      auto error = td_api::move_object_as<td_api::error>(result);
+      TDLOG("LoadOlderMessages ERROR: %d - %s", error->code_, error->message_.c_str());
+
+      
+      // Mark as no more messages on error
+      {
+        std::lock_guard<std::mutex> lock(m_messageLoadingMutex);
+        m_chatHasMoreMessages[chatId] = false;
+      }
+    }
+    
+    m_isLoadingMessages = false;
+  });
+}
+
+bool TelegramClient::HasMoreMessages(int64_t chatId) const {
+  std::lock_guard<std::mutex> lock(m_messageLoadingMutex);
+  auto it = m_chatHasMoreMessages.find(chatId);
+  if (it != m_chatHasMoreMessages.end()) {
+    return it->second;
+  }
+  return true;  // Assume there are more until we know otherwise
 }
 
 

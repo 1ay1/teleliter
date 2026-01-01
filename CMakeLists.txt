@@ -322,8 +322,11 @@ target_include_directories(teleliter PRIVATE
     ${WEBP_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
-    ${RLOTTIE_INCLUDE_DIRS}
 )
+
+if(RLOTTIE_FOUND)
+    target_include_directories(teleliter PRIVATE ${RLOTTIE_INCLUDE_DIRS})
+endif()
 
 # Link libraries - order matters for static linking
 target_link_libraries(teleliter
@@ -335,9 +338,12 @@ target_link_libraries(teleliter
     ${WEBP_LIBRARIES}
     ${FFMPEG_LIBRARIES}
     ${SDL2_LIBRARIES}
-    ${RLOTTIE_LIBRARIES}
     m
 )
+
+if(RLOTTIE_FOUND)
+    target_link_libraries(teleliter ${RLOTTIE_LIBRARIES})
+endif()
 
 # On macOS, link required system frameworks
 if(APPLE)

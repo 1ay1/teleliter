@@ -1,12 +1,35 @@
 #include "ChatArea.h"
 #include <wx/datetime.h>
 #include <wx/settings.h>
+#include <cmath>
+#include <iostream>
+
+// #define CALOG(msg) std::cerr << "[ChatArea] " << msg << std::endl
+#define CALOG(msg) do {} while(0)
+// #define SCROLL_LOG(msg) std::cerr << "[ChatArea:Scroll] " << msg << std::endl
+#define SCROLL_LOG(msg) do {} while(0)
 
 ChatArea::ChatArea(wxWindow *parent, wxWindowID id)
     : wxPanel(parent, id), m_chatDisplay(nullptr), m_wasAtBottom(true),
-      m_batchDepth(0), m_refreshPending(false) {
+      m_batchDepth(0), m_refreshPending(false), m_scrollTimer(this),
+      m_scrollTargetPos(0), m_scrollCurrentPos(0), m_scrollStartPos(0),
+      m_scrollSteps(SCROLL_ANIMATION_STEPS), m_scrollStepCount(0),
+      m_smoothScrollEnabled(true), m_needsIdleRefresh(false) {
   SetupColors();
   CreateUI();
+  
+  // Bind timer for smooth scroll animation
+  Bind(wxEVT_TIMER, &ChatArea::OnScrollTimer, this, m_scrollTimer.GetId());
+  
+  // Bind idle event for coalesced layout updates
+  Bind(wxEVT_IDLE, &ChatArea::OnIdleRefresh, this);
+  
+  // Bind size event for reactive resizing
+  Bind(wxEVT_SIZE, [this](wxSizeEvent &event) {
+    event.Skip();
+    // Schedule a layout update on idle to avoid excessive reflows during resize
+    m_needsIdleRefresh = true;
+  });
 }
 
 void ChatArea::SetupColors() {
@@ -49,12 +72,15 @@ void ChatArea::CreateUI() {
   // Use wxBUFFER_VIRTUAL_AREA for double buffering to reduce flicker
   m_chatDisplay = new wxRichTextCtrl(
       this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
-      wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
+      wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL | wxFULL_REPAINT_ON_RESIZE);
   m_chatDisplay->SetFont(m_chatFont);
   m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));
   
   // Enable double buffering to prevent flicker during rapid updates
   m_chatDisplay->SetDoubleBuffered(true);
+  
+  // Reduce flicker by setting background style
+  m_chatDisplay->SetBackgroundStyle(wxBG_STYLE_PAINT);
 
   // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
   m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
@@ -150,27 +176,141 @@ void ChatArea::ScrollToBottom() {
   if (!m_chatDisplay)
     return;
     
+  SCROLL_LOG("ScrollToBottom called, batchDepth=" << m_batchDepth << " smoothEnabled=" << m_smoothScrollEnabled);
+    
   // If we're in a batch update, just mark that we need to scroll
   if (m_batchDepth > 0) {
+    SCROLL_LOG("  -> in batch, marking wasAtBottom=true");
     m_wasAtBottom = true;
     return;
   }
   
-  m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
-  // Only call Refresh, not Update - let the event loop coalesce repaints
-  ScheduleRefresh();
+  // Use smooth scroll if enabled and not already at bottom
+  if (m_smoothScrollEnabled && !IsAtBottom()) {
+    SCROLL_LOG("  -> starting smooth scroll");
+    ScrollToBottomSmooth();
+  } else {
+    SCROLL_LOG("  -> instant scroll to last position");
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    // Only call Refresh, not Update - let the event loop coalesce repaints
+    ScheduleRefresh();
+  }
+}
+
+void ChatArea::ScrollToBottomSmooth() {
+  if (!m_chatDisplay)
+    return;
+    
+  // Stop any existing animation
+  if (m_scrollTimer.IsRunning()) {
+    m_scrollTimer.Stop();
+  }
+  
+  // Get current and target scroll positions
+  int scrollRange = m_chatDisplay->GetScrollRange(wxVERTICAL);
+  int scrollThumb = m_chatDisplay->GetScrollThumb(wxVERTICAL);
+  m_scrollTargetPos = scrollRange - scrollThumb;
+  m_scrollStartPos = m_chatDisplay->GetScrollPos(wxVERTICAL);
+  m_scrollCurrentPos = m_scrollStartPos;
+  
+  // Calculate scroll distance
+  int distance = m_scrollTargetPos - m_scrollCurrentPos;
+  
+  // If already at bottom or distance is too small, just jump there (no animation)
+  if (distance <= MIN_SCROLL_DISTANCE_FOR_ANIMATION) {
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    return;
+  }
+  
+  // Adjust animation steps based on distance - smoother for bigger scrolls
+  // Use more steps for longer distances, but cap it for responsiveness
+  m_scrollSteps = std::min(SCROLL_ANIMATION_STEPS, std::max(6, distance / 30));
+  m_scrollStepCount = 0;
+  
+  // Start animation
+  m_scrollTimer.Start(SCROLL_TIMER_INTERVAL_MS);
+}
+
+void ChatArea::OnScrollTimer(wxTimerEvent &event) {
+  if (!m_chatDisplay) {
+    m_scrollTimer.Stop();
+    return;
+  }
+  
+  m_scrollStepCount++;
+  
+  if (m_scrollStepCount >= m_scrollSteps) {
+    // Animation complete - snap to final position
+    m_scrollTimer.Stop();
+    m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    m_scrollCurrentPos = m_scrollTargetPos;
+    // Final refresh only, no Update() to avoid blocking
+    m_chatDisplay->Refresh();
+    return;
+  }
+  
+  // Ease-out quintic for extra smooth deceleration: 1 - (1 - t)^5
+  // This provides a more natural feel than cubic
+  double t = static_cast<double>(m_scrollStepCount) / m_scrollSteps;
+  double easedT = 1.0 - std::pow(1.0 - t, 5.0);
+  
+  int distance = m_scrollTargetPos - m_scrollStartPos;
+  m_scrollCurrentPos = m_scrollStartPos + static_cast<int>(distance * easedT);
+  
+  // Apply the scroll position without forcing immediate repaint
+  m_chatDisplay->SetScrollPos(wxVERTICAL, m_scrollCurrentPos, true);
+  
+  // Only refresh every other frame to reduce CPU usage during animation
+  if (m_scrollStepCount % 2 == 0) {
+    m_chatDisplay->Refresh();
+  }
+}
+
+void ChatArea::OnIdleRefresh(wxIdleEvent &event) {
+  event.Skip();
+  
+  if (m_needsIdleRefresh && m_chatDisplay && m_batchDepth == 0) {
+    m_needsIdleRefresh = false;
+    
+    // Check CURRENT scroll position, not stale m_wasAtBottom
+    bool currentlyAtBottom = IsAtBottom();
+    SCROLL_LOG("OnIdleRefresh: processing, currentlyAtBottom=" << currentlyAtBottom);
+    
+    // Freeze during layout to prevent flicker
+    m_chatDisplay->Freeze();
+    
+    // Recalculate layout after resize
+    m_chatDisplay->LayoutContent();
+    
+    // Only scroll to bottom if we're CURRENTLY at bottom (not based on stale state)
+    if (currentlyAtBottom) {
+      SCROLL_LOG("OnIdleRefresh: scrolling to bottom");
+      m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+    }
+    
+    m_chatDisplay->Thaw();
+  }
 }
 
 void ChatArea::ScrollToBottomIfAtBottom() {
   if (!m_chatDisplay)
     return;
-    
-  if (IsAtBottom()) {
+  
+  // Update our tracking of whether we're at bottom
+  bool atBottom = IsAtBottom();
+  
+  SCROLL_LOG("ScrollToBottomIfAtBottom: atBottom=" << atBottom << " batchDepth=" << m_batchDepth);
+  
+  if (atBottom) {
     // If in batch mode, just mark the flag - EndBatchUpdate will handle it
     if (m_batchDepth > 0) {
+      SCROLL_LOG("  -> in batch, marking wasAtBottom=true");
       m_wasAtBottom = true;
     } else {
-      ScrollToBottom();
+      SCROLL_LOG("  -> instant scroll to last position");
+      // Use instant scroll when following new messages to avoid lag
+      m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
+      ScheduleRefresh();
     }
   }
 }
@@ -183,28 +323,50 @@ bool ChatArea::IsAtBottom() const {
   int scrollRange = m_chatDisplay->GetScrollRange(wxVERTICAL);
   int scrollThumb = m_chatDisplay->GetScrollThumb(wxVERTICAL);
 
-  // Consider "at bottom" if within 50 pixels of the end
-  return (scrollPos + scrollThumb >= scrollRange - 50);
+  // Maximum scroll position is range - thumb
+  int maxScrollPos = scrollRange - scrollThumb;
+  
+  // If there's no scrollbar (content fits), we're at bottom
+  if (maxScrollPos <= 0) {
+    SCROLL_LOG("IsAtBottom: no scrollbar (maxScrollPos=" << maxScrollPos << ") -> true");
+    return true;
+  }
+  
+  // Consider "at bottom" if within 10 pixels of max scroll position
+  bool result = (scrollPos >= maxScrollPos - 10);
+  SCROLL_LOG("IsAtBottom: pos=" << scrollPos << " maxScrollPos=" << maxScrollPos << " -> " << result);
+  return result;
 }
 
 void ChatArea::BeginBatchUpdate() {
+  SCROLL_LOG("BeginBatchUpdate: depth=" << m_batchDepth << " -> " << (m_batchDepth + 1));
   if (m_batchDepth == 0) {
     m_wasAtBottom = IsAtBottom();
-    m_chatDisplay->Freeze();
+    SCROLL_LOG("  -> captured wasAtBottom=" << m_wasAtBottom);
+    if (m_chatDisplay) {
+      m_chatDisplay->Freeze();
+    }
   }
   m_batchDepth++;
 }
 
 void ChatArea::EndBatchUpdate() {
+  SCROLL_LOG("EndBatchUpdate: depth=" << m_batchDepth << " -> " << (m_batchDepth - 1) << " wasAtBottom=" << m_wasAtBottom);
   if (m_batchDepth > 0) {
     m_batchDepth--;
-    if (m_batchDepth == 0) {
-      m_chatDisplay->Thaw();
-      // Layout content once after batch
+    if (m_batchDepth == 0 && m_chatDisplay) {
+      // Layout content once after batch (while still frozen)
       m_chatDisplay->LayoutContent();
+      
+      // Handle scroll before thaw to avoid visual jump
       if (m_wasAtBottom) {
+        SCROLL_LOG("  -> scrolling to bottom before thaw");
         m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
       }
+      
+      // Thaw after all modifications are complete
+      m_chatDisplay->Thaw();
+      
       // Single refresh at end of batch - no Update() to let event loop coalesce
       m_chatDisplay->Refresh();
     }
@@ -227,9 +389,9 @@ void ChatArea::ScheduleRefresh() {
   // Use CallAfter to coalesce multiple rapid updates into a single refresh
   // This runs after the current event processing is complete
   CallAfter([this]() {
-    if (m_refreshPending) {
-      DoRefresh();
+    if (m_refreshPending && m_chatDisplay) {
       m_refreshPending = false;
+      DoRefresh();
     }
   });
 }
@@ -244,9 +406,12 @@ void ChatArea::DoRefresh() {
     return;
   }
 
-  // Force layout recalculation and queue repaint
-  // Don't call Update() - let event loop coalesce multiple refresh requests
+  // Freeze during layout to prevent visual glitches
+  m_chatDisplay->Freeze();
   m_chatDisplay->LayoutContent();
+  m_chatDisplay->Thaw();
+  
+  // Queue repaint - don't call Update() to let event loop coalesce
   m_chatDisplay->Refresh();
 }
 

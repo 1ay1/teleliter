@@ -118,6 +118,11 @@ public:
   
   // Simple message loading: load 100 messages on chat open, then receive new ones reactively
   void OpenChatAndLoadMessages(int64_t chatId);
+  
+  // Lazy loading for older messages when scrolling up
+  void LoadOlderMessages(int64_t chatId, int64_t fromMessageId, int limit = 50);
+  bool IsLoadingMessages() const { return m_isLoadingMessages; }
+  bool HasMoreMessages(int64_t chatId) const;
 
   // Track current active chat for download prioritization
   void SetCurrentChatId(int64_t chatId) { m_currentChatId = chatId; }
@@ -223,6 +228,11 @@ private:
   // Lazy loading state for chat list
   std::atomic<bool> m_allChatsLoaded{false};
   std::atomic<bool> m_isLoadingChats{false};
+  
+  // Lazy loading state for messages
+  std::atomic<bool> m_isLoadingMessages{false};
+  std::map<int64_t, bool> m_chatHasMoreMessages;  // chatId -> hasMoreMessages
+  mutable std::mutex m_messageLoadingMutex;
   static constexpr int CHAT_BATCH_SIZE = 30;
 
   std::uint64_t m_currentQueryId;

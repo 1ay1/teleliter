@@ -5,6 +5,8 @@
 #include <map>
 #include <vector>
 #include <wx/srchctrl.h>
+#include <wx/stattext.h>
+#include <wx/timer.h>
 #include <wx/treectrl.h>
 #include <wx/wx.h>
 
@@ -59,9 +61,14 @@ public:
 
   // Lazy loading
   void SetLoadMoreCallback(std::function<void()> callback) { m_loadMoreCallback = callback; }
-  void SetHasMoreChats(bool hasMore) { m_hasMoreChats = hasMore; }
-  void SetIsLoadingChats(bool loading) { m_isLoadingChats = loading; }
+  void SetHasMoreChats(bool hasMore);
+  void SetIsLoadingChats(bool loading);
   bool IsNearBottom() const;
+  
+  // Loading indicator
+  void ShowLoadingIndicator();
+  void HideLoadingIndicator();
+  bool IsLoadingVisible() const;
 
 private:
   void CreateLayout();
@@ -79,9 +86,14 @@ private:
   void OnSelectionChanged(wxTreeEvent &event);
   void OnTreeScrolled(wxScrollWinEvent &event);
   void OnTreeExpanded(wxTreeEvent &event);
+  void OnMouseWheel(wxMouseEvent &event);
+  void OnLoadingTimer(wxTimerEvent &event);
+  void OnIdleCheck(wxIdleEvent &event);
   
   // Lazy loading helper
   void CheckAndTriggerLazyLoad();
+  void ScheduleLazyLoadCheck();
+  bool ShouldLoadMoreChats() const;
 
   TelegramClient *m_telegramClient;
 
@@ -116,6 +128,18 @@ private:
   std::function<void()> m_loadMoreCallback;
   bool m_hasMoreChats = true;
   bool m_isLoadingChats = false;
+  bool m_lazyLoadCheckPending = false;
+  
+  // Loading indicator panel
+  wxPanel *m_loadingPanel = nullptr;
+  wxStaticText *m_loadingText = nullptr;
+  wxTimer m_loadingAnimTimer;
+  int m_loadingDots = 0;
+  
+  // Debounce timer for scroll-triggered loads
+  wxTimer m_scrollDebounceTimer;
+  static constexpr int SCROLL_DEBOUNCE_MS = 100;
+  static constexpr int LOADING_ANIM_MS = 400;
 
   // Online indicator
   static const wxString ONLINE_INDICATOR;
