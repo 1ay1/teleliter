@@ -59,8 +59,7 @@ static bool ShouldDownloadFile(const td_api::file *file) {
   do {                                                                         \
   } while (0)
 // Enable debug logging for download diagnostics (uncomment below):
-// #define TDLOG(...) do { fprintf(stderr, "[TDLib] "); fprintf(stderr,
-// __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
+// #define TDLOG(...) do { fprintf(stderr, "[TDLib] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 
 wxDEFINE_EVENT(wxEVT_TDLIB_UPDATE, wxThreadEvent);
 
@@ -994,28 +993,48 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
     Send(std::move(getChatRequest), [this, chatId,
                                      limit](td_api::object_ptr<td_api::Object>
                                                 chatResult) {
+      int64_t lastMessageId = 0;
       if (chatResult->get_id() == td_api::chat::ID) {
         auto chat = td_api::move_object_as<td_api::chat>(chatResult);
+        TDLOG("getChat result: chatId=%lld title=%s", (long long)chat->id_, chat->title_.c_str());
         if (chat->last_message_) {
-          TDLOG("Chat has last_message_id=%lld",
-                (long long)chat->last_message_->id_);
+          lastMessageId = chat->last_message_->id_;
+          TDLOG("Chat has last_message_id=%lld", (long long)lastMessageId);
+        } else {
+          TDLOG("Chat has NO last_message!");
         }
+      } else if (chatResult->get_id() == td_api::error::ID) {
+        auto error = td_api::move_object_as<td_api::error>(chatResult);
+        TDLOG("getChat ERROR: %d - %s", error->code_, error->message_.c_str());
       }
 
       // Step 3: Fetch 100 messages (TDLib max per request)
+      // getChatHistory returns messages OLDER than from_message_id (exclusive)
+      // Using lastMessageId with offset=0 gets us messages before the last one
+      // The last message will appear via reactive updates or is already shown
       auto historyRequest = td_api::make_object<td_api::getChatHistory>();
       historyRequest->chat_id_ = chatId;
-      historyRequest->from_message_id_ = 0;
+      historyRequest->from_message_id_ = lastMessageId;
       historyRequest->offset_ = 0;
       historyRequest->limit_ = 100;
       historyRequest->only_local_ = false;
+      
+      TDLOG("Requesting getChatHistory: chatId=%lld from_message_id=%lld limit=100", 
+            (long long)chatId, (long long)lastMessageId);
 
       Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
-        TDLOG("getChatHistory response for chatId=%lld", (long long)chatId);
+        TDLOG("getChatHistory response for chatId=%lld result_id=%d", (long long)chatId, result->get_id());
 
         if (result->get_id() == td_api::messages::ID) {
           auto messages = td_api::move_object_as<td_api::messages>(result);
-          TDLOG("Got %d total, %zu in batch", messages->total_count_, messages->messages_.size());
+          TDLOG("Got total_count=%d messages_.size()=%zu", messages->total_count_, messages->messages_.size());
+          
+          // Log first few message IDs for debugging
+          for (size_t i = 0; i < std::min(messages->messages_.size(), (size_t)3); i++) {
+            if (messages->messages_[i]) {
+              TDLOG("  Message[%zu]: id=%lld", i, (long long)messages->messages_[i]->id_);
+            }
+          }
 
           std::vector<MessageInfo> msgList;
           for (auto &msg : messages->messages_) {

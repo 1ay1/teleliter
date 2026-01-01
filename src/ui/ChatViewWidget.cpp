@@ -420,8 +420,7 @@ void ChatViewWidget::RefreshDisplay() {
   m_lastDisplayedTimestamp = 0;
   m_lastDisplayedMessageId = 0;
 
-  // Enable fast mode for bulk rendering
-  m_messageFormatter->SetFastMode(true);
+
 
   {
     std::lock_guard<std::mutex> lock(m_messagesMutex);
@@ -466,7 +465,7 @@ void ChatViewWidget::RefreshDisplay() {
     }
   }
 
-  m_messageFormatter->SetFastMode(false);
+
   
   display->EndSuppressUndo();
   display->Thaw();
