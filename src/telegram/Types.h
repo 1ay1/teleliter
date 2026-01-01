@@ -20,11 +20,11 @@ enum class AuthState {
 
 // Connection state (tracks actual connection to Telegram servers)
 enum class ConnectionState {
-  WaitingForNetwork,    // No network connection
-  ConnectingToProxy,    // Connecting through proxy
-  Connecting,           // Connecting to Telegram servers
-  Updating,             // Downloading updates
-  Ready                 // Connected and ready
+  WaitingForNetwork, // No network connection
+  ConnectingToProxy, // Connecting through proxy
+  Connecting,        // Connecting to Telegram servers
+  Updating,          // Downloading updates
+  Ready              // Connected and ready
 };
 
 // Chat info structure
@@ -74,10 +74,11 @@ struct MessageInfo {
   bool isOutgoing;
   bool isEdited;
   wxString originalText; // Original text before edit (if available)
-  
-  // When a message is sent, the server assigns a new ID different from the temporary local ID.
-  // This field holds the new server-assigned ID so the UI can update its tracking.
-  // If non-zero, the UI should update its stored message ID from 'id' to 'serverMessageId'.
+
+  // When a message is sent, the server assigns a new ID different from the
+  // temporary local ID. This field holds the new server-assigned ID so the UI
+  // can update its tracking. If non-zero, the UI should update its stored
+  // message ID from 'id' to 'serverMessageId'.
   int64_t serverMessageId;
 
   bool hasPhoto;
@@ -117,9 +118,9 @@ struct MessageInfo {
       : id(0), chatId(0), senderId(0), date(0), editDate(0), isOutgoing(false),
         isEdited(false), serverMessageId(0), hasPhoto(false), hasVideo(false),
         hasDocument(false), hasVoice(false), hasVideoNote(false),
-        hasSticker(false), hasAnimation(false), mediaFileId(0), mediaFileSize(0),
-        width(0), height(0), mediaThumbnailFileId(0), mediaDuration(0),
-        replyToMessageId(0), isForwarded(false) {}
+        hasSticker(false), hasAnimation(false), mediaFileId(0),
+        mediaFileSize(0), width(0), height(0), mediaThumbnailFileId(0),
+        mediaDuration(0), replyToMessageId(0), isForwarded(false) {}
 };
 
 // User info structure
@@ -135,6 +136,8 @@ struct UserInfo {
 
   bool isOnline;
   int64_t lastSeenTime;
+  int64_t
+      onlineExpires; // Unix timestamp when online status expires (from TDLib)
 
   wxString GetDisplayName() const {
     wxString name = firstName;
@@ -144,9 +147,18 @@ struct UserInfo {
     return name.IsEmpty() ? username : name;
   }
 
+  // Check if user is currently online (considering expiry time)
+  bool IsCurrentlyOnline() const {
+    if (!isOnline)
+      return false;
+    if (onlineExpires == 0)
+      return isOnline; // No expiry set, trust isOnline
+    return std::time(nullptr) < onlineExpires;
+  }
+
   UserInfo()
       : id(0), isBot(false), isVerified(false), isSelf(false), isOnline(false),
-        lastSeenTime(0) {}
+        lastSeenTime(0), onlineExpires(0) {}
 };
 
 // Download state for tracking file downloads

@@ -334,7 +334,8 @@ wxString ChatListWidget::FormatChatTitle(const ChatInfo &chat) const {
   if (chat.isPrivate && chat.userId != 0 && m_telegramClient) {
     bool found = false;
     UserInfo user = m_telegramClient->GetUser(chat.userId, &found);
-    if (found && user.isOnline) {
+    // Use IsCurrentlyOnline() which checks expiry time
+    if (found && user.IsCurrentlyOnline()) {
       title = ONLINE_INDICATOR;
     }
   }

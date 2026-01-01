@@ -1259,7 +1259,8 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
           }
         }
 
-        m_telegramClient->OpenChatAndLoadMessages(chatId);
+        m_telegramClient->OpenChatAndLoadMessages(
+            chatId, 50); // Load 50 initially, more on scroll
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
       } else {
@@ -1569,42 +1570,21 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   // Ensure we're at bottom after everything is rendered
   m_chatViewWidget->ForceScrollToBottom();
 
-  // Trigger auto-download for all media in loaded messages
+  // LAZY LOADING: Only download thumbnails (small, ~10KB each)
+  // Full media is downloaded on-demand when user hovers/clicks
   if (m_telegramClient) {
     for (const auto &msg : messages) {
-      if (msg.hasPhoto || msg.hasVideo || msg.hasVideoNote || msg.hasSticker ||
-          msg.hasAnimation || msg.hasVoice) {
-        // High priority for visible chat messages
-        if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
-          m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 15,
-                                         "Thumbnail", 0);
-        }
-        if (msg.mediaFileId != 0 && msg.mediaLocalPath.IsEmpty()) {
-          // Use appropriate priority based on media type
-          int priority = 10;
-          wxString name = "Media";
-          if (msg.hasPhoto) {
-            name = "Photo";
-            priority = 12;
-          } else if (msg.hasSticker) {
-            name = "Sticker";
-            priority = 14;
-          } else if (msg.hasAnimation) {
-            name = "GIF";
-            priority = 11;
-          } else if (msg.hasVoice) {
-            name = "Voice";
-            priority = 13;
-          } else if (msg.hasVideoNote) {
-            name = "VideoNote";
-            priority = 10;
-          } else if (msg.hasVideo) {
-            name = "Video";
-            priority = 8;
-          }
-          m_telegramClient->DownloadFile(msg.mediaFileId, priority, name,
-                                         msg.mediaFileSize);
-        }
+      // Only download thumbnails - they're small and needed for preview
+      if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
+        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail",
+                                       0);
+      }
+      // For stickers without thumbnails, download the sticker itself (usually
+      // small)
+      if (msg.hasSticker && msg.mediaFileId != 0 &&
+          msg.mediaLocalPath.IsEmpty() && msg.mediaThumbnailFileId == 0) {
+        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker",
+                                       msg.mediaFileSize);
       }
     }
   }
@@ -1801,6 +1781,18 @@ void MainFrame::OnFileProgress(int32_t fileId, int64_t downloadedSize,
 
 void MainFrame::OnDownloadStarted(int32_t fileId, const wxString &fileName,
                                   int64_t totalSize) {
+  // Skip showing only thumbnails in status bar - they're too small to be
+  // meaningful Show videos, photos etc. even if size is unknown (0)
+  bool isThumbnail = fileName.Lower().Contains("thumbnail");
+  if (isThumbnail) {
+    return; // Don't track thumbnails
+  }
+
+  // Also skip confirmed tiny files (<50KB) but allow unknown size through
+  if (totalSize > 0 && totalSize < 50 * 1024) {
+    return; // Don't track tiny files
+  }
+
   // Start a new download in TransferManager
   int transferId = m_transferManager.StartDownload(fileName, totalSize);
   m_fileToTransferId[fileId] = transferId;
@@ -2181,7 +2173,9 @@ void MainFrame::ReactiveRefresh() {
       if (found && chat.isPrivate && chat.userId > 0) {
         UserInfo user = m_telegramClient->GetUser(chat.userId, &found);
         if (found) {
-          OnUserStatusChanged(chat.userId, user.isOnline, user.lastSeenTime);
+          // Use IsCurrentlyOnline() which checks expiry time
+          OnUserStatusChanged(chat.userId, user.IsCurrentlyOnline(),
+                              user.lastSeenTime);
         }
       }
     }

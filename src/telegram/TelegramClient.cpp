@@ -973,10 +973,9 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
             }
           });
 
-          // Smart auto-download in background thread - don't block UI
-          std::thread([this, chatId]() {
-            AutoDownloadChatMedia(chatId, 30);
-          }).detach();
+          // NOTE: No auto-download here! We use lazy loading:
+          // - Thumbnails are downloaded when messages are rendered
+          // - Full media is downloaded on-demand (hover/click)
 
           // If we got fewer messages than requested, TDLib may still be syncing
           // Try to load more after a brief moment
@@ -2096,18 +2095,18 @@ void TelegramClient::OnNewMessage(
     m_messages[msgInfo.chatId].push_back(msgInfo);
   }
 
-  // Auto-download media from new messages (for ALL chats, not just current)
-  // This ensures media is ready when user opens any chat
-  if (msgInfo.hasPhoto || msgInfo.hasVideo || msgInfo.hasVideoNote ||
-      msgInfo.hasSticker || msgInfo.hasAnimation || msgInfo.hasVoice) {
-    // Use HIGH priority for current chat, lower for background chats
-    bool isCurrentChat = (msgInfo.chatId == m_currentChatId);
-    int basePriority = isCurrentChat ? 15 : 5; // Much higher for active chat
-    DownloadMediaFromMessage(msgInfo, basePriority);
-    TDLOG("OnNewMessage: auto-downloading media for chatId=%lld msgId=%lld "
-          "priority=%d (current=%d)",
-          (long long)msgInfo.chatId, (long long)msgInfo.id, basePriority,
-          isCurrentChat ? 1 : 0);
+  // LAZY LOADING: Only download thumbnails for current chat
+  // Full media is downloaded on-demand when user interacts
+  if (msgInfo.chatId == m_currentChatId) {
+    // Only download thumbnail if available (small, fast)
+    if (msgInfo.mediaThumbnailFileId != 0) {
+      DownloadFile(msgInfo.mediaThumbnailFileId, 10, "Thumbnail", 0);
+    }
+    // For stickers without thumbnails, download the sticker (usually small)
+    if (msgInfo.hasSticker && msgInfo.mediaFileId != 0 &&
+        msgInfo.mediaThumbnailFileId == 0) {
+      DownloadFile(msgInfo.mediaFileId, 12, "Sticker", msgInfo.mediaFileSize);
+    }
   }
 
   // REACTIVE MVC: Add to new messages queue instead of posting callback
@@ -2239,11 +2238,14 @@ void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user> &user) {
       using T = std::decay_t<decltype(s)>;
       if constexpr (std::is_same_v<T, td_api::userStatusOnline>) {
         info.isOnline = true;
+        info.onlineExpires = s.expires_;
       } else if constexpr (std::is_same_v<T, td_api::userStatusOffline>) {
         info.isOnline = false;
         info.lastSeenTime = s.was_online_;
+        info.onlineExpires = 0;
       } else {
         info.isOnline = false;
+        info.onlineExpires = 0;
       }
     });
   }
@@ -2270,32 +2272,40 @@ void TelegramClient::OnUserStatusUpdate(
 
   bool isOnline = false;
   int64_t lastSeenTime = 0;
+  int64_t onlineExpires = 0;
 
   try {
-    td_api::downcast_call(*status, [&isOnline, &lastSeenTime](auto &s) {
-      using T = std::decay_t<decltype(s)>;
-      if constexpr (std::is_same_v<T, td_api::userStatusOnline>) {
-        isOnline = true;
-      } else if constexpr (std::is_same_v<T, td_api::userStatusOffline>) {
-        isOnline = false;
-        lastSeenTime = s.was_online_;
-      } else if constexpr (std::is_same_v<T, td_api::userStatusRecently>) {
-        isOnline = false;
-        lastSeenTime = 0; // Will show "last seen recently"
-      } else if constexpr (std::is_same_v<T, td_api::userStatusLastWeek>) {
-        isOnline = false;
-        // Approximate to 7 days ago
-        lastSeenTime =
-            static_cast<int64_t>(std::time(nullptr)) - (7 * 24 * 60 * 60);
-      } else if constexpr (std::is_same_v<T, td_api::userStatusLastMonth>) {
-        isOnline = false;
-        // Approximate to 30 days ago
-        lastSeenTime =
-            static_cast<int64_t>(std::time(nullptr)) - (30 * 24 * 60 * 60);
-      } else {
-        isOnline = false;
-      }
-    });
+    td_api::downcast_call(
+        *status, [&isOnline, &lastSeenTime, &onlineExpires](auto &s) {
+          using T = std::decay_t<decltype(s)>;
+          if constexpr (std::is_same_v<T, td_api::userStatusOnline>) {
+            isOnline = true;
+            onlineExpires = s.expires_; // When this online status expires
+          } else if constexpr (std::is_same_v<T, td_api::userStatusOffline>) {
+            isOnline = false;
+            lastSeenTime = s.was_online_;
+            onlineExpires = 0;
+          } else if constexpr (std::is_same_v<T, td_api::userStatusRecently>) {
+            isOnline = false;
+            lastSeenTime = 0; // Will show "last seen recently"
+            onlineExpires = 0;
+          } else if constexpr (std::is_same_v<T, td_api::userStatusLastWeek>) {
+            isOnline = false;
+            // Approximate to 7 days ago
+            lastSeenTime =
+                static_cast<int64_t>(std::time(nullptr)) - (7 * 24 * 60 * 60);
+            onlineExpires = 0;
+          } else if constexpr (std::is_same_v<T, td_api::userStatusLastMonth>) {
+            isOnline = false;
+            // Approximate to 30 days ago
+            lastSeenTime =
+                static_cast<int64_t>(std::time(nullptr)) - (30 * 24 * 60 * 60);
+            onlineExpires = 0;
+          } else {
+            isOnline = false;
+            onlineExpires = 0;
+          }
+        });
   } catch (...) {
     // If downcast fails, assume offline with unknown last seen
     isOnline = false;
@@ -2308,6 +2318,7 @@ void TelegramClient::OnUserStatusUpdate(
     auto it = m_users.find(userId);
     if (it != m_users.end()) {
       it->second.isOnline = isOnline;
+      it->second.onlineExpires = onlineExpires;
       if (lastSeenTime > 0) {
         it->second.lastSeenTime = lastSeenTime;
       }
