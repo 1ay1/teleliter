@@ -485,7 +485,6 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
   // Uses ChatArea internally which handles colors and font consistently with
   // WelcomeChat
   m_chatViewWidget = new ChatViewWidget(parent, this);
-  m_chatViewWidget->SetTelegramClient(m_telegramClient);
   sizer->Add(m_chatViewWidget, 1, wxEXPAND);
 
   // Hide chat widget initially - welcome chat is shown

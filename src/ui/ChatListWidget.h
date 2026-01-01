@@ -13,6 +13,7 @@
 // Forward declarations
 class MainFrame;
 class TelegramClient;
+class UserInfoPopup;
 struct ChatInfo;
 struct UserInfo;
 
@@ -89,8 +90,14 @@ private:
   void OnTreeScrolled(wxScrollWinEvent &event);
   void OnTreeExpanded(wxTreeEvent &event);
   void OnMouseWheel(wxMouseEvent &event);
+  void OnMouseMove(wxMouseEvent &event);
+  void OnMouseLeave(wxMouseEvent &event);
   void OnLoadingTimer(wxTimerEvent &event);
   void OnIdleCheck(wxIdleEvent &event);
+  
+  // User info popup helpers
+  void ShowUserInfoPopup(int64_t userId, const wxPoint &screenPos);
+  void HideUserInfoPopup();
   
   // Lazy loading helper
   void CheckAndTriggerLazyLoad();
@@ -142,6 +149,13 @@ private:
   wxTimer m_scrollDebounceTimer;
   static constexpr int SCROLL_DEBOUNCE_MS = 100;
   static constexpr int LOADING_ANIM_MS = 400;
+
+  // User info popup
+  UserInfoPopup *m_userInfoPopup = nullptr;
+  wxTimer m_userPopupHoverTimer;
+  int64_t m_pendingUserPopupId = 0;
+  wxPoint m_pendingUserPopupPos;
+  static constexpr int USER_POPUP_HOVER_DELAY_MS = 400;
 
   // Online indicator
   static const wxString ONLINE_INDICATOR;

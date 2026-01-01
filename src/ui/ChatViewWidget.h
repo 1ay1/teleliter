@@ -20,8 +20,6 @@
 class MainFrame;
 class MessageFormatter;
 class MediaPopup;
-class UserInfoPopup;
-class TelegramClient;
 
 class ChatViewWidget : public wxPanel {
 public:
@@ -117,19 +115,7 @@ public:
   LinkSpan *GetLinkSpanAtPosition(long pos);
   void ClearLinkSpans();
 
-  // Sender span tracking (for user popup on hover)
-  void AddSenderSpan(long startPos, long endPos, int64_t senderId, const wxString &senderName);
-  SenderSpan *GetSenderSpanAtPosition(long pos);
-  void ClearSenderSpans();
-  
-  // User info popup
-  void ShowUserInfoPopup(int64_t userId, const wxPoint &position);
-  void HideUserInfoPopup();
-  void UpdateUserInfoPopup(int64_t userId);
-  void OnUserProfilePhotoDownloaded(int32_t fileId, const wxString &localPath);
-  
-  // Set Telegram client for user lookups
-  void SetTelegramClient(TelegramClient *client) { m_telegramClient = client; }
+
 
   // Access to ChatArea and underlying display control
   ChatArea *GetChatArea() { return m_chatArea; }
@@ -278,18 +264,7 @@ private:
   // Link spans for clickable URLs
   std::vector<LinkSpan> m_linkSpans;
 
-  // Sender spans for user popup on hover
-  std::vector<SenderSpan> m_senderSpans;
-  
-  // User info popup
-  UserInfoPopup *m_userInfoPopup;
-  wxTimer m_userPopupHoverTimer;
-  int64_t m_pendingUserPopupId;
-  wxPoint m_pendingUserPopupPos;
-  static const int USER_POPUP_HOVER_DELAY_MS = 400;  // Delay before showing popup
-  
-  // Telegram client for user lookups
-  TelegramClient *m_telegramClient;
+
 
   // Pending downloads - just tracks which fileIds are being downloaded
   std::set<int32_t> m_pendingDownloads;

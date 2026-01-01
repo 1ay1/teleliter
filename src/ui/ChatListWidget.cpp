@@ -3,6 +3,7 @@
 #include "../telegram/Types.h"
 #include "MainFrame.h"
 #include "MenuIds.h"
+#include "UserInfoPopup.h"
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <iostream>
@@ -21,7 +22,8 @@ ChatListWidget::ChatListWidget(wxWindow *parent)
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT)),
       m_selBgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)),
       m_loadingAnimTimer(this),
-      m_scrollDebounceTimer(this) {
+      m_scrollDebounceTimer(this),
+      m_userPopupHoverTimer(this) {
   CreateLayout();
   CreateCategories();
   
@@ -30,9 +32,24 @@ ChatListWidget::ChatListWidget(wxWindow *parent)
   Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
     CheckAndTriggerLazyLoad();
   }, m_scrollDebounceTimer.GetId());
+  Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+    // Show user popup after hover delay
+    if (m_pendingUserPopupId != 0) {
+      ShowUserInfoPopup(m_pendingUserPopupId, m_pendingUserPopupPos);
+      m_pendingUserPopupId = 0;
+    }
+  }, m_userPopupHoverTimer.GetId());
   
   // Bind idle event for deferred lazy load checks
   Bind(wxEVT_IDLE, &ChatListWidget::OnIdleCheck, this);
+  
+  // Create user info popup
+  m_userInfoPopup = new UserInfoPopup(this);
+  m_userInfoPopup->SetDownloadCallback([this](int32_t fileId) {
+    if (m_telegramClient) {
+      m_telegramClient->DownloadFile(fileId, 10); // High priority for profile photos
+    }
+  });
 }
 
 ChatListWidget::~ChatListWidget() {}
@@ -73,6 +90,8 @@ void ChatListWidget::CreateLayout() {
   m_chatTree->Bind(wxEVT_SCROLLWIN_PAGEUP, &ChatListWidget::OnTreeScrolled, this);
   m_chatTree->Bind(wxEVT_TREE_ITEM_EXPANDED, &ChatListWidget::OnTreeExpanded, this);
   m_chatTree->Bind(wxEVT_MOUSEWHEEL, &ChatListWidget::OnMouseWheel, this);
+  m_chatTree->Bind(wxEVT_MOTION, &ChatListWidget::OnMouseMove, this);
+  m_chatTree->Bind(wxEVT_LEAVE_WINDOW, &ChatListWidget::OnMouseLeave, this);
 
   sizer->Add(m_chatTree, 1, wxEXPAND);
   
@@ -708,4 +727,90 @@ bool ChatListWidget::IsLoadingVisible() const {
 
 bool ChatListWidget::IsNearBottom() const {
   return ShouldLoadMoreChats();
+}
+
+void ChatListWidget::OnMouseMove(wxMouseEvent &event) {
+  event.Skip();
+  
+  if (!m_chatTree || !m_telegramClient) return;
+  
+  // Throttle mouse move processing
+  static wxLongLong s_lastProcessTime = 0;
+  wxLongLong now = wxGetLocalTimeMillis();
+  if (now - s_lastProcessTime < 50) {
+    return;
+  }
+  s_lastProcessTime = now;
+  
+  wxPoint pos = event.GetPosition();
+  int flags = 0;
+  wxTreeItemId item = m_chatTree->HitTest(pos, flags);
+  
+  if (!item.IsOk() || !(flags & wxTREE_HITTEST_ONITEMLABEL)) {
+    HideUserInfoPopup();
+    return;
+  }
+  
+  // Get chat ID for this item
+  auto it = m_treeItemToChatId.find(item);
+  if (it == m_treeItemToChatId.end()) {
+    HideUserInfoPopup();
+    return;
+  }
+  
+  int64_t chatId = it->second;
+  
+  // Get chat info to check if it's a private chat
+  bool chatFound = false;
+  ChatInfo chat = m_telegramClient->GetChat(chatId, &chatFound);
+  if (!chatFound || !chat.isPrivate || chat.userId == 0) {
+    HideUserInfoPopup();
+    return;
+  }
+  
+  // It's a private chat - schedule popup for the user
+  int64_t userId = chat.userId;
+  
+  if (m_pendingUserPopupId != userId) {
+    m_userPopupHoverTimer.Stop();
+    m_pendingUserPopupId = userId;
+    m_pendingUserPopupPos = m_chatTree->ClientToScreen(pos);
+    m_userPopupHoverTimer.StartOnce(USER_POPUP_HOVER_DELAY_MS);
+  }
+}
+
+void ChatListWidget::OnMouseLeave(wxMouseEvent &event) {
+  event.Skip();
+  
+  // Stop pending popup timer
+  m_userPopupHoverTimer.Stop();
+  m_pendingUserPopupId = 0;
+  
+  // Don't immediately hide - let popup handle its own mouse leave
+  // This allows user to move mouse into the popup
+}
+
+void ChatListWidget::ShowUserInfoPopup(int64_t userId, const wxPoint &screenPos) {
+  if (!m_userInfoPopup || !m_telegramClient || userId == 0) return;
+  
+  bool found = false;
+  UserInfo user = m_telegramClient->GetUser(userId, &found);
+  if (!found) return;
+  
+  m_userInfoPopup->SetTelegramClient(m_telegramClient);
+  m_userInfoPopup->ShowUser(user, screenPos);
+}
+
+void ChatListWidget::HideUserInfoPopup() {
+  m_userPopupHoverTimer.Stop();
+  m_pendingUserPopupId = 0;
+  
+  if (m_userInfoPopup && m_userInfoPopup->IsShown()) {
+    // Don't hide if mouse is over the popup itself
+    wxPoint mousePos = wxGetMousePosition();
+    wxRect popupRect = m_userInfoPopup->GetScreenRect();
+    if (!popupRect.Contains(mousePos)) {
+      m_userInfoPopup->Hide();
+    }
+  }
 }

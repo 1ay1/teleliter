@@ -3,7 +3,6 @@
 #include "MainFrame.h"
 #include "MediaPopup.h"
 #include "MessageFormatter.h"
-#include "UserInfoPopup.h"
 #include <algorithm>
 #include <iostream>
 #include <unordered_map>
@@ -78,9 +77,7 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
       m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1),
-      m_lazyLoadTimer(this), m_userInfoPopup(nullptr),
-      m_userPopupHoverTimer(this), m_pendingUserPopupId(0),
-      m_telegramClient(nullptr) {
+      m_lazyLoadTimer(this) {
   // Bind timer events
   Bind(
       wxEVT_TIMER, [this](wxTimerEvent &) { HideDownloadProgress(); },
@@ -91,13 +88,6 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
        HIGHLIGHT_TIMER_ID);
   Bind(wxEVT_TIMER, &ChatViewWidget::OnLazyLoadTimer, this,
        m_lazyLoadTimer.GetId());
-  Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
-    // Show user popup after hover delay
-    if (m_pendingUserPopupId != 0) {
-      ShowUserInfoPopup(m_pendingUserPopupId, m_pendingUserPopupPos);
-      m_pendingUserPopupId = 0;
-    }
-  }, m_userPopupHoverTimer.GetId());
 
   // Bind size event for repositioning the new message button
   Bind(wxEVT_SIZE, &ChatViewWidget::OnSize, this);
@@ -116,14 +106,6 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
 
   // Create edit history popup (hidden initially)
   m_editHistoryPopup = nullptr; // Created on demand
-  
-  // Create user info popup (hidden initially)
-  m_userInfoPopup = new UserInfoPopup(this);
-  m_userInfoPopup->SetDownloadCallback([this](int32_t fileId) {
-    if (m_telegramClient) {
-      m_telegramClient->DownloadFile(fileId, 10); // High priority for profile photos
-    }
-  });
 }
 
 ChatViewWidget::~ChatViewWidget() {
@@ -255,12 +237,6 @@ void ChatViewWidget::SetupDisplayControl() {
   m_messageFormatter->SetLinkSpanCallback(
       [this](long startPos, long endPos, const wxString &url) {
         AddLinkSpan(startPos, endPos, url);
-      });
-  
-  // Set up sender span callback for user popup on hover
-  m_messageFormatter->SetSenderSpanCallback(
-      [this](long startPos, long endPos, int64_t senderId, const wxString &senderName) {
-        AddSenderSpan(startPos, endPos, senderId, senderName);
       });
 }
 
@@ -427,7 +403,9 @@ void ChatViewWidget::RefreshDisplay() {
     return;
 
   // Check if we should scroll to bottom after refresh
-  bool shouldScrollToBottom = IsAtBottom();
+  // Use m_wasAtBottom flag if set (e.g., after ClearMessages or ForceScrollToBottom)
+  // Otherwise check current scroll position
+  bool shouldScrollToBottom = m_wasAtBottom || IsAtBottom();
   
   // Remember scroll state for anchor-based scrolling
   int oldScrollPos = display->GetScrollPos(wxVERTICAL);
@@ -472,7 +450,6 @@ void ChatViewWidget::RefreshDisplay() {
   ClearMediaSpans();
   ClearEditSpans();
   ClearLinkSpans();
-  ClearSenderSpans();
   m_readMarkerSpans.clear();
   m_messageRangeMap.clear();
 
@@ -598,9 +575,6 @@ void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
 void ChatViewWidget::DoRenderMessage(const MessageInfo &msg) {
   if (!m_messageFormatter)
     return;
-
-  // Set current sender ID for sender span tracking
-  m_messageFormatter->SetCurrentSenderId(msg.senderId);
 
   wxString timestamp = FormatTimestamp(msg.date);
 
@@ -1275,7 +1249,9 @@ void ChatViewWidget::ClearMessages() {
   ClearMediaSpans();
   ClearEditSpans();
   ClearLinkSpans();
-  ClearSenderSpans();
+
+  // Reset scroll state so new chat scrolls to bottom
+  m_wasAtBottom = true;
 
   // Reset message grouping state and marker tracking
   if (m_messageFormatter) {
@@ -1577,72 +1553,6 @@ LinkSpan *ChatViewWidget::GetLinkSpanAtPosition(long pos) {
 }
 
 void ChatViewWidget::ClearLinkSpans() { m_linkSpans.clear(); }
-
-// Sender span methods for user popup on hover
-void ChatViewWidget::AddSenderSpan(long startPos, long endPos, int64_t senderId,
-                                   const wxString &senderName) {
-  if (senderId == 0) return;
-  m_senderSpans.emplace_back(startPos, endPos, senderId, senderName);
-}
-
-SenderSpan *ChatViewWidget::GetSenderSpanAtPosition(long pos) {
-  for (auto &span : m_senderSpans) {
-    if (span.Contains(pos)) {
-      return &span;
-    }
-  }
-  return nullptr;
-}
-
-void ChatViewWidget::ClearSenderSpans() { m_senderSpans.clear(); }
-
-// User info popup methods
-void ChatViewWidget::ShowUserInfoPopup(int64_t userId, const wxPoint &position) {
-  if (!m_userInfoPopup || !m_telegramClient || userId == 0) return;
-  
-  bool found = false;
-  UserInfo user = m_telegramClient->GetUser(userId, &found);
-  if (!found) return;
-  
-  // Convert to screen coordinates
-  wxPoint screenPos = position;
-  if (m_chatArea && m_chatArea->GetDisplay()) {
-    screenPos = m_chatArea->GetDisplay()->ClientToScreen(position);
-  }
-  
-  m_userInfoPopup->SetTelegramClient(m_telegramClient);
-  m_userInfoPopup->ShowUser(user, screenPos);
-}
-
-void ChatViewWidget::HideUserInfoPopup() {
-  m_userPopupHoverTimer.Stop();
-  m_pendingUserPopupId = 0;
-  if (m_userInfoPopup && m_userInfoPopup->IsShown()) {
-    // Don't hide if mouse is over the popup itself
-    wxPoint mousePos = wxGetMousePosition();
-    wxRect popupRect = m_userInfoPopup->GetScreenRect();
-    if (!popupRect.Contains(mousePos)) {
-      m_userInfoPopup->Hide();
-    }
-  }
-}
-
-void ChatViewWidget::UpdateUserInfoPopup(int64_t userId) {
-  if (!m_userInfoPopup || !m_userInfoPopup->IsShowingUser(userId)) return;
-  if (!m_telegramClient) return;
-  
-  bool found = false;
-  UserInfo user = m_telegramClient->GetUser(userId, &found);
-  if (found) {
-    m_userInfoPopup->UpdateUser(user);
-  }
-}
-
-void ChatViewWidget::OnUserProfilePhotoDownloaded(int32_t fileId, const wxString &localPath) {
-  if (m_userInfoPopup && m_userInfoPopup->IsShown()) {
-    m_userInfoPopup->UpdateProfilePhoto(fileId, localPath);
-  }
-}
 
 void ChatViewWidget::ShowEditHistoryPopup(const EditSpan &span,
                                           const wxPoint &position) {
@@ -2763,45 +2673,18 @@ void ChatViewWidget::OnMouseMove(wxMouseEvent &event) {
           if (editSpan) {
             setCursor(wxCURSOR_HAND);
             setTooltip("Click to see original message");
-            HideUserInfoPopup();
           } else {
-            // Check for sender names (for user popup on hover)
-            SenderSpan *senderSpan = GetSenderSpanAtPosition(charPos);
-            if (senderSpan) {
-              setCursor(wxCURSOR_HAND);
-              setTooltip("Click for user info");
-              
-              // Start hover timer for user popup if not already pending
-              if (m_pendingUserPopupId != senderSpan->senderId) {
-                m_userPopupHoverTimer.Stop();
-                m_pendingUserPopupId = senderSpan->senderId;
-                m_pendingUserPopupPos = pos;
-                m_userPopupHoverTimer.StartOnce(USER_POPUP_HOVER_DELAY_MS);
-              }
-            } else {
-              // Normal text - use I-beam for text selection
-              setCursor(wxCURSOR_IBEAM);
-              setTooltip(wxEmptyString);
-              HideUserInfoPopup();
-            }
+            // Normal text - use I-beam for text selection
+            setCursor(wxCURSOR_IBEAM);
+            setTooltip(wxEmptyString);
           }
         }
       }
     }
   } else {
-    // Not on text - but check if we're moving to the popup
+    // Not on text
     setCursor(wxCURSOR_ARROW);
     setTooltip(wxEmptyString);
-    // Delay hiding to allow mouse to move to the popup
-    if (m_userInfoPopup && m_userInfoPopup->IsShown()) {
-      wxPoint mouseScreenPos = m_chatArea->GetDisplay()->ClientToScreen(pos);
-      wxRect popupRect = m_userInfoPopup->GetScreenRect();
-      // Add a small margin around popup for easier mouse movement
-      popupRect.Inflate(10);
-      if (!popupRect.Contains(mouseScreenPos)) {
-        HideUserInfoPopup();
-      }
-    }
   }
 
   event.Skip();
@@ -2814,10 +2697,6 @@ void ChatViewWidget::OnMouseLeave(wxMouseEvent &event) {
       m_chatArea->GetDisplay()->SetToolTip(NULL);
     }
   }
-  // Don't immediately hide popup - let it handle its own mouse leave
-  // This allows the user to move from the chat to the popup
-  m_userPopupHoverTimer.Stop();
-  m_pendingUserPopupId = 0;
   event.Skip();
 }
 
@@ -2854,21 +2733,11 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent &event) {
       ShowEditHistoryPopup(*editSpan, ClientToScreen(pos));
       return;
     }
-    
-    // Check for sender names - show user popup on click
-    SenderSpan *senderSpan = GetSenderSpanAtPosition(charPos);
-    if (senderSpan) {
-      m_userPopupHoverTimer.Stop();
-      m_pendingUserPopupId = 0;
-      ShowUserInfoPopup(senderSpan->senderId, pos);
-      return;
-    }
   }
 
   // Hide popups if clicking elsewhere
   HideMediaPopup();
   HideEditHistoryPopup();
-  HideUserInfoPopup();
 
   event.Skip();
 }
