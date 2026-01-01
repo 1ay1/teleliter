@@ -2346,6 +2346,6 @@ void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
       }
       return;
     }
-    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 30);
+    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 15);
   }
 }
