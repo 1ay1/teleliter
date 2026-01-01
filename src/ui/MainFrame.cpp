@@ -485,6 +485,7 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
   // Uses ChatArea internally which handles colors and font consistently with
   // WelcomeChat
   m_chatViewWidget = new ChatViewWidget(parent, this);
+  m_chatViewWidget->SetTelegramClient(m_telegramClient);
   sizer->Add(m_chatViewWidget, 1, wxEXPAND);
 
   // Hide chat widget initially - welcome chat is shown
@@ -1246,7 +1247,8 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
             UserInfo userInfo =
                 m_telegramClient->GetUser(chatInfo.userId, &userFound);
             if (userFound) {
-              if (userInfo.isOnline) {
+              // Use IsCurrentlyOnline() which checks expiry time for robust status
+              if (userInfo.IsCurrentlyOnline()) {
                 topicInfo = "online";
               } else {
                 topicInfo = FormatLastSeen(userInfo.lastSeenTime);
@@ -1926,8 +1928,18 @@ void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline,
   }
 
   // Update the topic bar with new status
+  // Also verify with IsCurrentlyOnline() for robustness
+  bool userFound = false;
+  UserInfo userInfo = m_telegramClient->GetUser(userId, &userFound);
+  
   wxString topicInfo;
-  if (isOnline) {
+  bool actuallyOnline = isOnline;
+  if (userFound) {
+    // Use IsCurrentlyOnline() which checks expiry time
+    actuallyOnline = userInfo.IsCurrentlyOnline();
+  }
+  
+  if (actuallyOnline) {
     topicInfo = "online";
   } else {
     topicInfo = FormatLastSeen(lastSeenTime);
@@ -2268,6 +2280,42 @@ void MainFrame::OnStatusTimer(wxTimerEvent &event) {
     m_statusBar->SetCurrentChatTitle(m_currentChatTitle);
     m_statusBar->SetCurrentChatId(m_currentChatId);
     m_statusBar->UpdateStatusBar();
+  }
+  
+  // Periodically refresh online status for current private chat
+  // This catches cases where online status expires while viewing a chat
+  if (m_currentChatId != 0 && m_telegramClient && m_chatViewWidget) {
+    bool chatFound = false;
+    ChatInfo chatInfo = m_telegramClient->GetChat(m_currentChatId, &chatFound);
+    
+    if (chatFound && chatInfo.isPrivate && chatInfo.userId != 0) {
+      bool userFound = false;
+      UserInfo userInfo = m_telegramClient->GetUser(chatInfo.userId, &userFound);
+      
+      if (userFound) {
+        // Use IsCurrentlyOnline() which checks expiry time
+        bool isOnline = userInfo.IsCurrentlyOnline();
+        wxString topicInfo;
+        if (isOnline) {
+          topicInfo = "online";
+        } else {
+          topicInfo = FormatLastSeen(userInfo.lastSeenTime);
+        }
+        
+        // Get display name with fallbacks
+        wxString displayName = chatInfo.title;
+        if (displayName.IsEmpty()) {
+          displayName = userInfo.GetDisplayName();
+        }
+        
+        m_chatViewWidget->SetTopicText(displayName, topicInfo);
+      }
+    }
+  }
+  
+  // Also refresh online indicators in chat list periodically
+  if (m_chatListWidget) {
+    m_chatListWidget->RefreshOnlineIndicators();
   }
 }
 

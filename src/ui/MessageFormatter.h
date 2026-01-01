@@ -16,6 +16,10 @@ struct MessageInfo;
 using LinkSpanCallback =
     std::function<void(long startPos, long endPos, const wxString &url)>;
 
+// Callback type for when a sender span is created (for user popup on hover)
+using SenderSpanCallback =
+    std::function<void(long startPos, long endPos, int64_t senderId, const wxString &senderName)>;
+
 // Handles HexChat-style message formatting for the chat display
 // Uses ChatArea for consistent formatting across the application
 class MessageFormatter {
@@ -27,6 +31,14 @@ public:
   void SetLinkSpanCallback(LinkSpanCallback callback) {
     m_linkSpanCallback = callback;
   }
+  
+  // Set callback for sender span tracking (for user popup)
+  void SetSenderSpanCallback(SenderSpanCallback callback) {
+    m_senderSpanCallback = callback;
+  }
+  
+  // Set current sender ID for the message being formatted
+  void SetCurrentSenderId(int64_t senderId) { m_currentSenderId = senderId; }
   
   // Fast mode - skips expensive operations like URL detection
   // Use during bulk loading for better performance
@@ -178,6 +190,12 @@ private:
 
   // Callback for link spans
   LinkSpanCallback m_linkSpanCallback;
+  
+  // Callback for sender spans (user popup on hover)
+  SenderSpanCallback m_senderSpanCallback;
+  
+  // Current sender ID for tracking sender spans
+  int64_t m_currentSenderId = 0;
   
   // Fast mode flag - when true, skips URL detection and other expensive ops
   bool m_fastMode = false;

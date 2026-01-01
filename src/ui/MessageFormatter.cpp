@@ -171,9 +171,22 @@ void MessageFormatter::WriteAlignedUsername(const wxString &sender) {
   wxColour userColor = m_chatArea->GetUserColor(sender);
   m_chatArea->BeginTextColour(userColor);
   m_chatArea->WriteText("<");
+  
+  // Track sender span start position (after the "<")
+  long senderSpanStart = m_chatArea->GetLastPosition();
+  
   m_chatArea->BeginBold();
   m_chatArea->WriteText(displayName);
   m_chatArea->EndBold();
+  
+  // Track sender span end position (before the ">")
+  long senderSpanEnd = m_chatArea->GetLastPosition();
+  
+  // Notify callback about sender span if set
+  if (m_senderSpanCallback && m_currentSenderId != 0) {
+    m_senderSpanCallback(senderSpanStart, senderSpanEnd, m_currentSenderId, sender);
+  }
+  
   m_chatArea->WriteText("> ");
   m_chatArea->EndTextColour();
 }

@@ -137,6 +137,16 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
   int64_t selectedChatId = GetSelectedChatId();
   bool wasOnTeleliter = IsTeleliterSelected();
 
+  // Sort chats by latest message date (newest first)
+  std::sort(m_allChats.begin(), m_allChats.end(),
+            [](const ChatInfo &a, const ChatInfo &b) {
+              // Pinned chats first, then by last message date
+              if (a.isPinned != b.isPinned) {
+                return a.isPinned > b.isPinned;
+              }
+              return a.lastMessageDate > b.lastMessageDate;
+            });
+
   // Freeze the tree to prevent UI updates during batch modifications
   // This significantly improves performance for large chat lists
   m_chatTree->Freeze();
@@ -346,14 +356,50 @@ wxTreeItemId ChatListWidget::GetCategoryForChat(const ChatInfo &chat) const {
   }
 }
 
+wxTreeItemId ChatListWidget::InsertChatSorted(wxTreeItemId parent, 
+                                               const wxString &title,
+                                               int64_t lastMessageDate) {
+  // Find the correct position to insert (sorted by date, newest first)
+  wxTreeItemIdValue cookie;
+  wxTreeItemId child = m_chatTree->GetFirstChild(parent, cookie);
+  wxTreeItemId prevChild;
+  
+  while (child.IsOk()) {
+    // Get the chat info for this child to compare dates
+    auto it = m_treeItemToChatId.find(child);
+    if (it != m_treeItemToChatId.end()) {
+      int64_t childChatId = it->second;
+      // Find the chat info
+      for (const auto &c : m_allChats) {
+        if (c.id == childChatId) {
+          if (lastMessageDate > c.lastMessageDate) {
+            // Insert before this item
+            if (prevChild.IsOk()) {
+              return m_chatTree->InsertItem(parent, prevChild, title);
+            } else {
+              return m_chatTree->PrependItem(parent, title);
+            }
+          }
+          break;
+        }
+      }
+    }
+    prevChild = child;
+    child = m_chatTree->GetNextChild(parent, cookie);
+  }
+  
+  // Append at end if no suitable position found
+  return m_chatTree->AppendItem(parent, title);
+}
+
 wxTreeItemId ChatListWidget::AddChatToCategory(const ChatInfo &chat) {
   wxTreeItemId parent = GetCategoryForChat(chat);
 
   // Format title with unread count and online indicator
   wxString title = FormatChatTitle(chat);
 
-  // Add the item
-  wxTreeItemId item = m_chatTree->AppendItem(parent, title);
+  // Add the item in sorted order (latest first)
+  wxTreeItemId item = InsertChatSorted(parent, title, chat.lastMessageDate);
 
   // Set bold if unread (don't set custom colors - breaks selection contrast)
   if (chat.unreadCount > 0) {
@@ -382,18 +428,34 @@ void ChatListWidget::UpdateChatItem(const wxTreeItemId &item,
 
 wxString ChatListWidget::FormatChatTitle(const ChatInfo &chat) const {
   wxString title;
+  wxString displayName = chat.title;
 
-  // Add online indicator for private chats with online users
+  // For private chats with empty title, try to get user info
   if (chat.isPrivate && chat.userId != 0 && m_telegramClient) {
     bool found = false;
     UserInfo user = m_telegramClient->GetUser(chat.userId, &found);
+    
     // Use IsCurrentlyOnline() which checks expiry time
     if (found && user.IsCurrentlyOnline()) {
       title = ONLINE_INDICATOR;
     }
+    
+    // If title is empty, use user's display name (which has fallbacks)
+    if (displayName.IsEmpty() && found) {
+      displayName = user.GetDisplayName();
+    }
+  }
+  
+  // Final fallback for any empty title
+  if (displayName.IsEmpty()) {
+    if (chat.id != 0) {
+      displayName = wxString::Format("Chat %lld", chat.id);
+    } else {
+      displayName = "Unknown Chat";
+    }
   }
 
-  title += chat.title;
+  title += displayName;
 
   // Append unread count with badge style
   if (chat.unreadCount > 0) {

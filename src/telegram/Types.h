@@ -171,6 +171,7 @@ struct UserInfo {
   wxString lastName;
   wxString username;
   wxString phoneNumber;
+  wxString bio;
   bool isBot;
   bool isVerified;
   bool isSelf;
@@ -180,12 +181,33 @@ struct UserInfo {
   int64_t
       onlineExpires; // Unix timestamp when online status expires (from TDLib)
 
+  // Profile photo
+  int32_t profilePhotoSmallFileId;
+  wxString profilePhotoSmallPath;
+  int32_t profilePhotoBigFileId;
+  wxString profilePhotoBigPath;
+
   wxString GetDisplayName() const {
     wxString name = firstName;
     if (!lastName.IsEmpty()) {
       name += " " + lastName;
     }
-    return name.IsEmpty() ? username : name;
+    name = name.Trim();
+    
+    // Fallback chain: name -> username -> phone number -> ID
+    if (!name.IsEmpty()) {
+      return name;
+    }
+    if (!username.IsEmpty()) {
+      return "@" + username;
+    }
+    if (!phoneNumber.IsEmpty()) {
+      return phoneNumber;
+    }
+    if (id != 0) {
+      return wxString::Format("User %lld", id);
+    }
+    return "Unknown";
   }
 
   // Check if user is currently online (considering expiry time)
@@ -197,9 +219,37 @@ struct UserInfo {
     return std::time(nullptr) < onlineExpires;
   }
 
+  // Format last seen time as a human-readable string
+  wxString GetLastSeenString() const {
+    if (IsCurrentlyOnline()) {
+      return "online";
+    }
+    if (lastSeenTime == 0) {
+      return "last seen a long time ago";
+    }
+    int64_t now = std::time(nullptr);
+    int64_t diff = now - lastSeenTime;
+    if (diff < 60) {
+      return "last seen just now";
+    } else if (diff < 3600) {
+      int mins = diff / 60;
+      return wxString::Format("last seen %d minute%s ago", mins, mins == 1 ? "" : "s");
+    } else if (diff < 86400) {
+      int hours = diff / 3600;
+      return wxString::Format("last seen %d hour%s ago", hours, hours == 1 ? "" : "s");
+    } else if (diff < 604800) {
+      int days = diff / 86400;
+      return wxString::Format("last seen %d day%s ago", days, days == 1 ? "" : "s");
+    } else {
+      wxDateTime dt((time_t)lastSeenTime);
+      return "last seen " + dt.Format("%b %d");
+    }
+  }
+
   UserInfo()
       : id(0), isBot(false), isVerified(false), isSelf(false), isOnline(false),
-        lastSeenTime(0), onlineExpires(0) {}
+        lastSeenTime(0), onlineExpires(0), profilePhotoSmallFileId(0),
+        profilePhotoBigFileId(0) {}
 };
 
 // Download state for tracking file downloads

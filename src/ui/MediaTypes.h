@@ -83,4 +83,18 @@ struct LinkSpan {
   bool Contains(long pos) const { return pos >= startPos && pos <= endPos; }
 };
 
+// Tracks sender name positions for user popup on hover
+struct SenderSpan {
+  long startPos;     // Start position of sender name in text
+  long endPos;       // End position of sender name in text
+  int64_t senderId;  // User ID of the sender
+  wxString senderName; // Display name for quick access
+
+  bool Contains(long pos) const { return pos >= startPos && pos <= endPos; }
+  
+  SenderSpan() : startPos(0), endPos(0), senderId(0) {}
+  SenderSpan(long start, long end, int64_t id, const wxString& name)
+      : startPos(start), endPos(end), senderId(id), senderName(name) {}
+};
+
 #endif // MEDIATYPES_H

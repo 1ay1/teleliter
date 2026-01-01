@@ -75,8 +75,10 @@ private:
   void CreateCategories();
   wxTreeItemId GetCategoryForChat(const ChatInfo &chat) const;
   wxTreeItemId AddChatToCategory(const ChatInfo &chat);
+  wxTreeItemId InsertChatSorted(wxTreeItemId parent, const wxString &title, int64_t lastMessageDate);
   void UpdateChatItem(const wxTreeItemId &item, const ChatInfo &chat);
   wxString FormatChatTitle(const ChatInfo &chat) const;
+  
   bool MatchesFilter(const ChatInfo &chat) const;
   void ApplyFilter();
 

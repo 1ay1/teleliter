@@ -2276,6 +2276,26 @@ void TelegramClient::OnUserUpdate(td_api::object_ptr<td_api::user> &user) {
   // New API uses verification_status_ object instead of is_verified_
   info.isVerified = user->verification_status_ != nullptr;
 
+  // Extract profile photo if available
+  if (user->profile_photo_) {
+    auto& photo = user->profile_photo_;
+    if (photo->small_) {
+      info.profilePhotoSmallFileId = photo->small_->id_;
+      if (photo->small_->local_ && photo->small_->local_->is_downloading_completed_) {
+        info.profilePhotoSmallPath = wxString::FromUTF8(photo->small_->local_->path_);
+      } else if (photo->small_->id_ != 0) {
+        // Auto-download small profile photo with low priority
+        this->DownloadFile(photo->small_->id_, 1, "ProfilePhoto", 0);
+      }
+    }
+    if (photo->big_) {
+      info.profilePhotoBigFileId = photo->big_->id_;
+      if (photo->big_->local_ && photo->big_->local_->is_downloading_completed_) {
+        info.profilePhotoBigPath = wxString::FromUTF8(photo->big_->local_->path_);
+      }
+    }
+  }
+
   // Parse online status
   if (user->status_) {
     td_api::downcast_call(*user->status_, [&info](auto &s) {
@@ -2424,6 +2444,19 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file> &file) {
   // REACTIVE MVC: Add to queues instead of posting callbacks
   // UI will poll these when it refreshes
   if (isComplete && !localPath.IsEmpty()) {
+    // Update user profile photos if this file matches
+    {
+      std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+      for (auto& [userId, user] : m_users) {
+        if (user.profilePhotoSmallFileId == fileId) {
+          user.profilePhotoSmallPath = localPath;
+        }
+        if (user.profilePhotoBigFileId == fileId) {
+          user.profilePhotoBigPath = localPath;
+        }
+      }
+    }
+    
     // Add to completed downloads queue
     {
       std::lock_guard<std::mutex> lock(m_completedDownloadsMutex);

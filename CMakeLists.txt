@@ -296,6 +296,7 @@ set(SOURCES
     src/ui/App.cpp
     src/ui/MainFrame.cpp
     src/ui/MediaPopup.cpp
+    src/ui/UserInfoPopup.cpp
     src/ui/FileDropTarget.cpp
     src/ui/FileUtils.cpp
     src/ui/ChatArea.cpp
