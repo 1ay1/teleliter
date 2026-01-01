@@ -358,10 +358,6 @@ void ChatViewWidget::OnRefreshTimer(wxTimerEvent &event) {
 }
 
 void ChatViewWidget::RefreshDisplay() {
-  RefreshDisplayInternal(false);
-}
-
-void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
   if (!m_messageFormatter || !m_chatArea)
     return;
 
@@ -377,8 +373,7 @@ void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
   bool wasLoadingHistory = m_isLoadingHistory;
   
   // Only scroll to bottom if we're actually at bottom AND not loading history
-  // AND not preserving window position (e.g., during virtual window shift)
-  bool shouldScrollToBottom = actuallyAtBottom && !wasLoadingHistory && !preserveWindowPosition;
+  bool shouldScrollToBottom = actuallyAtBottom && !wasLoadingHistory;
 
   // Clear display but keep message storage
   m_chatArea->Clear();
@@ -412,58 +407,13 @@ void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
 
     // Sort messages before rendering
     SortMessages();
-    
-    // VIRTUAL WINDOW: Only render up to MAX_DISPLAYED_MESSAGES for performance
-    // This is the key optimization - like Telegram Desktop / Discord
-    size_t totalMessages = m_messages.size();
-    
-    // Determine window bounds
-    if (preserveWindowPosition && m_displayWindowEnd > 0) {
-      // Keep current window position - just validate bounds
-      if (m_displayWindowEnd > totalMessages) {
-        m_displayWindowEnd = totalMessages;
-      }
-      if (m_displayWindowStart >= totalMessages) {
-        m_displayWindowStart = totalMessages > MAX_DISPLAYED_MESSAGES ? totalMessages - MAX_DISPLAYED_MESSAGES : 0;
-      }
-      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
-      }
-    } else if (wasLoadingHistory) {
-      // Loading older messages - keep window at the same relative position
-      // but shifted to include some new messages
-      if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowStart = 0;
-        m_displayWindowEnd = totalMessages;
-      } else {
-        // Keep end position relative to newest messages
-        size_t oldWindowSize = m_displayWindowEnd - m_displayWindowStart;
-        if (oldWindowSize == 0) oldWindowSize = MAX_DISPLAYED_MESSAGES;
-        m_displayWindowEnd = totalMessages;
-        m_displayWindowStart = totalMessages > oldWindowSize ? totalMessages - oldWindowSize : 0;
-        // Ensure we don't exceed max
-        if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-          m_displayWindowStart = m_displayWindowEnd - MAX_DISPLAYED_MESSAGES;
-        }
-      }
-    } else if (shouldScrollToBottom || m_displayWindowEnd == 0) {
-      // At bottom or first load - show newest messages
-      if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowStart = 0;
-        m_displayWindowEnd = totalMessages;
-      } else {
-        m_displayWindowEnd = totalMessages;
-        m_displayWindowStart = totalMessages - MAX_DISPLAYED_MESSAGES;
-      }
-    }
-    // Otherwise keep current window position
 
-    // Calculate optimal username width for alignment (only for visible messages)
+    // Calculate optimal username width for alignment
     std::vector<wxString> usernames;
-    usernames.reserve(m_displayWindowEnd - m_displayWindowStart);
-    for (size_t i = m_displayWindowStart; i < m_displayWindowEnd && i < totalMessages; i++) {
-      if (!m_messages[i].senderName.IsEmpty()) {
-        usernames.push_back(m_messages[i].senderName);
+    usernames.reserve(m_messages.size());
+    for (const auto &msg : m_messages) {
+      if (!msg.senderName.IsEmpty()) {
+        usernames.push_back(msg.senderName);
       }
     }
     m_messageFormatter->CalculateUsernameWidth(usernames);
@@ -479,14 +429,12 @@ void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
       }
     }
 
-    // Render only messages in the virtual window
-    for (size_t i = m_displayWindowStart; i < m_displayWindowEnd && i < totalMessages; i++) {
-      RenderMessageToDisplay(m_messages[i]);
+    // Render all messages
+    for (const auto &msg : m_messages) {
+      RenderMessageToDisplay(msg);
     }
     
-    CVWLOG("RefreshDisplay: rendered " << (m_displayWindowEnd - m_displayWindowStart) 
-           << " of " << totalMessages << " messages (window: " 
-           << m_displayWindowStart << "-" << m_displayWindowEnd << ")");
+    CVWLOG("RefreshDisplay: rendered " << m_messages.size() << " messages");
   }
 
   // Remove trailing newline after the last message to avoid extra blank line
@@ -510,8 +458,7 @@ void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
   
   EndBatchUpdate();
 
-  // Scroll restoration - keep it simple
-  // Note: BufferOlderMessages handles its own scroll restoration for history loading
+  // Scroll restoration
   if (wasLoadingHistory) {
     m_isLoadingHistory = false;
   }
@@ -527,60 +474,20 @@ void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
   // Otherwise: don't touch scroll position
 }
 
+void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
+  // Simplified - just call RefreshDisplay
+  (void)preserveWindowPosition;
+  RefreshDisplay();
+}
+
 void ChatViewWidget::RefreshDisplayWindow() {
-  // Optimized refresh that only re-renders the current window
-  // Used when shifting the virtual window during scroll
-  // MUST preserve window position to avoid jumping back
-  RefreshDisplayInternal(true);
+  // Just call RefreshDisplay - virtual window removed for simplicity
+  RefreshDisplay();
 }
 
 void ChatViewWidget::AdjustDisplayWindow(bool scrollingUp) {
-  // Shift the display window when user scrolls near edges
-  // This enables smooth virtual scrolling
-  
-  std::lock_guard<std::mutex> lock(m_messagesMutex);
-  size_t totalMessages = m_messages.size();
-  
-  if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
-    // All messages fit - no adjustment needed
-    return;
-  }
-  
-  const size_t SHIFT_AMOUNT = 30;  // How many messages to shift
-  bool needsRefresh = false;
-  
-  if (scrollingUp) {
-    // User scrolling up - need older messages
-    if (m_displayWindowStart > 0) {
-      size_t shift = std::min(SHIFT_AMOUNT, m_displayWindowStart);
-      m_displayWindowStart -= shift;
-      m_displayWindowEnd -= shift;
-      // Keep window size consistent
-      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
-      }
-      needsRefresh = true;
-    }
-  } else {
-    // User scrolling down - need newer messages
-    if (m_displayWindowEnd < totalMessages) {
-      size_t shift = std::min(SHIFT_AMOUNT, totalMessages - m_displayWindowEnd);
-      m_displayWindowStart += shift;
-      m_displayWindowEnd += shift;
-      // Keep window size consistent
-      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowStart = m_displayWindowEnd - MAX_DISPLAYED_MESSAGES;
-      }
-      needsRefresh = true;
-    }
-  }
-  
-  if (needsRefresh) {
-    // Use CallAfter to avoid blocking the scroll event
-    CallAfter([this]() {
-      RefreshDisplayWindow();
-    });
-  }
+  // Virtual window removed - this is now a no-op
+  (void)scrollingUp;
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
@@ -1064,8 +971,7 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
 }
 
 void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &messages) {
-  // Optimized: add messages to storage and shift virtual window to include them
-  // Only renders MAX_DISPLAYED_MESSAGES so this is fast
+  // Simple approach: add messages to storage and refresh with scroll preservation
   HideLoadingIndicator();
   
   if (messages.empty()) {
@@ -1095,8 +1001,17 @@ void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &message
     return;
   }
   
-  size_t addedCount = newMessages.size();
-  CVWLOG("BufferOlderMessages: adding " << addedCount << " older messages");
+  CVWLOG("BufferOlderMessages: adding " << newMessages.size() << " older messages");
+  
+  // Remember the first currently displayed message for scroll restoration
+  int64_t anchorMessageId = 0;
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    if (!m_messages.empty()) {
+      // The first message (oldest currently displayed) will be our anchor
+      anchorMessageId = m_messages.front().id;
+    }
+  }
   
   // Add new messages to storage
   {
@@ -1119,46 +1034,22 @@ void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &message
         m_messageIdToIndex[m_messages[i].id] = i;
       }
     }
-    
-    // VIRTUAL WINDOW: Shift window to include the new older messages
-    // New messages are prepended (after sort), so shift window start back
-    size_t totalMessages = m_messages.size();
-    
-    if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
-      // All messages fit in window
-      m_displayWindowStart = 0;
-      m_displayWindowEnd = totalMessages;
-    } else {
-      // Shift window to show some of the new older messages
-      // Keep the same messages visible, but now there are older ones available
-      m_displayWindowStart += addedCount;  // Indices shifted because of prepend
-      m_displayWindowEnd += addedCount;
-      
-      // Now shift back to show some older messages
-      size_t shiftBack = std::min(addedCount, m_displayWindowStart);
-      m_displayWindowStart -= shiftBack;
-      m_displayWindowEnd -= shiftBack;
-      
-      // Clamp to valid range
-      if (m_displayWindowEnd > totalMessages) {
-        m_displayWindowEnd = totalMessages;
-      }
-      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowStart = m_displayWindowEnd - MAX_DISPLAYED_MESSAGES;
-      }
-    }
   }
   
-  // Do a single refresh - only renders the virtual window (fast!)
+  // Refresh display - m_isLoadingHistory is true so it won't scroll to bottom
   RefreshDisplay();
   
-  // Scroll to show the newly loaded messages at the top
-  CallAfter([this]() {
-    if (m_chatArea && m_chatArea->GetDisplay()) {
-      // Scroll to near top to show the new messages
-      m_chatArea->GetDisplay()->ShowPosition(0);
-    }
-  });
+  // Scroll back to the anchor message (the one that was at top before)
+  if (anchorMessageId != 0) {
+    CallAfter([this, anchorMessageId]() {
+      if (!m_chatArea || !m_chatArea->GetDisplay())
+        return;
+      auto it = m_messageRangeMap.find(anchorMessageId);
+      if (it != m_messageRangeMap.end()) {
+        m_chatArea->GetDisplay()->ShowPosition(it->second.first);
+      }
+    });
+  }
   
   m_isLoadingHistory = false;
 }
@@ -2266,32 +2157,7 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
     return;
   }
   
-  // VIRTUAL WINDOW: First check if we have more messages in memory to show
-  // before loading from TDLib
-  {
-    std::lock_guard<std::mutex> lock(m_messagesMutex);
-    
-    // If window start is not at the beginning, we have older messages in memory
-    if (m_displayWindowStart > 0) {
-      // Shift window to show older messages from memory (no network needed)
-      size_t shiftAmount = std::min(m_displayWindowStart, (size_t)30);
-      m_displayWindowStart -= shiftAmount;
-      m_displayWindowEnd -= shiftAmount;
-      
-      // Keep window size within limits
-      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
-        m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
-      }
-      
-      // Refresh to show the shifted window - MUST preserve position
-      CallAfter([this]() {
-        RefreshDisplayWindow();
-      });
-      return;
-    }
-  }
-  
-  // Window is at the beginning of stored messages - need to load from TDLib
+  // Check if all history is already loaded
   if (m_allHistoryLoaded) {
     return;
   }
