@@ -3,10 +3,13 @@
 #include "MainFrame.h"
 #include "MediaPopup.h"
 #include "MessageFormatter.h"
+#include "../telegram/TelegramClient.h"
 #include <algorithm>
 #include <iostream>
 #include <unordered_map>
 #include <wx/settings.h>
+#include <wx/clipbrd.h>
+#include <wx/tokenzr.h>
 
 // Cached file existence check to reduce disk I/O
 // Cache entries expire after 500ms to balance performance with freshness
@@ -116,7 +119,7 @@ ChatViewWidget::~ChatViewWidget() {
 void ChatViewWidget::CreateLayout() {
   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
 
-  // Topic bar at top (HexChat style)
+  // Topic bar at top (HexChat style) - for groups/channels
   m_topicBar = new wxPanel(this, wxID_ANY);
 
   wxBoxSizer *topicSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -131,6 +134,10 @@ void ChatViewWidget::CreateLayout() {
   m_topicBar->Hide(); // Hidden until a chat is selected
 
   mainSizer->Add(m_topicBar, 0, wxEXPAND);
+  
+  // Enhanced user details bar for private chats
+  CreateUserDetailsBar();
+  mainSizer->Add(m_userDetailsBar, 0, wxEXPAND);
 
   // Loading indicator for older messages (shown when scrolling up)
   m_loadingOlderPanel = new wxPanel(this, wxID_ANY);
@@ -159,10 +166,113 @@ void ChatViewWidget::CreateLayout() {
   CreateNewMessageButton();
 }
 
+void ChatViewWidget::CreateUserDetailsBar() {
+  m_userDetailsBar = new wxPanel(this, wxID_ANY);
+  m_userDetailsBar->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+  
+  wxBoxSizer *mainSizer = new wxBoxSizer(wxHORIZONTAL);
+  
+  // Profile photo (40x40 circular)
+  m_userPhotoBitmap = CreateInitialsAvatar("?", 40);
+  m_userPhoto = new wxStaticBitmap(m_userDetailsBar, wxID_ANY, m_userPhotoBitmap);
+  mainSizer->Add(m_userPhoto, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxTOP | wxBOTTOM, 8);
+  
+  // User info section
+  wxBoxSizer *infoSizer = new wxBoxSizer(wxVERTICAL);
+  
+  // Name row with status
+  wxBoxSizer *nameRow = new wxBoxSizer(wxHORIZONTAL);
+  m_userName = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
+  wxFont nameFont = m_userName->GetFont();
+  nameFont.SetWeight(wxFONTWEIGHT_BOLD);
+  nameFont.SetPointSize(nameFont.GetPointSize() + 1);
+  m_userName->SetFont(nameFont);
+  nameRow->Add(m_userName, 0, wxALIGN_CENTER_VERTICAL);
+  
+  m_userStatus = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
+  m_userStatus->SetForegroundColour(wxColour(76, 175, 80)); // Green for online
+  nameRow->Add(m_userStatus, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 10);
+  
+  infoSizer->Add(nameRow, 0, wxEXPAND);
+  
+  // Username and phone row
+  wxBoxSizer *detailsRow = new wxBoxSizer(wxHORIZONTAL);
+  m_userUsername = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
+  m_userUsername->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  detailsRow->Add(m_userUsername, 0, wxALIGN_CENTER_VERTICAL);
+  
+  m_userPhone = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
+  m_userPhone->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  detailsRow->Add(m_userPhone, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 15);
+  
+  infoSizer->Add(detailsRow, 0, wxEXPAND | wxTOP, 2);
+  
+  mainSizer->Add(infoSizer, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, 10);
+  
+  m_userDetailsBar->SetSizer(mainSizer);
+  m_userDetailsBar->SetMinSize(wxSize(-1, 56));
+  m_userDetailsBar->Hide();
+  
+  // Make text selectable by allowing click to copy
+  m_userDetailsBar->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnUserDetailsClick, this);
+  m_userName->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnUserDetailsClick, this);
+  m_userUsername->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnUserDetailsClick, this);
+  m_userPhone->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnUserDetailsClick, this);
+  m_userStatus->Bind(wxEVT_LEFT_DOWN, &ChatViewWidget::OnUserDetailsClick, this);
+  
+  // Set cursor to indicate clickable
+  m_userDetailsBar->SetCursor(wxCursor(wxCURSOR_HAND));
+}
+
+void ChatViewWidget::OnUserDetailsClick(wxMouseEvent &event) {
+  // Show a popup menu to copy user details
+  wxMenu menu;
+  
+  wxString name = m_userName->GetLabel();
+  wxString username = m_userUsername->GetLabel();
+  wxString phone = m_userPhone->GetLabel();
+  
+  if (!name.IsEmpty()) {
+    menu.Append(wxID_ANY, "Copy Name: " + name);
+  }
+  if (!username.IsEmpty()) {
+    menu.Append(wxID_ANY, "Copy Username: " + username);
+  }
+  if (!phone.IsEmpty()) {
+    menu.Append(wxID_ANY, "Copy Phone: " + phone);
+  }
+  
+  menu.Bind(wxEVT_MENU, [name, username, phone](wxCommandEvent &evt) {
+    wxString label = evt.GetString();
+    wxString textToCopy;
+    
+    if (label.Contains("Name")) {
+      textToCopy = name;
+    } else if (label.Contains("Username")) {
+      textToCopy = username;
+    } else if (label.Contains("Phone")) {
+      textToCopy = phone;
+    }
+    
+    if (!textToCopy.IsEmpty() && wxTheClipboard->Open()) {
+      wxTheClipboard->SetData(new wxTextDataObject(textToCopy));
+      wxTheClipboard->Close();
+    }
+  });
+  
+  m_userDetailsBar->PopupMenu(&menu);
+}
+
 void ChatViewWidget::SetTopicText(const wxString &chatName,
                                   const wxString &info) {
   if (!m_topicBar || !m_topicText)
     return;
+
+  // Hide user details bar when showing regular topic
+  if (m_userDetailsBar) {
+    m_userDetailsBar->Hide();
+  }
+  m_currentUserId = 0;
 
   wxString topic;
   if (!chatName.IsEmpty()) {
@@ -178,6 +288,180 @@ void ChatViewWidget::SetTopicText(const wxString &chatName,
   Layout();
 }
 
+void ChatViewWidget::SetTopicUserInfo(const UserInfo &user) {
+  if (!m_userDetailsBar) return;
+  
+  m_currentUserId = user.id;
+  
+  // Hide regular topic bar
+  if (m_topicBar) {
+    m_topicBar->Hide();
+  }
+  
+  // Update user name
+  m_userName->SetLabel(user.GetDisplayName());
+  
+  // Update username
+  if (!user.username.IsEmpty()) {
+    m_userUsername->SetLabel("@" + user.username);
+  } else {
+    m_userUsername->SetLabel("");
+  }
+  
+  // Update phone
+  if (!user.phoneNumber.IsEmpty()) {
+    wxString phone = "+" + user.phoneNumber;
+    m_userPhone->SetLabel(phone);
+  } else {
+    m_userPhone->SetLabel("");
+  }
+  
+  // Update status
+  if (user.IsCurrentlyOnline()) {
+    m_userStatus->SetLabel("online");
+    m_userStatus->SetForegroundColour(wxColour(76, 175, 80)); // Green
+  } else {
+    m_userStatus->SetLabel(user.GetLastSeenString());
+    m_userStatus->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  }
+  
+  // Update photo
+  if (!user.profilePhotoSmallPath.IsEmpty()) {
+    UpdateUserPhoto(user.profilePhotoSmallPath);
+  } else {
+    m_userPhotoBitmap = CreateInitialsAvatar(user.GetDisplayName(), 40);
+    m_userPhoto->SetBitmap(m_userPhotoBitmap);
+  }
+  
+  m_userDetailsBar->Show();
+  m_userDetailsBar->Layout();
+  Layout();
+}
+
+void ChatViewWidget::UpdateUserPhoto(const wxString &photoPath) {
+  if (photoPath.IsEmpty() || !wxFileExists(photoPath)) {
+    return;
+  }
+  
+  wxImage image;
+  if (image.LoadFile(photoPath)) {
+    // Scale to 40x40
+    int size = 40;
+    int origW = image.GetWidth();
+    int origH = image.GetHeight();
+    int newW, newH;
+    
+    if (origW > origH) {
+      newH = size;
+      newW = (origW * size) / origH;
+    } else {
+      newW = size;
+      newH = (origH * size) / origW;
+    }
+    
+    image.Rescale(newW, newH, wxIMAGE_QUALITY_HIGH);
+    
+    // Crop to center
+    int cropX = (newW - size) / 2;
+    int cropY = (newH - size) / 2;
+    image = image.GetSubImage(wxRect(cropX, cropY, size, size));
+    
+    m_userPhotoBitmap = CreateCircularBitmap(wxBitmap(image), size);
+    m_userPhoto->SetBitmap(m_userPhotoBitmap);
+  }
+}
+
+wxBitmap ChatViewWidget::CreateCircularBitmap(const wxBitmap &source, int size) {
+  if (!source.IsOk()) {
+    return source;
+  }
+  
+  wxImage img = source.ConvertToImage();
+  if (!img.HasAlpha()) {
+    img.InitAlpha();
+  }
+  
+  int centerX = size / 2;
+  int centerY = size / 2;
+  int radius = size / 2;
+  
+  unsigned char *alpha = img.GetAlpha();
+  for (int y = 0; y < size; y++) {
+    for (int x = 0; x < size; x++) {
+      int dx = x - centerX;
+      int dy = y - centerY;
+      double dist = sqrt(dx * dx + dy * dy);
+      
+      if (dist > radius) {
+        alpha[y * size + x] = 0;
+      } else if (dist > radius - 1.5) {
+        alpha[y * size + x] = (unsigned char)(255 * (radius - dist) / 1.5);
+      }
+    }
+  }
+  
+  return wxBitmap(img);
+}
+
+wxBitmap ChatViewWidget::CreateInitialsAvatar(const wxString &name, int size) {
+  wxBitmap bmp(size, size, 32);
+  wxMemoryDC dc(bmp);
+  
+  // Generate color from name hash
+  unsigned long hash = 0;
+  for (size_t i = 0; i < name.length(); i++) {
+    hash = hash * 31 + name[i].GetValue();
+  }
+  
+  wxColour colors[] = {
+    wxColour(229, 115, 115), wxColour(186, 104, 200),
+    wxColour(121, 134, 203), wxColour(79, 195, 247),
+    wxColour(77, 208, 225), wxColour(129, 199, 132),
+    wxColour(255, 213, 79), wxColour(255, 138, 101),
+  };
+  wxColour bgColor = colors[hash % 8];
+  
+  dc.SetBackground(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW)));
+  dc.Clear();
+  
+  dc.SetBrush(wxBrush(bgColor));
+  dc.SetPen(*wxTRANSPARENT_PEN);
+  dc.DrawCircle(size / 2, size / 2, size / 2);
+  
+  // Get initials
+  wxString initials;
+  wxStringTokenizer tokenizer(name, " ");
+  while (tokenizer.HasMoreTokens() && initials.length() < 2) {
+    wxString token = tokenizer.GetNextToken();
+    if (!token.IsEmpty()) {
+      wxChar c = token[0];
+      if (c == '@' && token.length() > 1) {
+        c = token[1];
+      }
+      if (wxIsalnum(c)) {
+        initials += wxToupper(c);
+      }
+    }
+  }
+  
+  if (initials.IsEmpty() && !name.IsEmpty()) {
+    initials = wxToupper(name[0]);
+  }
+  
+  dc.SetTextForeground(*wxWHITE);
+  wxFont font(size / 3, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+  dc.SetFont(font);
+  
+  wxSize textSize = dc.GetTextExtent(initials);
+  int textX = (size - textSize.GetWidth()) / 2;
+  int textY = (size - textSize.GetHeight()) / 2;
+  dc.DrawText(initials, textX, textY);
+  
+  dc.SelectObject(wxNullBitmap);
+  
+  return CreateCircularBitmap(bmp, size);
+}
+
 void ChatViewWidget::ClearTopicText() {
   if (m_topicBar) {
     m_topicBar->Hide();
@@ -185,6 +469,10 @@ void ChatViewWidget::ClearTopicText() {
   if (m_topicText) {
     m_topicText->SetLabel("");
   }
+  if (m_userDetailsBar) {
+    m_userDetailsBar->Hide();
+  }
+  m_currentUserId = 0;
   Layout();
 }
 

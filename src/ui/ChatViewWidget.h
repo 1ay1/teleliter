@@ -11,6 +11,7 @@
 #include <wx/popupwin.h>
 #include <wx/timer.h>
 #include <wx/wx.h>
+#include <wx/statbmp.h>
 
 #include "../telegram/Types.h"
 #include "ChatArea.h"
@@ -20,6 +21,7 @@
 class MainFrame;
 class MessageFormatter;
 class MediaPopup;
+class TelegramClient;
 
 class ChatViewWidget : public wxPanel {
 public:
@@ -89,7 +91,11 @@ public:
 
   // Topic bar (HexChat-style header showing chat name and info)
   void SetTopicText(const wxString &chatName, const wxString &info = "");
+  void SetTopicUserInfo(const UserInfo &user);  // Enhanced topic bar for private chats
   void ClearTopicText();
+  
+  // Set Telegram client for user lookups
+  void SetTelegramClient(TelegramClient *client) { m_telegramClient = client; }
 
   // Media span tracking
   void AddMediaSpan(long startPos, long endPos, const MediaInfo &info,
@@ -244,6 +250,24 @@ private:
   // Topic bar (HexChat-style)
   wxPanel *m_topicBar;
   wxStaticText *m_topicText;
+  
+  // Enhanced topic bar for private chats with user details
+  wxPanel *m_userDetailsBar;
+  wxStaticBitmap *m_userPhoto;
+  wxStaticText *m_userName;
+  wxStaticText *m_userUsername;
+  wxStaticText *m_userPhone;
+  wxStaticText *m_userStatus;
+  wxBitmap m_userPhotoBitmap;
+  int64_t m_currentUserId = 0;
+  TelegramClient *m_telegramClient = nullptr;
+  
+  // User details bar event handlers
+  void OnUserDetailsClick(wxMouseEvent &event);
+  void CreateUserDetailsBar();
+  void UpdateUserPhoto(const wxString &photoPath);
+  wxBitmap CreateCircularBitmap(const wxBitmap &source, int size);
+  wxBitmap CreateInitialsAvatar(const wxString &name, int size);
 
   // Download progress bar (legacy - now shown in status bar)
   wxPanel *m_downloadBar;

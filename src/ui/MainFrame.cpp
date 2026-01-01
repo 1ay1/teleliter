@@ -1241,24 +1241,26 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
           } else if (chatInfo.isBot) {
             topicInfo = "Bot";
           } else if (chatInfo.isPrivate && chatInfo.userId != 0) {
-            // For private chats, show online status or last seen
+            // For private chats, show enhanced user details bar
             bool userFound = false;
             UserInfo userInfo =
                 m_telegramClient->GetUser(chatInfo.userId, &userFound);
             if (userFound) {
-              // Use IsCurrentlyOnline() which checks expiry time for robust status
-              if (userInfo.IsCurrentlyOnline()) {
-                topicInfo = "online";
-              } else {
-                topicInfo = FormatLastSeen(userInfo.lastSeenTime);
-              }
+              m_chatViewWidget->SetTelegramClient(m_telegramClient);
+              m_chatViewWidget->SetTopicUserInfo(userInfo);
             } else {
-              topicInfo = "Private chat";
+              m_chatViewWidget->SetTopicText(chatInfo.title, "Private chat");
             }
           } else if (chatInfo.isPrivate) {
-            topicInfo = "Private chat";
+            m_chatViewWidget->SetTopicText(chatInfo.title, "Private chat");
+          } else {
+            m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
           }
-          m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+
+          // Skip SetTopicText for private chats with user info (already handled above)
+          if (!(chatInfo.isPrivate && chatInfo.userId != 0)) {
+            m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+          }
 
           // Update status bar with member count
           if (m_statusBar && chatInfo.memberCount > 0) {
@@ -1944,7 +1946,18 @@ void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline,
     topicInfo = FormatLastSeen(lastSeenTime);
   }
 
-  m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+  // For private chats, update the user details bar
+  if (chatInfo.isPrivate && chatInfo.userId != 0) {
+    bool userFound = false;
+    UserInfo user = m_telegramClient->GetUser(chatInfo.userId, &userFound);
+    if (userFound) {
+      m_chatViewWidget->SetTopicUserInfo(user);
+    } else {
+      m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+    }
+  } else {
+    m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
+  }
 }
 
 void MainFrame::OnMembersLoaded(int64_t chatId,
@@ -2307,7 +2320,14 @@ void MainFrame::OnStatusTimer(wxTimerEvent &event) {
           displayName = userInfo.GetDisplayName();
         }
         
-        m_chatViewWidget->SetTopicText(displayName, topicInfo);
+        // Update user details bar for private chats
+        bool userFoundAgain = false;
+        UserInfo updatedUser = m_telegramClient->GetUser(chatInfo.userId, &userFoundAgain);
+        if (userFoundAgain) {
+          m_chatViewWidget->SetTopicUserInfo(updatedUser);
+        } else {
+          m_chatViewWidget->SetTopicText(displayName, topicInfo);
+        }
       }
     }
   }
