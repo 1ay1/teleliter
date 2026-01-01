@@ -1265,15 +1265,7 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
           }
         }
 
-        // Reset message loading state for this chat
-        m_telegramClient->SetAllMessagesLoaded(chatId, false);
-        if (m_chatViewWidget) {
-          m_chatViewWidget->SetAllHistoryLoaded(false);
-          m_chatViewWidget->SetIsLoadingHistory(false);
-        }
-        
-        m_telegramClient->OpenChatAndLoadMessages(
-            chatId, 100); // Load 100 messages
+        m_telegramClient->OpenChatAndLoadMessages(chatId);
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
       } else {
@@ -1624,42 +1616,7 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   DBGLOG("Finished displaying messages, scrolled to bottom");
 }
 
-void MainFrame::OnMoreMessagesLoaded(int64_t chatId,
-                                     const std::vector<MessageInfo> &messages) {
-  // This is called when loading older history (lazy loading)
-  // DO NOT scroll to bottom - user is scrolling up
-  if (chatId != m_currentChatId) {
-    return;
-  }
 
-  if (messages.empty()) {
-    if (m_chatViewWidget) {
-      m_chatViewWidget->SetAllHistoryLoaded(true);
-      m_chatViewWidget->SetIsLoadingHistory(false);
-    }
-    return;
-  }
-
-  DBGLOG("OnMoreMessagesLoaded: " << messages.size() << " messages for chat " << chatId);
-
-  // Add to chat widget using HexChat-style prepending
-  if (m_chatViewWidget) {
-    m_chatViewWidget->BufferOlderMessages(messages);
-  }
-
-  // Download thumbnails for new messages
-  if (m_telegramClient) {
-    for (const auto &msg : messages) {
-      if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
-        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail", 0);
-      }
-      if (msg.hasSticker && msg.mediaFileId != 0 &&
-          msg.mediaLocalPath.IsEmpty() && msg.mediaThumbnailFileId == 0) {
-        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker", msg.mediaFileSize);
-      }
-    }
-  }
-}
 
 void MainFrame::OnNewMessage(const MessageInfo &message) {
   if (message.chatId != m_currentChatId) {
@@ -2091,13 +2048,6 @@ void MainFrame::ReactiveRefresh() {
   // Handle message updates for current chat
   if ((flags & DirtyFlag::Messages) != DirtyFlag::None &&
       m_currentChatId != 0 && m_chatViewWidget) {
-    // Sync lazy loading state with TelegramClient
-    bool allLoaded = !m_telegramClient->HasMoreMessages(m_currentChatId);
-    m_chatViewWidget->SetAllHistoryLoaded(allLoaded);
-    if (!m_telegramClient->IsLoadingMessages()) {
-      m_chatViewWidget->SetIsLoadingHistory(false);
-    }
-    
     // Begin batch update to prevent flicker from multiple individual updates
     m_chatViewWidget->BeginBatchUpdate();
 
@@ -2333,20 +2283,6 @@ int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const {
   return 0;
 }
 
-void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
-  if (m_telegramClient && m_currentChatId != 0) {
-    // Check if already loading or all loaded
-    if (m_telegramClient->IsLoadingMessages()) {
-      return;
-    }
-    if (!m_telegramClient->HasMoreMessages(m_currentChatId)) {
-      if (m_chatViewWidget) {
-        m_chatViewWidget->SetAllHistoryLoaded(true);
-      }
-      return;
-    }
-    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 20);
-  }
-}
+
 
 

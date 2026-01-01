@@ -58,7 +58,7 @@ static bool ShouldDownloadFile(const td_api::file *file) {
 #define TDLOG(...)                                                             \
   do {                                                                         \
   } while (0)
-// Enable debug logging for download diagnostics (uncomment below):
+// Enable debug logging (uncomment below):
 // #define TDLOG(...) do { fprintf(stderr, "[TDLib] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 
 wxDEFINE_EVENT(wxEVT_TDLIB_UPDATE, wxThreadEvent);
@@ -295,6 +295,14 @@ void TelegramClient::OnConnectionStateUpdate(
     } else if constexpr (std::is_same_v<T, td_api::connectionStateReady>) {
       m_connectionState = ConnectionState::Ready;
       TDLOG("Connection state: Ready");
+      
+      // If we have a pending chat load, fetch messages now
+      if (m_pendingChatLoad != 0) {
+        int64_t chatId = m_pendingChatLoad;
+        m_pendingChatLoad = 0;
+        TDLOG("Connection ready, loading pending chat %lld", (long long)chatId);
+        FetchChatMessages(chatId);
+      }
     }
   });
 
@@ -929,19 +937,7 @@ std::map<int64_t, ChatInfo> TelegramClient::GetChats() const {
   return m_chats;
 }
 
-bool TelegramClient::HasMoreMessages(int64_t chatId) const {
-  std::lock_guard<std::mutex> lock(m_messageLoadStateMutex);
-  return m_chatsWithAllMessagesLoaded.find(chatId) == m_chatsWithAllMessagesLoaded.end();
-}
 
-void TelegramClient::SetAllMessagesLoaded(int64_t chatId, bool loaded) {
-  std::lock_guard<std::mutex> lock(m_messageLoadStateMutex);
-  if (loaded) {
-    m_chatsWithAllMessagesLoaded.insert(chatId);
-  } else {
-    m_chatsWithAllMessagesLoaded.erase(chatId);
-  }
-}
 
 ChatInfo TelegramClient::GetChat(int64_t chatId, bool *found) const {
   std::shared_lock<std::shared_mutex> lock(m_dataMutex);
@@ -963,9 +959,9 @@ void TelegramClient::OpenChat(int64_t chatId) {
   Send(std::move(request), nullptr);
 }
 
-void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
-  TDLOG("OpenChatAndLoadMessages called for chatId=%lld limit=%d",
-        (long long)chatId, limit);
+void TelegramClient::OpenChatAndLoadMessages(int64_t chatId) {
+  TDLOG("OpenChatAndLoadMessages called for chatId=%lld (loading 100 messages)",
+        (long long)chatId);
 
   // Track current chat for download prioritization
   m_currentChatId = chatId;
@@ -981,193 +977,77 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
   auto openRequest = td_api::make_object<td_api::openChat>();
   openRequest->chat_id_ = chatId;
 
-  Send(std::move(openRequest), [this, chatId,
-                                limit](td_api::object_ptr<td_api::Object>
+  Send(std::move(openRequest), [this, chatId](td_api::object_ptr<td_api::Object>
                                            openResult) {
     TDLOG("openChat completed for chatId=%lld", (long long)chatId);
 
-    // Step 2: Get chat info to find the last message ID
-    auto getChatRequest = td_api::make_object<td_api::getChat>();
-    getChatRequest->chat_id_ = chatId;
-
-    Send(std::move(getChatRequest), [this, chatId,
-                                     limit](td_api::object_ptr<td_api::Object>
-                                                chatResult) {
-      int64_t lastMessageId = 0;
-      if (chatResult->get_id() == td_api::chat::ID) {
-        auto chat = td_api::move_object_as<td_api::chat>(chatResult);
-        TDLOG("getChat result: chatId=%lld title=%s", (long long)chat->id_, chat->title_.c_str());
-        if (chat->last_message_) {
-          lastMessageId = chat->last_message_->id_;
-          TDLOG("Chat has last_message_id=%lld", (long long)lastMessageId);
-        } else {
-          TDLOG("Chat has NO last_message!");
-        }
-      } else if (chatResult->get_id() == td_api::error::ID) {
-        auto error = td_api::move_object_as<td_api::error>(chatResult);
-        TDLOG("getChat ERROR: %d - %s", error->code_, error->message_.c_str());
-      }
-
-      // Step 3: Fetch 100 messages (TDLib max per request)
-      // getChatHistory returns messages OLDER than from_message_id (exclusive)
-      // Using lastMessageId with offset=0 gets us messages before the last one
-      // The last message will appear via reactive updates or is already shown
-      auto historyRequest = td_api::make_object<td_api::getChatHistory>();
-      historyRequest->chat_id_ = chatId;
-      historyRequest->from_message_id_ = lastMessageId;
-      historyRequest->offset_ = 0;
-      historyRequest->limit_ = 100;
-      historyRequest->only_local_ = false;
+    // Check if connection is ready - if not, delay message fetch
+    if (m_connectionState != ConnectionState::Ready) {
+      TDLOG("Connection not ready (state=%d), delaying message fetch for chatId=%lld", 
+            (int)m_connectionState, (long long)chatId);
       
-      TDLOG("Requesting getChatHistory: chatId=%lld from_message_id=%lld limit=100", 
-            (long long)chatId, (long long)lastMessageId);
+      // Store pending chat ID - will be loaded when connection becomes Ready
+      m_pendingChatLoad = chatId;
+      return;
+    }
 
-      Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
-        TDLOG("getChatHistory response for chatId=%lld result_id=%d", (long long)chatId, result->get_id());
-
-        if (result->get_id() == td_api::messages::ID) {
-          auto messages = td_api::move_object_as<td_api::messages>(result);
-          TDLOG("Got total_count=%d messages_.size()=%zu", messages->total_count_, messages->messages_.size());
-          
-          // Log first few message IDs for debugging
-          for (size_t i = 0; i < std::min(messages->messages_.size(), (size_t)3); i++) {
-            if (messages->messages_[i]) {
-              TDLOG("  Message[%zu]: id=%lld", i, (long long)messages->messages_[i]->id_);
-            }
-          }
-
-          std::vector<MessageInfo> msgList;
-          for (auto &msg : messages->messages_) {
-            if (msg) {
-              msgList.push_back(ConvertMessage(msg.get()));
-            }
-          }
-
-          // Sort by date/id
-          std::sort(msgList.begin(), msgList.end(),
-                    [](const MessageInfo &a, const MessageInfo &b) {
-                      if (a.date != b.date) return a.date < b.date;
-                      return a.id < b.id;
-                    });
-
-          // Store and display
-          {
-            std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-            m_messages[chatId] = msgList;
-          }
-
-          PostToMainThread([this, chatId, msgList]() {
-            if (m_mainFrame) {
-              m_mainFrame->OnMessagesLoaded(chatId, msgList);
-            }
-          });
-        } else if (result->get_id() == td_api::error::ID) {
-          auto error = td_api::move_object_as<td_api::error>(result);
-          TDLOG("getChatHistory ERROR: %d - %s", error->code_, error->message_.c_str());
-        }
-      });
-    });
+    FetchChatMessages(chatId);
   });
 }
 
-void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId,
-                                      int limit) {
-  // Prevent concurrent message loads
-  if (m_isLoadingMessages.exchange(true)) {
-    TDLOG("LoadMoreMessages: Already loading, skipping");
-    return;
-  }
+void TelegramClient::FetchChatMessages(int64_t chatId) {
+  // Fetch 100 newest messages
+  // from_message_id=0 means "start from the newest message"
+  auto historyRequest = td_api::make_object<td_api::getChatHistory>();
+  historyRequest->chat_id_ = chatId;
+  historyRequest->from_message_id_ = 0;
+  historyRequest->offset_ = 0;
+  historyRequest->limit_ = 100;
+  historyRequest->only_local_ = false;
   
-  // Check if all messages are already loaded for this chat
-  if (!HasMoreMessages(chatId)) {
-    TDLOG("LoadMoreMessages: All messages already loaded for chatId=%lld", (long long)chatId);
-    m_isLoadingMessages = false;
-    return;
-  }
-  
-  TDLOG("LoadMoreMessages for chatId=%lld from=%lld limit=%d", (long long)chatId,
-        (long long)fromMessageId, limit);
+  TDLOG("Requesting getChatHistory: chatId=%lld from_message_id=0 limit=100", 
+        (long long)chatId);
 
-  auto request = td_api::make_object<td_api::getChatHistory>();
-  request->chat_id_ = chatId;
-  request->from_message_id_ = fromMessageId;
-  request->offset_ = 0;
-  request->limit_ = limit > 0 ? limit : MESSAGE_BATCH_SIZE;
-  request->only_local_ = false;
+  Send(std::move(historyRequest), [this, chatId](td_api::object_ptr<td_api::Object> result) {
+      TDLOG("getChatHistory response for chatId=%lld result_id=%d", (long long)chatId, result->get_id());
 
-  Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object>
-                                              result) {
-    if (result->get_id() == td_api::messages::ID) {
-      auto messages = td_api::move_object_as<td_api::messages>(result);
+      if (result->get_id() == td_api::messages::ID) {
+        auto messages = td_api::move_object_as<td_api::messages>(result);
+        TDLOG("Got total_count=%d messages_.size()=%zu", messages->total_count_, messages->messages_.size());
 
-      if (messages->messages_.empty()) {
-        TDLOG("No more messages to load for chatId=%lld - marking as complete", (long long)chatId);
-        SetAllMessagesLoaded(chatId, true);
-        m_isLoadingMessages = false;
-        return;
-      }
-
-      TDLOG("LoadMoreMessages got %zu additional messages",
-            messages->messages_.size());
-
-      std::vector<MessageInfo> newMessages;
-      for (auto &msg : messages->messages_) {
-        if (msg) {
-          newMessages.push_back(ConvertMessage(msg.get()));
-        }
-      }
-
-      // Filter to only truly new messages (not duplicates)
-      std::vector<MessageInfo> actuallyNewMessages;
-      {
-        std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-        auto &existing = m_messages[chatId];
-
-        // Build a set of existing message IDs to avoid duplicates
-        std::set<int64_t> existingIds;
-        for (const auto &msg : existing) {
-          existingIds.insert(msg.id);
-        }
-
-        // Add only new messages that aren't already present
-        for (const auto &msg : newMessages) {
-          if (existingIds.find(msg.id) == existingIds.end()) {
-            existing.push_back(msg);
-            existingIds.insert(msg.id);
-            actuallyNewMessages.push_back(msg);
+        std::vector<MessageInfo> msgList;
+        for (auto &msg : messages->messages_) {
+          if (msg) {
+            msgList.push_back(ConvertMessage(msg.get()));
           }
         }
 
-        // Sort by message ID to ensure correct chronological order
-        std::sort(existing.begin(), existing.end(),
+        // Sort by date/id
+        std::sort(msgList.begin(), msgList.end(),
                   [](const MessageInfo &a, const MessageInfo &b) {
+                    if (a.date != b.date) return a.date < b.date;
                     return a.id < b.id;
                   });
-      }
 
-      TDLOG("LoadMoreMessages: %zu new messages (filtered from %zu)", 
-            actuallyNewMessages.size(), newMessages.size());
-      
-      m_isLoadingMessages = false;
+        // Store and display
+        {
+          std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+          m_messages[chatId] = msgList;
+        }
 
-      // Only send the NEW messages to UI - not all messages
-      // UI will add them incrementally without full re-render
-      if (!actuallyNewMessages.empty()) {
-        PostToMainThread([this, chatId, actuallyNewMessages]() {
+        PostToMainThread([this, chatId, msgList]() {
           if (m_mainFrame) {
-            m_mainFrame->OnMoreMessagesLoaded(chatId, actuallyNewMessages);
+            m_mainFrame->OnMessagesLoaded(chatId, msgList);
           }
         });
-      }
+    } else if (result->get_id() == td_api::error::ID) {
+      auto error = td_api::move_object_as<td_api::error>(result);
+      TDLOG("getChatHistory ERROR: %d - %s", error->code_, error->message_.c_str());
     }
   });
 }
 
-void TelegramClient::LoadMessagesWithRetry(int64_t chatId, int limit,
-                                           int retryCount) {
-  // This function is kept for compatibility but redirects to the main loader
-  OpenChatAndLoadMessages(chatId, limit);
-}
+
 
 void TelegramClient::CloseChat(int64_t chatId) {
   TDLOG("CloseChat called for chatId=%lld", (long long)chatId);
@@ -1182,70 +1062,7 @@ void TelegramClient::CloseChat(int64_t chatId) {
   Send(std::move(request), nullptr);
 }
 
-void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId,
-                                  int limit) {
-  TDLOG("LoadMessages called for chatId=%lld fromMessageId=%lld limit=%d",
-        (long long)chatId, (long long)fromMessageId, limit);
 
-  // Request chat history from TDLib
-  // from_message_id=0 means start from the newest message
-  // only_local=false ensures we fetch from server if needed
-  auto request = td_api::make_object<td_api::getChatHistory>();
-  request->chat_id_ = chatId;
-  request->from_message_id_ = fromMessageId;
-  request->offset_ = 0;
-  request->limit_ = limit > 0 ? limit : 100;
-  request->only_local_ = false;
-
-  Send(std::move(request),
-       [this, chatId](td_api::object_ptr<td_api::Object> result) {
-         TDLOG("LoadMessages response received for chatId=%lld result_id=%d",
-               (long long)chatId, result->get_id());
-
-         if (result->get_id() == td_api::messages::ID) {
-           auto messages = td_api::move_object_as<td_api::messages>(result);
-
-           TDLOG("Got %d total messages, %zu in this batch",
-                 messages->total_count_, messages->messages_.size());
-
-           std::vector<MessageInfo> msgList;
-           for (auto &msg : messages->messages_) {
-             if (msg) {
-               msgList.push_back(ConvertMessage(msg.get()));
-               TDLOG("  Message %lld: %.50s", (long long)msg->id_,
-                     msgList.back().text.ToStdString().c_str());
-             }
-           }
-
-           TDLOG("Converted %zu messages for chatId=%lld", msgList.size(),
-                 (long long)chatId);
-
-           // Store messages (replace to avoid duplicates)
-           {
-             std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-             m_messages[chatId] = msgList;
-           }
-
-           PostToMainThread([this, chatId, msgList]() {
-             TDLOG("PostToMainThread: OnMessagesLoaded for chatId=%lld with "
-                   "%zu messages",
-                   (long long)chatId, msgList.size());
-             if (m_mainFrame) {
-               m_mainFrame->OnMessagesLoaded(chatId, msgList);
-             } else {
-               TDLOG("ERROR: m_mainFrame is null!");
-             }
-           });
-         } else if (result->get_id() == td_api::error::ID) {
-           auto error = td_api::move_object_as<td_api::error>(result);
-           TDLOG("LoadMoreMessages ERROR: %d - %s", error->code_,
-                 error->message_.c_str());
-           m_isLoadingMessages = false;
-         } else {
-           m_isLoadingMessages = false;
-         }
-       });
-     }
 
 void TelegramClient::SendMessage(int64_t chatId, const wxString &text) {
   SendMessage(chatId, text, 0); // No reply

@@ -115,19 +115,13 @@ public:
 
   void OpenChat(int64_t chatId);
   void CloseChat(int64_t chatId);
-  void OpenChatAndLoadMessages(int64_t chatId, int limit = 30);  // Reduced initial load
+  
+  // Simple message loading: load 100 messages on chat open, then receive new ones reactively
+  void OpenChatAndLoadMessages(int64_t chatId);
 
   // Track current active chat for download prioritization
   void SetCurrentChatId(int64_t chatId) { m_currentChatId = chatId; }
   int64_t GetCurrentChatId() const { return m_currentChatId; }
-  void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 30);
-  void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
-  void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 30);
-  
-  // Lazy loading state for messages
-  bool HasMoreMessages(int64_t chatId) const;
-  bool IsLoadingMessages() const { return m_isLoadingMessages; }
-  void SetAllMessagesLoaded(int64_t chatId, bool loaded);
   void SendMessage(int64_t chatId, const wxString &text);
   void SendMessage(int64_t chatId, const wxString &text,
                    int64_t replyToMessageId);
@@ -218,6 +212,7 @@ private:
   UserInfo m_currentUser;
   int64_t m_currentChatId =
       0; // Currently viewed chat for download prioritization
+  int64_t m_pendingChatLoad = 0; // Chat waiting for connection to be ready
 
   std::map<int64_t, ChatInfo> m_chats;
   std::map<int64_t, UserInfo> m_users;
@@ -229,12 +224,6 @@ private:
   std::atomic<bool> m_allChatsLoaded{false};
   std::atomic<bool> m_isLoadingChats{false};
   static constexpr int CHAT_BATCH_SIZE = 30;
-  
-  // Lazy loading state for messages
-  std::atomic<bool> m_isLoadingMessages{false};
-  std::set<int64_t> m_chatsWithAllMessagesLoaded;
-  mutable std::mutex m_messageLoadStateMutex;
-  static constexpr int MESSAGE_BATCH_SIZE = 30;
 
   std::uint64_t m_currentQueryId;
   std::map<std::uint64_t,
@@ -274,6 +263,9 @@ private:
   void HandleAuthReady();
   void HandleAuthClosed();
   void ConfigureAutoDownload();
+  
+  // Helper to fetch messages once connection is ready
+  void FetchChatMessages(int64_t chatId);
 
   void OnNewMessage(td_api::object_ptr<td_api::message> &message);
   void OnMessageEdited(int64_t chatId, int64_t messageId,

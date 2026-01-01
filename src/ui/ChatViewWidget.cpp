@@ -72,10 +72,8 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_downloadLabel(nullptr), m_downloadGauge(nullptr),
       m_downloadHideTimer(this), m_refreshTimer(this), m_refreshPending(false),
       m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
-      m_isLoadingHistory(false), m_allHistoryLoaded(false),
       m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
       m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
-      m_loadingIndicator(nullptr), m_loadMoreButton(nullptr), 
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1) {
   // Bind timer events
   Bind(
@@ -112,19 +110,6 @@ ChatViewWidget::~ChatViewWidget() {
 
 void ChatViewWidget::CreateLayout() {
   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-
-  // Loading indicator at top (shown while fetching older messages)
-  m_loadingIndicator = new wxStaticText(this, wxID_ANY, wxString::FromUTF8("⟳ Loading older messages..."),
-                                        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL);
-  m_loadingIndicator->SetForegroundColour(wxColour(128, 128, 128));
-  m_loadingIndicator->Hide();
-  mainSizer->Add(m_loadingIndicator, 0, wxEXPAND | wxALL, 4);
-
-  // Legacy load more button - kept for compatibility but not used
-  m_loadMoreButton = new wxButton(this, wxID_ANY, "Load older messages");
-  m_loadMoreButton->Hide();
-  m_loadMoreButton->Bind(wxEVT_BUTTON, &ChatViewWidget::OnLoadMoreButtonClick, this);
-  // Don't add to sizer - we use m_loadingIndicator now
 
   // Topic bar at top (HexChat style)
   m_topicBar = new wxPanel(this, wxID_ANY);
@@ -473,8 +458,6 @@ void ChatViewWidget::RefreshDisplay() {
   if (shouldScrollToBottom) {
     m_chatArea->ScrollToBottom();
   }
-  
-  m_isLoadingHistory = false;
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
@@ -971,95 +954,6 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
   RefreshDisplay();
 }
 
-void ChatViewWidget::BufferOlderMessages(const std::vector<MessageInfo> &messages) {
-  HideLoadingIndicator();
-  
-  if (messages.empty()) {
-    m_isLoadingHistory = false;
-    return;
-  }
-  
-  // Simply add new messages to our list and refresh
-  size_t addedCount = 0;
-  {
-    std::lock_guard<std::mutex> lock(m_messagesMutex);
-    
-    std::set<int64_t> existingIds;
-    for (const auto &msg : m_messages) {
-      existingIds.insert(msg.id);
-    }
-    
-    for (const auto &msg : messages) {
-      if (msg.id != 0 && existingIds.find(msg.id) == existingIds.end()) {
-        m_messages.push_back(msg);
-        m_displayedMessageIds.insert(msg.id);
-        addedCount++;
-      }
-    }
-    
-    if (addedCount == 0) {
-      m_isLoadingHistory = false;
-      return;
-    }
-    
-    // Sort all messages by date/id
-    std::sort(m_messages.begin(), m_messages.end(),
-              [](const MessageInfo &a, const MessageInfo &b) {
-                if (a.date != b.date) return a.date < b.date;
-                return a.id < b.id;
-              });
-    
-    // Rebuild index
-    m_messageIdToIndex.clear();
-    for (size_t i = 0; i < m_messages.size(); i++) {
-      if (m_messages[i].id != 0) {
-        m_messageIdToIndex[m_messages[i].id] = i;
-      }
-    }
-  }
-  
-  CVWLOG("BufferOlderMessages: added " << addedCount << " messages");
-  
-  // Refresh display with all messages
-  RefreshDisplay();
-  
-  m_isLoadingHistory = false;
-}
-
-void ChatViewWidget::ShowLoadMoreIndicator(size_t count) {
-  // Legacy function - repurposed to show loading indicator
-  (void)count;
-  ShowLoadingIndicator();
-}
-
-void ChatViewWidget::HideLoadMoreIndicator() {
-  // Legacy function - repurposed to hide loading indicator
-  HideLoadingIndicator();
-}
-
-void ChatViewWidget::ShowLoadingIndicator() {
-  if (m_loadingIndicator && !m_loadingIndicator->IsShown()) {
-    m_loadingIndicator->Show();
-    if (GetSizer()) {
-      GetSizer()->Layout();
-    }
-  }
-}
-
-void ChatViewWidget::HideLoadingIndicator() {
-  if (m_loadingIndicator && m_loadingIndicator->IsShown()) {
-    m_loadingIndicator->Hide();
-    if (GetSizer()) {
-      GetSizer()->Layout();
-    }
-  }
-}
-
-void ChatViewWidget::OnLoadMoreButtonClick(wxCommandEvent &event) {
-  // No longer used - scroll-based loading renders immediately
-  (void)event;
-}
-
 void ChatViewWidget::RemoveMessage(int64_t messageId) {
   if (messageId == 0)
     return;
@@ -1201,9 +1095,6 @@ void ChatViewWidget::EndBatchUpdate() {
 }
 
 void ChatViewWidget::ClearMessages() {
-  // Hide loading indicator if visible
-  HideLoadingIndicator();
-  
   CVWLOG("ClearMessages: clearing all messages");
 
   // Save read times to global cache before clearing (so they persist across
@@ -1261,8 +1152,6 @@ void ChatViewWidget::ClearMessages() {
   m_lastDisplayedMessageId = 0;
   m_lastReadOutboxId = 0;
   m_lastReadOutboxTime = 0;
-  m_isLoadingHistory = false;
-  m_allHistoryLoaded = false;
 }
 
 bool ChatViewWidget::IsMessageOutOfOrder(int64_t messageId) const {
@@ -2100,11 +1989,7 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime) {
   }
 }
 
-void ChatViewWidget::CheckAndTriggerHistoryLoad() {
-  // Simplified: No automatic history loading
-  // With the message limit setting, we load a fixed number of messages upfront
-  // and don't load more on scroll
-}
+
 
 void ChatViewWidget::OnScroll(wxScrollWinEvent &event) {
   event.Skip();

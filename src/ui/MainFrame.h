@@ -47,8 +47,6 @@ public:
   void RefreshChatList();
   void OnMessagesLoaded(int64_t chatId,
                         const std::vector<MessageInfo> &messages);
-  void OnMoreMessagesLoaded(int64_t chatId,
-                            const std::vector<MessageInfo> &messages);
   void OnNewMessage(const MessageInfo &message);
   void OnMessageUpdated(int64_t chatId, const MessageInfo &message);
   void OnMessageEdited(int64_t chatId, int64_t messageId,
@@ -72,9 +70,6 @@ public:
   void MarkMessageAsRead(int64_t chatId, int64_t messageId);
   void UpdateUnreadIndicator(int64_t chatId, int32_t unreadCount);
   int64_t GetLastReadMessageId(int64_t chatId) const;
-
-  // Load older messages (lazy loading)
-  void LoadMoreMessages(int64_t fromMessageId);
 
   TelegramClient *GetTelegramClient() { return m_telegramClient; }
   int64_t GetCurrentChatId() const { return m_currentChatId; }
