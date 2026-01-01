@@ -35,6 +35,7 @@ public:
   
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
+  void ScrollToBottomAggressive(); // Multi-method aggressive scroll for big chats
 
   // Refresh the display from the stored message vector
   // This re-renders all messages in proper sorted order
@@ -308,6 +309,7 @@ private:
 
   // Smart scrolling state
   bool m_wasAtBottom;
+  bool m_forceScrollToBottom;  // Persistent flag that survives through async operations
   int m_newMessageCount;
   bool m_isLoading;
 

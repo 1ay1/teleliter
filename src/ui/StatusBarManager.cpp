@@ -129,7 +129,8 @@ void StatusBarManager::UpdateStatusBar() {
     static const wxString dotPatterns[] = {"", ".", "..", "..."};
     wxString dots = dotPatterns[m_typingAnimFrame % 4];
 
-    wxString typingText = "✏️ " + m_overrideStatusText + dots;
+    // U+270F PENCIL
+    wxString typingText = wxString::FromUTF8("\xE2\x9C\x8F ") + m_overrideStatusText + dots;
 
     // Use native SetStatusText for proper vertical alignment
     m_parent->SetStatusText(typingText, 0);

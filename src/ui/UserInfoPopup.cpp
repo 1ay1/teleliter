@@ -384,7 +384,7 @@ void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
     
     // Draw verified badge if applicable
     if (m_userInfo.isVerified) {
-        wxString verifiedIcon = " ✓";
+        wxString verifiedIcon = wxString::FromUTF8(" \xE2\x9C\x93"); // U+2713 CHECK MARK
         wxSize iconSize = dc.GetTextExtent(verifiedIcon);
         nameX = x + (width - nameSize.GetWidth() - iconSize.GetWidth()) / 2;
         dc.DrawText(displayName, nameX, y);

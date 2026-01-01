@@ -302,6 +302,7 @@ set(SOURCES
     src/ui/ChatArea.cpp
     src/ui/MessageFormatter.cpp
     src/ui/StatusBarManager.cpp
+    src/ui/ServiceMessageLog.cpp
     src/ui/WelcomeChat.cpp
     src/ui/ChatListWidget.cpp
     src/ui/ChatViewWidget.cpp

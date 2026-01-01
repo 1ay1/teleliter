@@ -18,6 +18,7 @@
 #include "../telegram/TransferManager.h"
 #include "MediaTypes.h"
 #include "MenuIds.h"
+#include "ServiceMessageLog.h"
 #include "StatusBarManager.h"
 
 // Forward declarations
@@ -84,6 +85,7 @@ public:
   InputBoxWidget *GetInputBoxWidget() { return m_inputBoxWidget; }
   wxListCtrl *GetMemberList() { return m_memberList; }
   StatusBarManager *GetStatusBarManager() { return m_statusBar; }
+  ServiceMessageLog *GetServiceMessageLog() { return m_serviceLog; }
 
 private:
   // UI Setup
@@ -176,6 +178,9 @@ private:
 
   // Status bar manager
   StatusBarManager *m_statusBar;
+  
+  // Service message log - tracks and displays Telegram events
+  ServiceMessageLog *m_serviceLog;
 
   // User colors for sender names (only colors that need to be stored)
   wxColour m_userColors[16];

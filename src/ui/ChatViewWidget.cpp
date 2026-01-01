@@ -76,7 +76,7 @@ ChatViewWidget::ChatViewWidget(wxWindow *parent, MainFrame *mainFrame)
       m_topicBar(nullptr), m_topicText(nullptr), m_downloadBar(nullptr),
       m_downloadLabel(nullptr), m_downloadGauge(nullptr),
       m_downloadHideTimer(this), m_refreshTimer(this), m_refreshPending(false),
-      m_wasAtBottom(true), m_newMessageCount(0), m_isLoading(false),
+      m_wasAtBottom(true), m_forceScrollToBottom(false), m_newMessageCount(0), m_isLoading(false),
       m_highlightTimer(this, HIGHLIGHT_TIMER_ID), m_isReloading(false),
       m_batchUpdateDepth(0), m_lastDisplayedTimestamp(0),
       m_lastDisplayedMessageId(0), m_contextMenuPos(-1),
@@ -502,7 +502,7 @@ void ChatViewWidget::ClearTopicText() {
 
 void ChatViewWidget::CreateNewMessageButton() {
   m_newMessageButton = new wxButton(this, ID_NEW_MESSAGE_BUTTON,
-                                    wxString::FromUTF8("↓ New Messages"),
+                                    wxString::FromUTF8("\xE2\x86\x93 New Messages"), // U+2193 DOWNWARDS ARROW
                                     wxDefaultPosition, wxDefaultSize);
 
   // Use native button styling
@@ -715,9 +715,13 @@ void ChatViewWidget::RefreshDisplay() {
     return;
 
   // Check if we should scroll to bottom after refresh
-  // Use m_wasAtBottom flag if set (e.g., after ClearMessages or ForceScrollToBottom)
-  // Otherwise check current scroll position
-  bool shouldScrollToBottom = m_wasAtBottom || IsAtBottom();
+  // Use m_forceScrollToBottom for robust new-chat scrolling
+  // Also use m_wasAtBottom flag or check current position
+  bool shouldScrollToBottom = m_forceScrollToBottom || m_wasAtBottom || IsAtBottom();
+  
+  // Consume the force flag (it's a one-shot)
+  bool wasForced = m_forceScrollToBottom;
+  m_forceScrollToBottom = false;
   
   // Remember scroll state for anchor-based scrolling
   int oldScrollPos = display->GetScrollPos(wxVERTICAL);
@@ -829,6 +833,9 @@ void ChatViewWidget::RefreshDisplay() {
   // Force layout calculation so scroll metrics are accurate
   display->LayoutContent();
   
+  // Force a full layout pass - this is critical for big chats
+  display->Layout();
+  
   // NOW get new scroll metrics after content change and layout
   int newScrollRange = display->GetScrollRange(wxVERTICAL);
   int newThumbSize = display->GetScrollThumb(wxVERTICAL);
@@ -840,8 +847,32 @@ void ChatViewWidget::RefreshDisplay() {
   
   // Calculate and apply scroll position
   if (shouldScrollToBottom) {
-    SCROLL_LOG("  -> scrolling to bottom");
-    display->ShowPosition(display->GetLastPosition());
+    SCROLL_LOG("  -> scrolling to bottom (forced=" << wasForced << ")");
+    
+    // Use multiple methods to ensure scroll works for big chats
+    long lastPos = display->GetLastPosition();
+    
+    // Method 1: Move caret to end and scroll to it
+    display->SetInsertionPoint(lastPos);
+    display->ShowPosition(lastPos);
+    
+    // Method 2: Direct scroll to max position
+    if (newMaxScroll > 0) {
+      display->Scroll(0, newMaxScroll);
+    }
+    
+    // Method 3: Use ScrollIntoView on the last line
+    display->ScrollIntoView(lastPos, WXK_END);
+    
+    display->Update();
+    
+    // For new chats, schedule aggressive retry scrolls
+    if (wasForced) {
+      // Immediate CallAfter
+      CallAfter([this]() {
+        ScrollToBottomAggressive();
+      });
+    }
   } else if (m_isLoadingOlder && newMaxScroll > oldMaxScroll) {
     // When loading older messages, new content is added at the TOP
     // So we need to scroll DOWN by the amount of new content to stay in place
@@ -866,9 +897,50 @@ void ChatViewWidget::RefreshDisplay() {
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
-  // Set the flag so next refresh will scroll, then scroll immediately
+  // Set BOTH flags for maximum robustness
+  // m_forceScrollToBottom survives through async operations
   m_wasAtBottom = true;
+  m_forceScrollToBottom = true;
   ScrollToBottom();
+}
+
+void ChatViewWidget::ScrollToBottomAggressive() {
+  if (!m_chatArea)
+    return;
+    
+  wxRichTextCtrl *display = m_chatArea->GetDisplay();
+  if (!display)
+    return;
+  
+  // Force layout update first
+  display->LayoutContent();
+  display->Layout();
+  
+  long lastPos = display->GetLastPosition();
+  int scrollRange = display->GetScrollRange(wxVERTICAL);
+  int thumbSize = display->GetScrollThumb(wxVERTICAL);
+  int maxScroll = scrollRange - thumbSize;
+  
+  // Try all methods to ensure scroll works
+  // Method 1: Direct scroll to max
+  if (maxScroll > 0) {
+    display->Scroll(0, maxScroll);
+  }
+  
+  // Method 2: Move caret to end and show position
+  display->SetInsertionPoint(lastPos);
+  display->ShowPosition(lastPos);
+  
+  // Method 3: ScrollIntoView
+  display->ScrollIntoView(lastPos, WXK_END);
+  
+  // Method 4: SetScrollPos directly
+  if (maxScroll > 0) {
+    display->SetScrollPos(wxVERTICAL, maxScroll, true);
+  }
+  
+  display->Refresh();
+  display->Update();
 }
 
 void ChatViewWidget::RenderMessageToDisplay(const MessageInfo &msg) {
@@ -1355,6 +1427,29 @@ void ChatViewWidget::DisplayMessages(const std::vector<MessageInfo> &messages) {
   // Render all messages in proper order immediately (not debounced for bulk loads)
   RefreshDisplay();
   
+  // Safety scroll: For new chats, use aggressive multi-attempt scrolling
+  // This catches edge cases where RefreshDisplay's scroll didn't fully take effect
+  if (m_wasAtBottom) {
+    // Immediate aggressive scroll
+    ScrollToBottomAggressive();
+    
+    // Schedule delayed scrolls with increasing intervals to catch layout completion
+    // These use CallAfter which is safer than wxYield
+    
+    CallAfter([this]() { ScrollToBottomAggressive(); });
+    
+    // Timer-based retries for layout that takes longer
+    for (int delay : {50, 100, 200, 400, 800}) {
+      wxTimer *timer = new wxTimer();
+      timer->Bind(wxEVT_TIMER, [this, timer](wxTimerEvent&) {
+        ScrollToBottomAggressive();
+        timer->Stop();
+        delete timer;
+      });
+      timer->StartOnce(delay);
+    }
+  }
+  
   // After displaying messages, check if we need to load more
   // This handles the case where initial load returns few messages
   CallAfter([this]() {
@@ -1563,7 +1658,9 @@ void ChatViewWidget::ClearMessages() {
   ClearLinkSpans();
 
   // Reset scroll state so new chat scrolls to bottom
+  // Use both flags for robust scrolling on new chat
   m_wasAtBottom = true;
+  m_forceScrollToBottom = true;
 
   // Reset message grouping state and marker tracking
   if (m_messageFormatter) {
@@ -1632,8 +1729,8 @@ void ChatViewWidget::ShowNewMessageIndicator() {
   if (!m_newMessageButton)
     return;
 
-  // Update button text with count and down arrow emoji
-  wxString arrow = wxString::FromUTF8("↓");
+  // Update button text with count and down arrow
+  wxString arrow = wxString::FromUTF8("\xE2\x86\x93"); // U+2193 DOWNWARDS ARROW
   wxString label;
   if (m_newMessageCount == 1) {
     label = wxString::Format("%s 1 New Message", arrow);

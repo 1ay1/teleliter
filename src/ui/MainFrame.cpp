@@ -100,7 +100,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
       m_rightSplitter(nullptr), m_leftPanel(nullptr), m_chatListWidget(nullptr),
       m_chatPanel(nullptr), m_welcomeChat(nullptr), m_chatViewWidget(nullptr),
       m_inputBoxWidget(nullptr), m_rightPanel(nullptr), m_memberList(nullptr),
-      m_memberCountLabel(nullptr), m_statusBar(nullptr),
+      m_memberCountLabel(nullptr), m_statusBar(nullptr), m_serviceLog(nullptr),
 
       m_showChatList(true), m_showMembers(true), m_showChatInfo(true),
       m_showUnreadFirst(true), m_isLoggedIn(false), m_currentUser(""),
@@ -143,6 +143,16 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
 
   // Connect status bar to telegram client
   m_statusBar->SetTelegramClient(m_telegramClient);
+
+  // Setup service message log - central hub for Telegram events
+  m_serviceLog = new ServiceMessageLog();
+  m_serviceLog->SetWelcomeChat(m_welcomeChat);
+  m_serviceLog->SetStatusBarManager(m_statusBar);
+  m_serviceLog->SetTelegramClient(m_telegramClient);
+  m_serviceLog->Start();
+  
+  // Log initial startup message
+  m_serviceLog->LogSystem("Teleliter started - connecting to Telegram...");
 
   // Connect chat list widget to telegram client (for online status lookup)
   if (m_chatListWidget) {
@@ -219,6 +229,12 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
 }
 
 MainFrame::~MainFrame() {
+  if (m_serviceLog) {
+    m_serviceLog->Stop();
+    delete m_serviceLog;
+    m_serviceLog = nullptr;
+  }
+
   if (m_statusTimer) {
     m_statusTimer->Stop();
     delete m_statusTimer;
@@ -1287,6 +1303,17 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         m_telegramClient->OpenChatAndLoadMessages(chatId);
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
+        
+        // Log chat opened to service log
+        if (m_serviceLog && chatFound) {
+          wxString chatType;
+          if (chatInfo.isChannel) chatType = "channel";
+          else if (chatInfo.isSupergroup) chatType = "supergroup";
+          else if (chatInfo.isGroup) chatType = "group";
+          else if (chatInfo.isBot) chatType = "bot";
+          else chatType = "chat";
+          m_serviceLog->LogSystem("Opened " + chatType + ": " + chatInfo.title);
+        }
       } else {
         DBGLOG("ERROR: m_telegramClient is null!");
       }
@@ -1386,11 +1413,20 @@ wxString MainFrame::FormatTimestamp(int64_t unixTime) {
   return dt.Format("%H:%M:%S");
 }
 
-void MainFrame::OnConnected() {}
+void MainFrame::OnConnected() {
+  if (m_serviceLog) {
+    m_serviceLog->LogConnectionState("Connected to Telegram servers");
+  }
+}
 
 void MainFrame::OnLoginSuccess(const wxString &userName) {
   m_isLoggedIn = true;
   m_currentUser = userName;
+
+  // Log to service message log
+  if (m_serviceLog) {
+    m_serviceLog->LogSystem("Logged in as " + userName);
+  }
 
   // Update status bar
   if (m_statusBar) {
@@ -1422,6 +1458,11 @@ void MainFrame::OnLoggedOut() {
   m_isLoggedIn = false;
   m_currentUser.Clear();
   m_currentChatId = 0;
+
+  // Log to service message log
+  if (m_serviceLog) {
+    m_serviceLog->LogSystem("Logged out");
+  }
 
   // Update status bar
   if (m_statusBar) {
@@ -1632,6 +1673,33 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
     }
   }
 
+  // Final aggressive scroll after ALL operations complete
+  // This catches edge cases where layout still wasn't ready
+  if (m_chatViewWidget) {
+    m_chatViewWidget->ScrollToBottomAggressive();
+    
+    // Schedule final retry scrolls for very large chats
+    // Using CallAfter for safe event loop integration
+    CallAfter([this]() {
+      if (m_chatViewWidget) {
+        m_chatViewWidget->ScrollToBottomAggressive();
+      }
+    });
+    
+    // Timer-based final retries
+    for (int delay : {100, 300, 600, 1000}) {
+      wxTimer *timer = new wxTimer();
+      timer->Bind(wxEVT_TIMER, [this, timer](wxTimerEvent&) {
+        if (m_chatViewWidget) {
+          m_chatViewWidget->ScrollToBottomAggressive();
+        }
+        timer->Stop();
+        delete timer;
+      });
+      timer->StartOnce(delay);
+    }
+  }
+
   DBGLOG("Finished displaying messages, scrolled to bottom");
 }
 
@@ -1819,12 +1887,25 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId,
         wxDateTime::Now().Format("%H:%M:%S"),
         wxString::Format("%s edited: \"%s\"", sender, displayText));
     m_chatViewWidget->ScrollToBottomIfAtBottom();
+    
+    // Log to service message log
+    if (m_serviceLog) {
+      m_serviceLog->Log(ServiceMessageType::MessageEdited,
+                        sender + " edited a message in " + m_currentChatTitle,
+                        m_currentChatTitle, chatId);
+    }
   }
 }
 
 void MainFrame::OnFileDownloaded(int32_t fileId, const wxString &localPath) {
   DBGLOG("OnFileDownloaded: fileId=" << fileId
                                      << " path=" << localPath.ToStdString());
+
+  // Log download completion to service log
+  if (m_serviceLog) {
+    wxFileName fn(localPath);
+    m_serviceLog->LogDownloadComplete(fn.GetFullName());
+  }
 
   // Check if this is a pending download for media preview in ChatViewWidget
   if (m_chatViewWidget) {
@@ -1872,6 +1953,11 @@ void MainFrame::OnDownloadStarted(int32_t fileId, const wxString &fileName,
     return; // Don't track tiny files
   }
 
+  // Log download start to service log
+  if (m_serviceLog) {
+    m_serviceLog->LogDownloadStarted(fileName, totalSize);
+  }
+
   // Start a new download in TransferManager
   int transferId = m_transferManager.StartDownload(fileName, totalSize);
   m_fileToTransferId[fileId] = transferId;
@@ -1884,6 +1970,12 @@ void MainFrame::OnDownloadFailed(int32_t fileId, const wxString &error) {
   // Fail the transfer in TransferManager
   auto it = m_fileToTransferId.find(fileId);
   if (it != m_fileToTransferId.end()) {
+    // Log download failure to service log
+    TransferInfo *info = m_transferManager.GetTransfer(it->second);
+    if (info && m_serviceLog) {
+      m_serviceLog->LogDownloadFailed(info->fileName, error);
+    }
+    
     m_transferManager.FailTransfer(it->second, error);
     m_fileToTransferId.erase(it);
   }
@@ -1914,6 +2006,25 @@ void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline,
   // Guard against invalid state
   if (userId == 0) {
     return;
+  }
+
+  // Log user status change to service log
+  if (m_serviceLog && m_telegramClient) {
+    bool userFound = false;
+    UserInfo user = m_telegramClient->GetUser(userId, &userFound);
+    if (userFound) {
+      wxString displayName = user.GetDisplayName();
+      if (isOnline) {
+        m_serviceLog->LogUserOnline(displayName, userId);
+      } else {
+        wxString lastSeenStr;
+        if (lastSeenTime > 0) {
+          wxDateTime dt((time_t)lastSeenTime);
+          lastSeenStr = "last seen " + dt.Format("%H:%M");
+        }
+        m_serviceLog->LogUserOffline(displayName, lastSeenStr, userId);
+      }
+    }
   }
 
   // Check if this user is the one in the current private chat
@@ -2132,6 +2243,60 @@ void MainFrame::ReactiveRefresh() {
   if (flags == DirtyFlag::None)
     return;
 
+  // Log new messages from other chats (background notifications)
+  if ((flags & DirtyFlag::Messages) != DirtyFlag::None && m_serviceLog) {
+    auto otherMessages = m_telegramClient->PeekNewMessagesFromOtherChats(m_currentChatId);
+    for (const auto& [chatId, msg] : otherMessages) {
+      if (!msg.isOutgoing) {
+        // Get chat name for the message
+        bool found = false;
+        ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
+        wxString chatName = found ? chat.title : "Unknown chat";
+        
+        wxString preview = msg.text;
+        if (preview.length() > 30) {
+          preview = preview.Left(27) + "...";
+        }
+        m_serviceLog->LogNewMessage(msg.senderName, chatName, preview, chatId, msg.id);
+      }
+    }
+  }
+
+  // Handle auth/connection state changes
+  if ((flags & DirtyFlag::Auth) != DirtyFlag::None) {
+    // Log connection state changes
+    if (m_serviceLog && m_telegramClient) {
+      static ConnectionState s_lastConnectionState = ConnectionState::WaitingForNetwork;
+      ConnectionState currentState = m_telegramClient->GetConnectionState();
+      
+      if (currentState != s_lastConnectionState) {
+        wxString stateStr;
+        switch (currentState) {
+          case ConnectionState::Ready:
+            stateStr = "Online - connected to Telegram";
+            break;
+          case ConnectionState::Connecting:
+            stateStr = "Connecting to Telegram...";
+            break;
+          case ConnectionState::ConnectingToProxy:
+            stateStr = "Connecting through proxy...";
+            break;
+          case ConnectionState::Updating:
+            stateStr = "Syncing with server...";
+            break;
+          case ConnectionState::WaitingForNetwork:
+            stateStr = "Waiting for network connection";
+            break;
+          default:
+            stateStr = "Unknown state";
+            break;
+        }
+        m_serviceLog->LogConnectionState(stateStr);
+        s_lastConnectionState = currentState;
+      }
+    }
+  }
+
   // Handle chat list updates
   if ((flags & DirtyFlag::ChatList) != DirtyFlag::None) {
     RefreshChatList();
@@ -2155,6 +2320,15 @@ void MainFrame::ReactiveRefresh() {
     auto newMessages = m_telegramClient->GetNewMessages(m_currentChatId);
     for (const auto &msg : newMessages) {
       OnNewMessage(msg);
+      
+      // Log new message to service log (only from others)
+      if (m_serviceLog && !msg.isOutgoing) {
+        wxString preview = msg.text;
+        if (preview.length() > 30) {
+          preview = preview.Left(27) + "...";
+        }
+        m_serviceLog->LogNewMessage(msg.senderName, m_currentChatTitle, preview, m_currentChatId, msg.id);
+      }
     }
 
     // Get updated messages (edits, reactions, etc.)
@@ -2183,10 +2357,21 @@ void MainFrame::ReactiveRefresh() {
       if (deletedIds.size() == 1) {
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
             wxDateTime::Now().Format("%H:%M:%S"), "A message was deleted");
+        if (m_serviceLog) {
+          m_serviceLog->Log(ServiceMessageType::MessageDeleted, 
+                            "Message deleted in " + m_currentChatTitle, 
+                            m_currentChatTitle, m_currentChatId);
+        }
       } else {
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
             wxDateTime::Now().Format("%H:%M:%S"),
             wxString::Format("%zu messages were deleted", deletedIds.size()));
+        if (m_serviceLog) {
+          m_serviceLog->Log(ServiceMessageType::MessageDeleted,
+                            wxString::Format("%zu messages deleted in %s", 
+                                           deletedIds.size(), m_currentChatTitle),
+                            m_currentChatTitle, m_currentChatId);
+        }
       }
     }
 
@@ -2197,6 +2382,9 @@ void MainFrame::ReactiveRefresh() {
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
             wxDateTime::Now().Format("%H:%M:%S"),
             wxString::Format("Message failed to send: %s", error));
+      }
+      if (m_serviceLog) {
+        m_serviceLog->LogError("Message failed to send: " + error);
       }
     }
 
@@ -2253,6 +2441,11 @@ void MainFrame::ReactiveRefresh() {
             typingText += ", ";
           }
           typingText += name + " is " + action;
+          
+          // Log typing to service log
+          if (m_serviceLog) {
+            m_serviceLog->LogUserAction(name, action, m_currentChatTitle, m_currentChatId);
+          }
         }
         // Update status bar with animated typing indicator
         if (m_statusBar && !typingText.IsEmpty()) {

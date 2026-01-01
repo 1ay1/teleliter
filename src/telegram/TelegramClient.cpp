@@ -3244,6 +3244,36 @@ std::vector<MessageInfo> TelegramClient::GetNewMessages(int64_t chatId) {
   return result;
 }
 
+std::vector<std::pair<int64_t, MessageInfo>> TelegramClient::GetAllNewMessages() {
+  std::lock_guard<std::mutex> lock(m_newMessagesMutex);
+  std::vector<std::pair<int64_t, MessageInfo>> result;
+  
+  for (auto& [chatId, messages] : m_newMessages) {
+    for (const auto& msg : messages) {
+      result.push_back({chatId, msg});
+    }
+  }
+  
+  // Don't clear - let GetNewMessages handle that for active chat
+  // We just peek at what's pending for notifications
+  return result;
+}
+
+std::vector<std::pair<int64_t, MessageInfo>> TelegramClient::PeekNewMessagesFromOtherChats(int64_t excludeChatId) {
+  std::lock_guard<std::mutex> lock(m_newMessagesMutex);
+  std::vector<std::pair<int64_t, MessageInfo>> result;
+  
+  for (const auto& [chatId, messages] : m_newMessages) {
+    if (chatId != excludeChatId) {
+      for (const auto& msg : messages) {
+        result.push_back({chatId, msg});
+      }
+    }
+  }
+  
+  return result;
+}
+
 std::vector<MessageInfo> TelegramClient::GetUpdatedMessages(int64_t chatId) {
   std::lock_guard<std::mutex> lock(m_updatedMessagesMutex);
   std::vector<MessageInfo> result;

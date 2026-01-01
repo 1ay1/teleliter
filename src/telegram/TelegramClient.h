@@ -183,6 +183,12 @@ public:
 
   // Get new messages since last call for a chat (thread-safe, clears queue)
   std::vector<MessageInfo> GetNewMessages(int64_t chatId);
+  
+  // Get all pending new messages from all chats (for notifications)
+  std::vector<std::pair<int64_t, MessageInfo>> GetAllNewMessages();
+  
+  // Peek at new messages from chats other than the specified one (doesn't clear)
+  std::vector<std::pair<int64_t, MessageInfo>> PeekNewMessagesFromOtherChats(int64_t excludeChatId);
 
   // Get updated messages since last call for a chat (thread-safe, clears queue)
   std::vector<MessageInfo> GetUpdatedMessages(int64_t chatId);

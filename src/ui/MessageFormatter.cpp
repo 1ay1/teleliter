@@ -200,7 +200,7 @@ void MessageFormatter::WriteStatusSuffix(MessageStatus status,
     break;
   case MessageStatus::Sent:
     m_chatArea->BeginTextColour(m_chatArea->GetSentColor());
-    m_chatArea->WriteText(wxString::FromUTF8("✓"));
+    m_chatArea->WriteText(wxString::FromUTF8("\xE2\x9C\x93")); // U+2713 CHECK MARK
     m_chatArea->EndTextColour();
     break;
   case MessageStatus::Read:
@@ -209,7 +209,7 @@ void MessageFormatter::WriteStatusSuffix(MessageStatus status,
     } else {
       m_chatArea->BeginTextColour(m_chatArea->GetReadColor());
     }
-    m_chatArea->WriteText(wxString::FromUTF8("✓✓"));
+    m_chatArea->WriteText(wxString::FromUTF8("\xE2\x9C\x93\xE2\x9C\x93")); // U+2713 CHECK MARK x2
     m_chatArea->EndTextColour();
     // Record read marker position for tooltip
     m_lastStatusMarkerStart = markerStart;
