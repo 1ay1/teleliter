@@ -68,12 +68,12 @@ The corresponding TelegramClient API methods (`SendReaction`, `EditMessage`, `De
 ┌─────────────────────────────────────────────────────────────┐
 │                        MainFrame                             │
 │  ┌──────────────┐  ┌─────────────────────────────────────┐  │
-│  │ ChatList     │  │ ChatViewWidget                      │  │
-│  │ Widget       │  │  ┌─────────────────────────────┐   │  │
-│  │              │  │  │ ChatArea (wxRichTextCtrl)   │   │  │
-│  │ - Categories │  │  │ - Message display           │   │  │
-│  │ - Online     │  │  │ - Media spans               │   │  │
-│  │   indicators │  │  │ - Link detection            │   │  │
+│  │ ChatList     │  │ VirtualizedChatWidget (default)     │  │
+│  │ Widget       │  │  ┌─────────────────────────────────┐   │  │
+│  │              │  │  │ Custom virtualized rendering │   │  │
+│  │ - Categories │  │  │ - O(visible) paint complexity│   │  │
+│  │ - Online     │  │  │ - Scroll anchoring           │   │  │
+│  │   indicators │  │  │ - Lazy loading callbacks     │   │  │
 │  │              │  │  └─────────────────────────────┘   │  │
 │  │              │  │  ┌─────────────────────────────┐   │  │
 │  │              │  │  │ InputBoxWidget              │   │  │
@@ -157,27 +157,35 @@ src/
 ├── ui/
 │   ├── MainFrame.cpp/h       - Main window, reactive refresh loop
 │   ├── ChatArea.cpp/h        - Reusable rich text display
-│   ├── ChatViewWidget.cpp/h  - Message rendering, media spans
+│   ├── ChatViewWidget.cpp/h  - Legacy message rendering (wxRichTextCtrl)
+│   ├── VirtualizedChatWidget.cpp/h - High-performance virtualized chat (default)
 │   ├── ChatListWidget.cpp/h  - Chat tree with categories
 │   ├── InputBoxWidget.cpp/h  - Text input, command processing
 │   ├── MessageFormatter.cpp/h - HexChat-style formatting
 │   ├── StatusBarManager.cpp/h - Status bar updates
 │   ├── MediaPopup.cpp/h      - Media preview popup
 │   └── WelcomeChat.cpp/h     - Login flow UI
+├── doc/
+│   ├── DESIGN.md             - This file
+│   └── VIRTUALIZED_CHAT.md   - VirtualizedChatWidget deep-dive
 └── main.cpp                  - Entry point
 ```
 
 ## Performance Considerations
 
-1. **Batch updates**: Multiple message updates are wrapped in `BeginBatchUpdate()`/`EndBatchUpdate()` to prevent flicker
+1. **Virtualized rendering**: `VirtualizedChatWidget` only renders visible messages — O(visible) instead of O(all). See [VIRTUALIZED_CHAT.md](./VIRTUALIZED_CHAT.md) for details.
 
-2. **Double buffering**: `wxRichTextCtrl` uses double buffering for smooth rendering
+2. **Binary search visibility**: Finding visible messages uses binary search for O(log n) complexity
 
-3. **Coalesced refreshes**: `ScheduleRefresh()` debounces rapid update requests
+3. **Scroll anchoring**: When loading history, the scroll position is anchored to the currently visible message to prevent jarring jumps
 
-4. **Lazy media loading**: Media is downloaded on-demand or with low priority for background chats
+4. **Double buffering**: `wxAutoBufferedPaintDC` provides flicker-free drawing
 
-5. **Smart lazy loading**: Industry-standard pagination for chats and messages
+5. **Coalesced refreshes**: `ScheduleRefresh()` debounces rapid update requests
+
+6. **Lazy media loading**: Media is downloaded on-demand or with low priority for background chats
+
+7. **Smart lazy loading**: Industry-standard pagination for chats and messages with scroll-triggered loading
 
 ## Lazy Loading Architecture
 

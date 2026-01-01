@@ -407,18 +407,50 @@ void ChatViewWidget::RefreshDisplay() {
 
     // Sort messages before rendering
     SortMessages();
+    
+    // === SLIDING WINDOW OPTIMIZATION ===
+    // Only render the last MAX_DISPLAYED_MESSAGES for O(constant) performance
+    // This keeps wxRichTextCtrl content bounded regardless of total message count
+    size_t totalMessages = m_messages.size();
+    
+    if (totalMessages > MAX_DISPLAYED_MESSAGES) {
+      // Calculate window: show last MAX_DISPLAYED_MESSAGES by default
+      // But if loading history (scrolling up), shift window to include older messages
+      if (wasLoadingHistory && m_displayWindowStart > 0) {
+        // User is scrolling up - shift window to show older messages
+        // Keep window end where it was, shift start back
+        if (m_displayWindowStart >= 30) {
+          m_displayWindowStart -= 30;  // Shift back by batch size
+        } else {
+          m_displayWindowStart = 0;
+        }
+        m_displayWindowEnd = std::min(m_displayWindowStart + MAX_DISPLAYED_MESSAGES, totalMessages);
+      } else if (shouldScrollToBottom || m_displayWindowEnd == 0) {
+        // At bottom or first load - show most recent messages
+        m_displayWindowEnd = totalMessages;
+        m_displayWindowStart = totalMessages - MAX_DISPLAYED_MESSAGES;
+      }
+      // else: keep current window position (user is in middle of history)
+    } else {
+      // Few messages - show all
+      m_displayWindowStart = 0;
+      m_displayWindowEnd = totalMessages;
+    }
+    
+    CVWLOG("RefreshDisplay: window [" << m_displayWindowStart << ", " << m_displayWindowEnd 
+           << ") of " << totalMessages << " total messages");
 
-    // Calculate optimal username width for alignment
+    // Calculate optimal username width from window only (faster)
     std::vector<wxString> usernames;
-    usernames.reserve(m_messages.size());
-    for (const auto &msg : m_messages) {
-      if (!msg.senderName.IsEmpty()) {
-        usernames.push_back(msg.senderName);
+    usernames.reserve(m_displayWindowEnd - m_displayWindowStart);
+    for (size_t i = m_displayWindowStart; i < m_displayWindowEnd; i++) {
+      if (!m_messages[i].senderName.IsEmpty()) {
+        usernames.push_back(m_messages[i].senderName);
       }
     }
     m_messageFormatter->CalculateUsernameWidth(usernames);
 
-    // Update tracking from sorted messages
+    // Update tracking from ALL messages (for lookup purposes)
     m_displayedMessageIds.clear();
     for (const auto &msg : m_messages) {
       if (msg.id != 0) {
@@ -429,12 +461,13 @@ void ChatViewWidget::RefreshDisplay() {
       }
     }
 
-    // Render all messages
-    for (const auto &msg : m_messages) {
-      RenderMessageToDisplay(msg);
+    // Render only messages in the window - O(MAX_DISPLAYED_MESSAGES) = O(1)
+    for (size_t i = m_displayWindowStart; i < m_displayWindowEnd; i++) {
+      RenderMessageToDisplay(m_messages[i]);
     }
     
-    CVWLOG("RefreshDisplay: rendered " << m_messages.size() << " messages");
+    CVWLOG("RefreshDisplay: rendered " << (m_displayWindowEnd - m_displayWindowStart) 
+           << " messages (window), " << totalMessages << " total in storage");
   }
 
   // Remove trailing newline after the last message to avoid extra blank line
@@ -486,8 +519,51 @@ void ChatViewWidget::RefreshDisplayWindow() {
 }
 
 void ChatViewWidget::AdjustDisplayWindow(bool scrollingUp) {
-  // Virtual window removed - this is now a no-op
-  (void)scrollingUp;
+  bool needsRefresh = false;
+  
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    
+    size_t totalMessages = m_messages.size();
+    if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
+      return;  // No adjustment needed - all messages fit
+    }
+    
+    size_t oldStart = m_displayWindowStart;
+    size_t oldEnd = m_displayWindowEnd;
+    
+    if (scrollingUp) {
+      // Shift window to show older messages
+      if (m_displayWindowStart > 0) {
+        size_t shift = std::min(m_displayWindowStart, (size_t)50);  // Shift by 50 messages
+        m_displayWindowStart -= shift;
+        m_displayWindowEnd = std::min(m_displayWindowStart + MAX_DISPLAYED_MESSAGES, totalMessages);
+      }
+    } else {
+      // Shift window to show newer messages
+      if (m_displayWindowEnd < totalMessages) {
+        size_t shift = std::min(totalMessages - m_displayWindowEnd, (size_t)50);
+        m_displayWindowEnd += shift;
+        if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
+          m_displayWindowStart = m_displayWindowEnd - MAX_DISPLAYED_MESSAGES;
+        }
+      }
+    }
+    
+    // Check if window actually changed
+    needsRefresh = (oldStart != m_displayWindowStart || oldEnd != m_displayWindowEnd);
+    
+    if (needsRefresh) {
+      CVWLOG("AdjustDisplayWindow: shifted from [" << oldStart << "," << oldEnd 
+             << ") to [" << m_displayWindowStart << "," << m_displayWindowEnd << ")");
+    }
+  }  // Lock released here
+  
+  if (needsRefresh) {
+    // Refresh with the new window - don't scroll to bottom
+    m_isLoadingHistory = true;  // Prevent scroll-to-bottom
+    RefreshDisplay();
+  }
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
@@ -1234,6 +1310,10 @@ void ChatViewWidget::EndBatchUpdate() {
 }
 
 void ChatViewWidget::ClearMessages() {
+  // Reset display window
+  m_displayWindowStart = 0;
+  m_displayWindowEnd = 0;
+  
   // Hide loading indicator if visible
   HideLoadingIndicator();
   
@@ -2127,6 +2207,16 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime) {
 }
 
 void ChatViewWidget::CheckAndTriggerHistoryLoad() {
+  // First check if we need to adjust the display window (show already-loaded older messages)
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
+    if (m_messages.size() > MAX_DISPLAYED_MESSAGES && m_displayWindowStart > 0) {
+      // We have more messages in storage than displayed - shift window first
+      AdjustDisplayWindow(true);
+      return;  // Don't load from server yet, show what we have
+    }
+  }
+  
   // Don't load if already loading
   if (m_isLoadingHistory) {
     return;

@@ -27,6 +27,44 @@ enum class ConnectionState {
   Ready              // Connected and ready
 };
 
+// Text entity types for message formatting
+enum class TextEntityType {
+  Plain,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  Code,
+  Pre,
+  TextUrl,
+  Url,
+  Mention,
+  MentionName,
+  Hashtag,
+  Cashtag,
+  BotCommand,
+  EmailAddress,
+  PhoneNumber,
+  Spoiler,
+  CustomEmoji,
+  BlockQuote,
+  Unknown
+};
+
+// Text entity for formatted text
+struct TextEntity {
+  TextEntityType type = TextEntityType::Plain;
+  int offset = 0;      // UTF-16 code unit offset
+  int length = 0;      // Length in UTF-16 code units
+  wxString url;        // For TextUrl type
+  int64_t userId = 0;  // For MentionName type
+  wxString language;   // For Pre type (code block language)
+  int64_t customEmojiId = 0;  // For CustomEmoji type
+  
+  TextEntity() = default;
+  TextEntity(TextEntityType t, int off, int len) : type(t), offset(off), length(len) {}
+};
+
 // Chat info structure
 struct ChatInfo {
   int64_t id;
@@ -113,6 +151,9 @@ struct MessageInfo {
 
   // Reactions: emoji -> list of user names who reacted
   std::map<wxString, std::vector<wxString>> reactions;
+
+  // Text entities for formatting
+  std::vector<TextEntity> entities;
 
   MessageInfo()
       : id(0), chatId(0), senderId(0), date(0), editDate(0), isOutgoing(false),

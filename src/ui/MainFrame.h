@@ -177,7 +177,7 @@ private:
   ChatViewWidget *m_chatViewWidget;
   VirtualizedChatWidget *m_virtualizedChatWidget;
   InputBoxWidget *m_inputBoxWidget;
-  bool m_useVirtualizedChat = true;  // Use new virtualized widget by default
+  bool m_useVirtualizedChat = false;  // Use ChatViewWidget with sliding window optimization (fast + HexChat look)
 
   // Right panel - Member list
   wxPanel *m_rightPanel;
