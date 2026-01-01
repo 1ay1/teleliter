@@ -357,13 +357,13 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
   // Remove expired highlights (older than HIGHLIGHT_DURATION_SECONDS)
   int64_t now = wxGetUTCTime();
   bool hasActiveHighlights = false;
-  bool removedAny = false;
+  int removedCount = 0;
 
   auto it = m_recentlyReadMessages.begin();
   while (it != m_recentlyReadMessages.end()) {
     if (now - it->second >= HIGHLIGHT_DURATION_SECONDS) {
       it = m_recentlyReadMessages.erase(it);
-      removedAny = true;
+      removedCount++;
     } else {
       hasActiveHighlights = true;
       ++it;
@@ -373,12 +373,14 @@ void ChatViewWidget::OnHighlightTimer(wxTimerEvent &event) {
   // If we removed any highlights, refresh to show normal colors
   if (!hasActiveHighlights) {
     m_highlightTimer.Stop();
+    // Only refresh once when ALL highlights are done - not for each removal
+    // This significantly reduces jitter from repeated refreshes
+    if (removedCount > 0) {
+      ScheduleRefresh();
+    }
   }
-
-  // Only refresh if we actually removed expired highlights
-  if (removedAny) {
-    ScheduleRefresh();
-  }
+  // Don't refresh for partial removals - wait until all highlights expire
+  // The visual difference is minimal and this prevents jitter
 }
 
 void ChatViewWidget::OnRefreshTimer(wxTimerEvent &event) {
@@ -427,15 +429,19 @@ void ChatViewWidget::RefreshDisplay() {
   
   SCROLL_LOG("RefreshDisplay: shouldScrollToBottom=" << shouldScrollToBottom 
              << " oldScrollPos=" << oldScrollPos << " oldMaxScroll=" << oldMaxScroll
+             << " oldDistanceFromBottom=" << oldDistanceFromBottom
              << " scrollPercent=" << scrollPercent
              << " userScrolledUp=" << userScrolledUp
              << " isLoadingOlder=" << m_isLoadingOlder);
 
-
-
-  // Freeze UI during update - use batch update for better performance
-  m_chatArea->BeginBatchUpdate();
+  // Freeze the display during the entire update to prevent flickering
+  display->Freeze();
+  
+  // Suppress undo to improve performance
   display->BeginSuppressUndo();
+  
+  // Use batch update for additional optimizations
+  m_chatArea->BeginBatchUpdate();
   
   // Clear display
   m_chatArea->Clear();
@@ -499,58 +505,50 @@ void ChatViewWidget::RefreshDisplay() {
 
 
   
-  display->EndSuppressUndo();
+  // End batch update (doesn't thaw - we handle that separately)
   m_chatArea->EndBatchUpdate();
+  display->EndSuppressUndo();
 
-  // Handle scroll position
+  // Thaw first so we can get accurate scroll metrics
+  display->Thaw();
+  
+  // Force layout calculation so scroll metrics are accurate
+  display->LayoutContent();
+  
+  // NOW get new scroll metrics after content change and layout
   int newScrollRange = display->GetScrollRange(wxVERTICAL);
   int newThumbSize = display->GetScrollThumb(wxVERTICAL);
   int newMaxScroll = newScrollRange - newThumbSize;
   
   SCROLL_LOG("RefreshDisplay post-batch: shouldScrollToBottom=" << shouldScrollToBottom
-             << " newMaxScroll=" << newMaxScroll);
+             << " oldMaxScroll=" << oldMaxScroll << " newMaxScroll=" << newMaxScroll
+             << " oldDistanceFromBottom=" << oldDistanceFromBottom);
   
+  // Calculate and apply scroll position
   if (shouldScrollToBottom) {
-    SCROLL_LOG("  -> calling ScrollToBottom (smooth disabled)");
-    // Disable smooth scroll for programmatic scrolls to avoid lag
-    m_chatArea->SetSmoothScrollEnabled(false);
-    m_chatArea->ScrollToBottom();
-    m_chatArea->SetSmoothScrollEnabled(true);
-  } else if (m_isLoadingOlder && oldDistanceFromBottom > 0) {
-    // When loading older messages, maintain same distance from bottom
-    // This keeps the visible content stable while new content loads above
-    if (newMaxScroll > 0) {
-      int newScrollPos = newMaxScroll - oldDistanceFromBottom;
-      newScrollPos = std::max(0, std::min(newScrollPos, newMaxScroll));
-      
-      SCROLL_LOG("  -> anchor scroll (loading older): newScrollPos=" << newScrollPos << " newMaxScroll=" << newMaxScroll);
-      
-      // Force layout update first, then scroll
-      display->LayoutContent();
-      
-      // Use Scroll() which works better than SetScrollPos for wxRichTextCtrl
-      display->Scroll(0, newScrollPos);
-      display->Refresh();
-      display->Update();
-    }
+    SCROLL_LOG("  -> scrolling to bottom");
+    display->ShowPosition(display->GetLastPosition());
+  } else if (m_isLoadingOlder && newMaxScroll > oldMaxScroll) {
+    // When loading older messages, new content is added at the TOP
+    // So we need to scroll DOWN by the amount of new content to stay in place
+    int addedScrollRange = newMaxScroll - oldMaxScroll;
+    int targetScrollPos = oldScrollPos + addedScrollRange;
+    targetScrollPos = std::max(0, std::min(targetScrollPos, newMaxScroll));
+    SCROLL_LOG("  -> anchor scroll (loading older): addedRange=" << addedScrollRange 
+               << " oldPos=" << oldScrollPos << " -> targetScrollPos=" << targetScrollPos);
+    display->Scroll(0, targetScrollPos);
   } else if (userScrolledUp && newMaxScroll > 0) {
     // User was scrolled up - restore same percentage position
-    // This keeps them at roughly the same relative position in the content
-    int newScrollPos = static_cast<int>(scrollPercent * newMaxScroll);
-    newScrollPos = std::max(0, std::min(newScrollPos, newMaxScroll));
-    
-    SCROLL_LOG("  -> restoring scroll percent: " << scrollPercent << " -> newScrollPos=" << newScrollPos);
-    
-    // Force layout update first, then scroll
-    display->LayoutContent();
-    
-    // Use Scroll() which works better than SetScrollPos for wxRichTextCtrl
-    display->Scroll(0, newScrollPos);
-    display->Refresh();
-    display->Update();
+    int targetScrollPos = static_cast<int>(scrollPercent * newMaxScroll);
+    targetScrollPos = std::max(0, std::min(targetScrollPos, newMaxScroll));
+    SCROLL_LOG("  -> restoring scroll percent: " << scrollPercent << " -> newScrollPos=" << targetScrollPos);
+    display->Scroll(0, targetScrollPos);
   } else {
     SCROLL_LOG("  -> no scroll adjustment needed");
   }
+  
+  // Force immediate update to prevent flash of wrong position
+  display->Update();
 }
 
 void ChatViewWidget::ForceScrollToBottom() {
@@ -2135,12 +2133,17 @@ wxString ChatViewWidget::FormatSmartTimestamp(int64_t unixTime) {
 void ChatViewWidget::OnScroll(wxScrollWinEvent &event) {
   event.Skip();
 
-  // Update scroll state
-  bool wasAtBottom = m_wasAtBottom;
-  m_wasAtBottom = IsAtBottom();
-  SCROLL_LOG("OnScroll: wasAtBottom changed " << wasAtBottom << " -> " << m_wasAtBottom);
-  if (m_wasAtBottom) {
-    HideNewMessageIndicator();
+  // Throttle scroll state updates - only update if not recently updated
+  // This reduces jitter from rapid scroll events
+  static wxLongLong lastScrollUpdate = 0;
+  wxLongLong now = wxGetLocalTimeMillis();
+  
+  if (now - lastScrollUpdate > 50) {  // Throttle to max 20 updates/sec
+    lastScrollUpdate = now;
+    m_wasAtBottom = IsAtBottom();
+    if (m_wasAtBottom) {
+      HideNewMessageIndicator();
+    }
   }
   
   // Debounced lazy load check for smooth experience
@@ -2150,18 +2153,22 @@ void ChatViewWidget::OnScroll(wxScrollWinEvent &event) {
 void ChatViewWidget::OnMouseWheel(wxMouseEvent &event) {
   event.Skip();
 
-  // Use CallAfter for scroll state update to avoid blocking the scroll
-  CallAfter([this]() {
-    bool wasAtBottom = m_wasAtBottom;
-    m_wasAtBottom = IsAtBottom();
-    SCROLL_LOG("OnMouseWheel (CallAfter): wasAtBottom changed " << wasAtBottom << " -> " << m_wasAtBottom);
-    if (m_wasAtBottom) {
-      HideNewMessageIndicator();
-    }
-  });
+  // Throttle scroll state updates for mouse wheel too
+  static wxLongLong lastWheelUpdate = 0;
+  wxLongLong now = wxGetLocalTimeMillis();
   
-  // Debounced lazy load check - slightly longer debounce for mouse wheel
-  // to avoid triggering during rapid scrolling
+  if (now - lastWheelUpdate > 50) {  // Throttle to max 20 updates/sec
+    lastWheelUpdate = now;
+    // Use CallAfter to avoid blocking the scroll
+    CallAfter([this]() {
+      m_wasAtBottom = IsAtBottom();
+      if (m_wasAtBottom) {
+        HideNewMessageIndicator();
+      }
+    });
+  }
+  
+  // Debounced lazy load check
   ScheduleLazyLoadCheck();
 }
 

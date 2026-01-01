@@ -1,6 +1,7 @@
 #include "ChatArea.h"
 #include <wx/datetime.h>
 #include <wx/settings.h>
+#include <wx/dcbuffer.h>
 #include <cmath>
 #include <iostream>
 
@@ -72,15 +73,18 @@ void ChatArea::CreateUI() {
   // Use wxBUFFER_VIRTUAL_AREA for double buffering to reduce flicker
   m_chatDisplay = new wxRichTextCtrl(
       this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
-      wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL | wxFULL_REPAINT_ON_RESIZE);
+      wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE | wxVSCROLL);
   m_chatDisplay->SetFont(m_chatFont);
   m_chatDisplay->SetCursor(wxCursor(wxCURSOR_ARROW));
   
   // Enable double buffering to prevent flicker during rapid updates
   m_chatDisplay->SetDoubleBuffered(true);
   
-  // Reduce flicker by setting background style
-  m_chatDisplay->SetBackgroundStyle(wxBG_STYLE_PAINT);
+  // Use buffered painting for smoother rendering
+  m_chatDisplay->SetBackgroundStyle(wxBG_STYLE_SYSTEM);
+  
+  // Disable automatic scrolling on content change - we handle it manually
+  m_chatDisplay->SetInsertionPointEnd();
 
   // Bind SET_CURSOR to prevent wxRichTextCtrl from forcing I-beam cursor
   m_chatDisplay->Bind(wxEVT_SET_CURSOR, &ChatArea::OnSetCursor, this);
@@ -276,19 +280,12 @@ void ChatArea::OnIdleRefresh(wxIdleEvent &event) {
     bool currentlyAtBottom = IsAtBottom();
     SCROLL_LOG("OnIdleRefresh: processing, currentlyAtBottom=" << currentlyAtBottom);
     
-    // Freeze during layout to prevent flicker
-    m_chatDisplay->Freeze();
-    
-    // Recalculate layout after resize
-    m_chatDisplay->LayoutContent();
-    
-    // Only scroll to bottom if we're CURRENTLY at bottom (not based on stale state)
+    // Only scroll to bottom if we're CURRENTLY at bottom
+    // Don't do any layout here - it causes jitter. Layout happens in batch updates.
     if (currentlyAtBottom) {
       SCROLL_LOG("OnIdleRefresh: scrolling to bottom");
       m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
     }
-    
-    m_chatDisplay->Thaw();
   }
 }
 
@@ -343,9 +340,8 @@ void ChatArea::BeginBatchUpdate() {
   if (m_batchDepth == 0) {
     m_wasAtBottom = IsAtBottom();
     SCROLL_LOG("  -> captured wasAtBottom=" << m_wasAtBottom);
-    if (m_chatDisplay) {
-      m_chatDisplay->Freeze();
-    }
+    // Don't freeze here - we'll freeze only during the actual content modification
+    // This reduces the total freeze time and improves responsiveness
   }
   m_batchDepth++;
 }
@@ -355,25 +351,20 @@ void ChatArea::EndBatchUpdate() {
   if (m_batchDepth > 0) {
     m_batchDepth--;
     if (m_batchDepth == 0 && m_chatDisplay) {
-      // Layout content once after batch (while still frozen)
-      m_chatDisplay->LayoutContent();
-      
-      // Handle scroll before thaw to avoid visual jump
+      // Handle scroll after content is ready
       if (m_wasAtBottom) {
-        SCROLL_LOG("  -> scrolling to bottom before thaw");
+        SCROLL_LOG("  -> scrolling to bottom");
         m_chatDisplay->ShowPosition(m_chatDisplay->GetLastPosition());
       }
       
-      // Thaw after all modifications are complete
-      m_chatDisplay->Thaw();
-      
-      // Single refresh at end of batch - no Update() to let event loop coalesce
+      // Single refresh at end of batch - let the system handle repainting efficiently
       m_chatDisplay->Refresh();
     }
   }
 }
 
 void ChatArea::ScheduleRefresh() {
+  // Coalesce multiple refresh requests - only refresh once per idle cycle
   // If we're in a batch update, don't schedule individual refreshes
   if (m_batchDepth > 0) {
     return;

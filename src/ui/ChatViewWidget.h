@@ -273,7 +273,7 @@ private:
   // Debounced refresh timer - coalesces multiple rapid message updates
   wxTimer m_refreshTimer;
   bool m_refreshPending;
-  static const int REFRESH_DEBOUNCE_MS = 150; // 150ms debounce - longer to reduce jitter
+  static const int REFRESH_DEBOUNCE_MS = 200; // 200ms debounce - longer to reduce jitter
 
   // Popup management (click-only, no hover)
   MediaInfo m_currentlyShowingMedia;
