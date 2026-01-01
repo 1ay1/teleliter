@@ -295,7 +295,7 @@ void InputBoxWidget::SetFocus() {
       m_inputBox->StyleSetForeground(
           wxSTC_STYLE_DEFAULT,
           wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-      m_inputBox->StyleClearAll();
+      // No need to StyleClearAll - text is already cleared
     }
     m_inputBox->SetFocus();
   }
@@ -330,16 +330,35 @@ void InputBoxWidget::SetInputFont(const wxFont &font) {
   m_font = font;
 
   if (m_inputBox) {
+    // Save current text and cursor position
+    wxString currentText = m_inputBox->GetText();
+    int cursorPos = m_inputBox->GetCurrentPos();
+    bool wasPlaceholder = m_showingPlaceholder;
+    
+    // Apply font to default style
     m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, m_font);
-    m_inputBox->StyleClearAll();
+    
+    // Apply font to all text without clearing - use Colourise to restyle
+    int textLen = m_inputBox->GetTextLength();
+    if (textLen > 0) {
+      m_inputBox->StartStyling(0);
+      m_inputBox->SetStyling(textLen, wxSTC_STYLE_DEFAULT);
+    }
 
     // Calculate height based on font
     int fontHeight = m_font.GetPixelSize().GetHeight();
     if (fontHeight <= 0) {
       fontHeight = m_font.GetPointSize() * 4 / 3; // Approximate
     }
-    SetMinSize(wxSize(-1, fontHeight));
+    int newHeight = fontHeight + 4; // Add some padding
+    SetMinSize(wxSize(-1, newHeight));
+    SetMaxSize(wxSize(-1, newHeight));
 
+    // Restore cursor position
+    if (!wasPlaceholder && cursorPos <= (int)currentText.Length()) {
+      m_inputBox->GotoPos(cursorPos);
+    }
+    
     m_inputBox->Refresh();
     Layout();
   }
@@ -365,7 +384,12 @@ void InputBoxWidget::UpdatePlaceholder() {
     m_inputBox->StyleSetForeground(
         wxSTC_STYLE_DEFAULT,
         wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
-    m_inputBox->StyleClearAll();
+    // Restyle placeholder text
+    int textLen = m_inputBox->GetTextLength();
+    if (textLen > 0) {
+      m_inputBox->StartStyling(0);
+      m_inputBox->SetStyling(textLen, wxSTC_STYLE_DEFAULT);
+    }
     m_inputBox->GotoPos(0);
   }
 }
@@ -379,7 +403,7 @@ void InputBoxWidget::OnFocusGained(wxFocusEvent &event) {
     m_inputBox->StyleSetForeground(
         wxSTC_STYLE_DEFAULT,
         wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    m_inputBox->StyleClearAll();
+    // No need to StyleClearAll - text is already cleared
   }
   event.Skip();
 }
