@@ -2389,10 +2389,23 @@ void TelegramClient::OnUserStatusUpdate(
     }
   }
 
+  // Queue the status change for UI to poll
+  {
+    std::lock_guard<std::mutex> lock(m_userStatusChangesMutex);
+    m_userStatusChanges.push_back({userId, isOnline, lastSeenTime});
+  }
+
   // REACTIVE MVC: Set dirty flag and notify UI immediately for responsive
   // online indicators
   SetDirty(DirtyFlag::UserStatus);
   NotifyUIRefresh();
+}
+
+std::vector<std::tuple<int64_t, bool, int64_t>> TelegramClient::GetUserStatusChanges() {
+  std::lock_guard<std::mutex> lock(m_userStatusChangesMutex);
+  std::vector<std::tuple<int64_t, bool, int64_t>> result;
+  result.swap(m_userStatusChanges);
+  return result;
 }
 
 void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file> &file) {

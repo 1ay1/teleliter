@@ -2,6 +2,7 @@
 #include "WelcomeChat.h"
 #include "StatusBarManager.h"
 #include "../telegram/TelegramClient.h"
+#include <wx/app.h>
 #include <algorithm>
 #include <iterator>
 
@@ -9,7 +10,7 @@ ServiceMessageLog::ServiceMessageLog()
     : wxEvtHandler(), m_welcomeChat(nullptr), m_statusBar(nullptr),
       m_telegramClient(nullptr), m_maxMessages(500),
       m_rotationTimer(this, wxID_ANY), m_currentRotationIndex(0),
-      m_rotationIntervalMs(4000), m_isRunning(false),
+      m_rotationIntervalMs(3000), m_isRunning(false),
       m_logToWelcomeChat(true), m_showInStatusBar(true) {
   
   // Enable all message types by default
@@ -71,39 +72,21 @@ void ServiceMessageLog::Log(ServiceMessageType type, const wxString& text,
     }
   }
   
-  // Log to WelcomeChat
-  if (m_logToWelcomeChat) {
+  // Log to WelcomeChat immediately (we're on main thread from Log calls)
+  if (m_logToWelcomeChat && m_welcomeChat) {
     LogToWelcomeChat(msg);
   }
   
-  // Show in status bar immediately for important messages
+  // Show in status bar immediately
   if (m_showInStatusBar && m_statusBar) {
-    // For high-priority messages, show immediately
-    if (type == ServiceMessageType::ConnectionState ||
-        type == ServiceMessageType::Error ||
-        type == ServiceMessageType::NewMessage) {
-      wxString statusText = FormatForStatusBar(msg);
-      if (statusText != m_lastStatusMessage) {
-        m_statusBar->SetOverrideStatus(statusText);
-        m_lastStatusMessage = statusText;
-        
-        // Reset rotation to show this message longer
-        m_currentRotationIndex = m_messages.size() - 1;
-      }
-    }
+    wxString statusText = FormatForStatusBar(msg);
+    m_statusBar->SetOverrideStatus(statusText);
+    m_lastStatusMessage = statusText;
   }
 }
 
 void ServiceMessageLog::LogUserOnline(const wxString& username, int64_t userId) {
-  // Coalesce rapid online events
-  wxDateTime now = wxDateTime::Now();
-  if (m_lastOnlineLog.IsValid() && 
-      (now - m_lastOnlineLog).GetMilliseconds() < COALESCE_INTERVAL_MS) {
-    return;
-  }
-  m_lastOnlineLog = now;
-  
-  // Deduplicate: don't log same user online repeatedly
+  // Deduplicate: don't log same user online repeatedly (but allow after they went offline)
   if (userId != 0) {
     if (m_loggedUserOnlineIds.find(userId) != m_loggedUserOnlineIds.end()) {
       return;
@@ -132,10 +115,10 @@ void ServiceMessageLog::LogUserOffline(const wxString& username,
 
 void ServiceMessageLog::LogUserTyping(const wxString& username, 
                                        const wxString& chatName, int64_t chatId) {
-  // Coalesce rapid typing events
+  // Coalesce rapid typing events (500ms instead of 2s)
   wxDateTime now = wxDateTime::Now();
   if (m_lastTypingLog.IsValid() && 
-      (now - m_lastTypingLog).GetMilliseconds() < COALESCE_INTERVAL_MS) {
+      (now - m_lastTypingLog).GetMilliseconds() < 500) {
     return;
   }
   m_lastTypingLog = now;
@@ -321,72 +304,58 @@ void ServiceMessageLog::RotateStatusMessage() {
     return;
   }
   
-  std::lock_guard<std::mutex> lock(m_messagesMutex);
+  ServiceMessage msgToShow(ServiceMessageType::System, "");
+  bool hasMessage = false;
   
-  if (m_messages.empty()) {
-    return;
-  }
-  
-  // Prioritize messages for display:
-  // 1. Recent high-priority messages (errors, new messages, connection changes)
-  // 2. Recent general messages
-  // 3. Older interesting messages
-  
-  wxDateTime now = wxDateTime::Now();
-  std::vector<size_t> priorityIndices;
-  std::vector<size_t> recentIndices;
-  
-  // Scan messages from newest to oldest
-  for (size_t i = m_messages.size(); i > 0; --i) {
-    size_t idx = i - 1;
-    const ServiceMessage& msg = m_messages[idx];
+  {
+    std::lock_guard<std::mutex> lock(m_messagesMutex);
     
-    // How old is this message?
-    wxTimeSpan age = now - msg.timestamp;
-    int ageMinutes = age.GetMinutes();
+    if (m_messages.empty()) {
+      return;
+    }
     
-    // High priority: errors, new messages, connection within last 5 minutes
-    if (ageMinutes < 5) {
-      if (msg.type == ServiceMessageType::Error ||
-          msg.type == ServiceMessageType::NewMessage ||
-          msg.type == ServiceMessageType::ConnectionState ||
-          msg.type == ServiceMessageType::UserOnline) {
-        priorityIndices.push_back(idx);
-        if (priorityIndices.size() >= 10) break;
-      } else if (recentIndices.size() < 15) {
+    // Get recent messages (last 10 minutes) - prioritize newest
+    wxDateTime now = wxDateTime::Now();
+    std::vector<size_t> recentIndices;
+    
+    for (size_t i = m_messages.size(); i > 0; --i) {
+      size_t idx = i - 1;
+      const ServiceMessage& msg = m_messages[idx];
+      wxTimeSpan age = now - msg.timestamp;
+      
+      if (age.GetMinutes() < 10) {
         recentIndices.push_back(idx);
+        if (recentIndices.size() >= 10) break;
       }
-    } else if (ageMinutes < 30 && recentIndices.size() < 15) {
-      recentIndices.push_back(idx);
     }
     
-    // Limit scan depth
-    if (priorityIndices.size() + recentIndices.size() >= 20) break;
-  }
-  
-  // Combine priority and recent, priority first
-  std::vector<size_t> displayIndices;
-  displayIndices.insert(displayIndices.end(), priorityIndices.begin(), priorityIndices.end());
-  displayIndices.insert(displayIndices.end(), recentIndices.begin(), recentIndices.end());
-  
-  if (displayIndices.empty()) {
-    // Fallback: show most recent message
-    displayIndices.push_back(m_messages.size() - 1);
-  }
-  
-  // Rotate through the display indices
-  m_currentRotationIndex = (m_currentRotationIndex + 1) % displayIndices.size();
-  size_t actualIndex = displayIndices[m_currentRotationIndex];
-  
-  if (actualIndex < m_messages.size()) {
-    const ServiceMessage& msg = m_messages[actualIndex];
-    wxString statusText = FormatForStatusBar(msg);
-    
-    // Only update if different
-    if (statusText != m_lastStatusMessage) {
-      m_statusBar->SetOverrideStatus(statusText);
-      m_lastStatusMessage = statusText;
+    if (recentIndices.empty()) {
+      // No recent messages, show the most recent one
+      recentIndices.push_back(m_messages.size() - 1);
     }
+    
+    // Show newest message most of the time (70%), rotate others 30%
+    if (m_currentRotationIndex % 3 == 0 || recentIndices.size() == 1) {
+      // Show the newest message
+      msgToShow = m_messages[recentIndices[0]];
+      hasMessage = true;
+    } else {
+      // Rotate through other recent messages
+      size_t rotateIdx = (m_currentRotationIndex / 3) % recentIndices.size();
+      if (rotateIdx < recentIndices.size()) {
+        msgToShow = m_messages[recentIndices[rotateIdx]];
+        hasMessage = true;
+      }
+    }
+    
+    m_currentRotationIndex++;
+  }
+  
+  // Update status bar outside the lock
+  if (hasMessage) {
+    wxString statusText = FormatForStatusBar(msgToShow);
+    m_statusBar->SetOverrideStatus(statusText);
+    m_lastStatusMessage = statusText;
   }
 }
 
@@ -402,6 +371,7 @@ void ServiceMessageLog::LogToWelcomeChat(const ServiceMessage& msg) {
   
   wxString timestamp = msg.timestamp.Format("%H:%M:%S");
   wxString icon = GetTypeIcon(msg.type);
+  wxString fullText = "[" + timestamp + "] " + icon + " " + msg.text;
   
   // Use appropriate ChatArea method based on message type
   switch (msg.type) {
@@ -410,65 +380,64 @@ void ServiceMessageLog::LogToWelcomeChat(const ServiceMessage& msg) {
       break;
       
     case ServiceMessageType::ConnectionState:
-      if (msg.text.Contains("Ready") || msg.text.Contains("Online")) {
-        chatArea->AppendSuccess(icon + " " + msg.text);
+      if (msg.text.Contains("Online") || msg.text.Contains("Ready")) {
+        chatArea->AppendSuccess(fullText);
       } else {
-        chatArea->AppendInfo(icon + " " + msg.text);
+        chatArea->AppendInfo(fullText);
       }
       break;
       
     case ServiceMessageType::UserOnline:
-      chatArea->AppendJoin(timestamp, msg.detail + " came online");
+      chatArea->AppendSuccess(fullText);
       break;
       
     case ServiceMessageType::UserOffline:
-      chatArea->AppendLeave(timestamp, msg.detail + " went offline");
+      chatArea->AppendInfo(fullText);
       break;
       
     case ServiceMessageType::Join:
-      chatArea->AppendJoin(timestamp, msg.text);
+      chatArea->AppendSuccess(fullText);
       break;
       
     case ServiceMessageType::Leave:
-      chatArea->AppendLeave(timestamp, msg.text);
+      chatArea->AppendInfo(fullText);
       break;
       
     case ServiceMessageType::NewMessage:
-      // Use service color for new message notifications
-      chatArea->AppendService(icon + " " + msg.text);
+      chatArea->AppendInfo(fullText);
       break;
       
     case ServiceMessageType::Download:
     case ServiceMessageType::Upload:
       if (msg.text.StartsWith("Downloaded") || msg.text.StartsWith("Uploaded")) {
-        chatArea->AppendSuccess(icon + " " + msg.text);
+        chatArea->AppendSuccess(fullText);
       } else {
-        chatArea->AppendService(icon + " " + msg.text);
+        chatArea->AppendInfo(fullText);
       }
-      break;
-      
-    case ServiceMessageType::Reaction:
-      chatArea->AppendAction(timestamp, "", icon + " " + msg.text);
       break;
       
     case ServiceMessageType::UserTyping:
     case ServiceMessageType::UserAction:
-      // These are transient, use service style
-      chatArea->AppendService(icon + " " + msg.text);
+      chatArea->AppendInfo(fullText);
       break;
       
     case ServiceMessageType::MessageEdited:
     case ServiceMessageType::MessageDeleted:
     case ServiceMessageType::ChatRead:
-      chatArea->AppendService(icon + " " + msg.text);
+    case ServiceMessageType::Reaction:
+      chatArea->AppendInfo(fullText);
       break;
       
     case ServiceMessageType::System:
     default:
-      chatArea->AppendInfo(icon + " " + msg.text);
+      chatArea->AppendInfo(fullText);
       break;
   }
   
+  // Force refresh and scroll
+  if (wxRichTextCtrl* display = chatArea->GetDisplay()) {
+    display->Refresh();
+  }
   chatArea->ScrollToBottomIfAtBottom();
 }
 

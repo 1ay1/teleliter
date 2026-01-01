@@ -2008,24 +2008,8 @@ void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline,
     return;
   }
 
-  // Log user status change to service log
-  if (m_serviceLog && m_telegramClient) {
-    bool userFound = false;
-    UserInfo user = m_telegramClient->GetUser(userId, &userFound);
-    if (userFound) {
-      wxString displayName = user.GetDisplayName();
-      if (isOnline) {
-        m_serviceLog->LogUserOnline(displayName, userId);
-      } else {
-        wxString lastSeenStr;
-        if (lastSeenTime > 0) {
-          wxDateTime dt((time_t)lastSeenTime);
-          lastSeenStr = "last seen " + dt.Format("%H:%M");
-        }
-        m_serviceLog->LogUserOffline(displayName, lastSeenStr, userId);
-      }
-    }
-  }
+  // Note: User status logging is now done in ReactiveRefresh for ALL users
+  // This method only updates the UI for the current chat's user
 
   // Check if this user is the one in the current private chat
   if (m_currentChatId == 0 || !m_telegramClient || !m_chatViewWidget) {
@@ -2428,6 +2412,28 @@ void MainFrame::ReactiveRefresh() {
     // Refresh online indicators in chat list
     if (m_chatListWidget) {
       m_chatListWidget->RefreshOnlineIndicators();
+    }
+
+    // Log ALL user status changes to service log
+    if (m_serviceLog && m_telegramClient) {
+      auto statusChanges = m_telegramClient->GetUserStatusChanges();
+      for (const auto &[userId, isOnline, lastSeenTime] : statusChanges) {
+        bool userFound = false;
+        UserInfo user = m_telegramClient->GetUser(userId, &userFound);
+        if (userFound) {
+          wxString displayName = user.GetDisplayName();
+          if (isOnline) {
+            m_serviceLog->LogUserOnline(displayName, userId);
+          } else {
+            wxString lastSeenStr;
+            if (lastSeenTime > 0) {
+              wxDateTime dt((time_t)lastSeenTime);
+              lastSeenStr = "last seen " + dt.Format("%H:%M");
+            }
+            m_serviceLog->LogUserOffline(displayName, lastSeenStr, userId);
+          }
+        }
+      }
     }
 
     // Handle typing indicators

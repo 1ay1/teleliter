@@ -425,12 +425,18 @@ void StatusBarManager::SetTypingIndicator(const wxString &text) {
 }
 
 void StatusBarManager::ClearTypingIndicator() {
-  m_overrideStatusText.clear();
   m_isTypingIndicator = false;
   m_typingAnimTimer.Stop();
 
   if (m_typingLabel) {
     m_typingLabel->Hide();
+  }
+
+  // Restore service message if one is set
+  if (!m_serviceMessageText.IsEmpty()) {
+    m_overrideStatusText = m_serviceMessageText;
+  } else {
+    m_overrideStatusText.clear();
   }
 
   UpdateStatusBar();

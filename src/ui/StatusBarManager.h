@@ -52,17 +52,25 @@ public:
   // Get active transfer count (for external display)
   void SetActiveTransferCount(int count) { m_activeTransferCount = count; }
 
-  // Override status functionality (for tooltips etc.)
+  // Override status functionality (for service messages)
   void SetOverrideStatus(const wxString &text) {
-    m_overrideStatusText = text;
-    m_isTypingIndicator = false;
-    UpdateStatusBar();
+    m_serviceMessageText = text;
+    // Only show service message if no typing indicator
+    if (!m_isTypingIndicator) {
+      m_overrideStatusText = text;
+      UpdateStatusBar();
+    }
   }
   void ClearOverrideStatus() {
-    m_overrideStatusText.clear();
-    m_isTypingIndicator = false;
-    UpdateStatusBar();
+    m_serviceMessageText.clear();
+    if (!m_isTypingIndicator) {
+      m_overrideStatusText.clear();
+      UpdateStatusBar();
+    }
   }
+  
+  // Get current service message (for display when typing stops)
+  wxString GetServiceMessage() const { return m_serviceMessageText; }
 
   // Typing indicator with animation
   void SetTypingIndicator(const wxString &text);
@@ -78,6 +86,9 @@ private:
 
   // Override status text (takes precedence over chat info)
   wxString m_overrideStatusText;
+  
+  // Service message text (persists when typing indicator is active)
+  wxString m_serviceMessageText;
   bool m_isTypingIndicator;
   int m_typingAnimFrame;
   wxTimer m_typingAnimTimer;

@@ -200,6 +200,10 @@ public:
   // Get typing users for current chat (thread-safe, returns copy)
   std::map<wxString, wxString> GetTypingUsers();
 
+  // Get user status changes since last call (thread-safe, clears queue)
+  // Returns vector of (userId, isOnline, lastSeenTime)
+  std::vector<std::tuple<int64_t, bool, int64_t>> GetUserStatusChanges();
+
   // Get send failures since last call for a chat (thread-safe, clears queue)
   // Returns vector of (oldMessageId, errorMessage) pairs
   std::vector<std::pair<int64_t, wxString>> GetSendFailures(int64_t chatId);
@@ -324,6 +328,10 @@ private:
   // Timestamp allows auto-timeout of stale typing indicators
   std::map<wxString, std::pair<wxString, int64_t>> m_typingUsers;
   std::mutex m_typingMutex;
+
+  // User status changes queue: (userId, isOnline, lastSeenTime)
+  std::vector<std::tuple<int64_t, bool, int64_t>> m_userStatusChanges;
+  std::mutex m_userStatusChangesMutex;
 
   // Deleted messages queue per chat
   std::map<int64_t, std::vector<int64_t>> m_deletedMessages;
