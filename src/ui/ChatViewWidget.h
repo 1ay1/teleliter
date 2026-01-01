@@ -38,6 +38,11 @@ public:
   // Virtual window display - only renders a subset of messages for performance
   void RefreshDisplayWindow();  // Render only messages in current window
   void AdjustDisplayWindow(bool scrollingUp);  // Shift window when scrolling
+  
+private:
+  void RefreshDisplayInternal(bool preserveWindowPosition);  // Internal refresh with window control
+  
+public:
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
 

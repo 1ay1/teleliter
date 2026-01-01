@@ -358,6 +358,10 @@ void ChatViewWidget::OnRefreshTimer(wxTimerEvent &event) {
 }
 
 void ChatViewWidget::RefreshDisplay() {
+  RefreshDisplayInternal(false);
+}
+
+void ChatViewWidget::RefreshDisplayInternal(bool preserveWindowPosition) {
   if (!m_messageFormatter || !m_chatArea)
     return;
 
@@ -373,8 +377,8 @@ void ChatViewWidget::RefreshDisplay() {
   bool wasLoadingHistory = m_isLoadingHistory;
   
   // Only scroll to bottom if we're actually at bottom AND not loading history
-  // When loading history, user is scrolling up - never force scroll down
-  bool shouldScrollToBottom = actuallyAtBottom && !wasLoadingHistory;
+  // AND not preserving window position (e.g., during virtual window shift)
+  bool shouldScrollToBottom = actuallyAtBottom && !wasLoadingHistory && !preserveWindowPosition;
 
   // Clear display but keep message storage
   m_chatArea->Clear();
@@ -414,7 +418,18 @@ void ChatViewWidget::RefreshDisplay() {
     size_t totalMessages = m_messages.size();
     
     // Determine window bounds
-    if (wasLoadingHistory) {
+    if (preserveWindowPosition && m_displayWindowEnd > 0) {
+      // Keep current window position - just validate bounds
+      if (m_displayWindowEnd > totalMessages) {
+        m_displayWindowEnd = totalMessages;
+      }
+      if (m_displayWindowStart >= totalMessages) {
+        m_displayWindowStart = totalMessages > MAX_DISPLAYED_MESSAGES ? totalMessages - MAX_DISPLAYED_MESSAGES : 0;
+      }
+      if (m_displayWindowEnd - m_displayWindowStart > MAX_DISPLAYED_MESSAGES) {
+        m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
+      }
+    } else if (wasLoadingHistory) {
       // Loading older messages - keep window at the same relative position
       // but shifted to include some new messages
       if (totalMessages <= MAX_DISPLAYED_MESSAGES) {
@@ -515,7 +530,8 @@ void ChatViewWidget::RefreshDisplay() {
 void ChatViewWidget::RefreshDisplayWindow() {
   // Optimized refresh that only re-renders the current window
   // Used when shifting the virtual window during scroll
-  RefreshDisplay();
+  // MUST preserve window position to avoid jumping back
+  RefreshDisplayInternal(true);
 }
 
 void ChatViewWidget::AdjustDisplayWindow(bool scrollingUp) {
@@ -2267,9 +2283,9 @@ void ChatViewWidget::CheckAndTriggerHistoryLoad() {
         m_displayWindowEnd = m_displayWindowStart + MAX_DISPLAYED_MESSAGES;
       }
       
-      // Refresh to show the shifted window
+      // Refresh to show the shifted window - MUST preserve position
       CallAfter([this]() {
-        RefreshDisplay();
+        RefreshDisplayWindow();
       });
       return;
     }
