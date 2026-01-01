@@ -46,6 +46,8 @@ public:
   void RefreshChatList();
   void OnMessagesLoaded(int64_t chatId,
                         const std::vector<MessageInfo> &messages);
+  void OnMoreMessagesLoaded(int64_t chatId,
+                            const std::vector<MessageInfo> &messages);
   void OnNewMessage(const MessageInfo &message);
   void OnMessageUpdated(int64_t chatId, const MessageInfo &message);
   void OnMessageEdited(int64_t chatId, int64_t messageId,

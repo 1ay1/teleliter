@@ -48,6 +48,12 @@ void ChatListWidget::CreateLayout() {
   // Bind selection change to update text colors for proper contrast
   m_chatTree->Bind(wxEVT_TREE_SEL_CHANGED, &ChatListWidget::OnSelectionChanged,
                    this);
+  
+  // Bind scroll events for lazy loading
+  m_chatTree->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, &ChatListWidget::OnTreeScrolled, this);
+  m_chatTree->Bind(wxEVT_SCROLLWIN_LINEDOWN, &ChatListWidget::OnTreeScrolled, this);
+  m_chatTree->Bind(wxEVT_SCROLLWIN_PAGEDOWN, &ChatListWidget::OnTreeScrolled, this);
+  m_chatTree->Bind(wxEVT_TREE_ITEM_EXPANDED, &ChatListWidget::OnTreeExpanded, this);
 
   sizer->Add(m_chatTree, 1, wxEXPAND);
   SetSizer(sizer);
@@ -144,8 +150,21 @@ void ChatListWidget::RefreshChatList(const std::vector<ChatInfo> &chats) {
 
     auto it = m_chatIdToTreeItem.find(chat.id);
     if (it != m_chatIdToTreeItem.end()) {
-      // Update existing item
-      UpdateChatItem(it->second, chat);
+      // Check if item needs to move to a different category
+      wxTreeItemId currentItem = it->second;
+      wxTreeItemId currentParent = m_chatTree->GetItemParent(currentItem);
+      wxTreeItemId correctParent = GetCategoryForChat(chat);
+      
+      if (currentParent != correctParent) {
+        // Category changed - remove from old location and add to new
+        m_treeItemToChatId.erase(currentItem);
+        m_chatTree->Delete(currentItem);
+        m_chatIdToTreeItem.erase(it);
+        AddChatToCategory(chat);
+      } else {
+        // Same category - just update the item
+        UpdateChatItem(currentItem, chat);
+      }
     } else {
       // Add new item
       AddChatToCategory(chat);
@@ -278,23 +297,25 @@ wxTreeItemId ChatListWidget::GetTreeItemFromChatId(int64_t chatId) const {
   return wxTreeItemId();
 }
 
-wxTreeItemId ChatListWidget::AddChatToCategory(const ChatInfo &chat) {
-  wxTreeItemId parent;
-
+wxTreeItemId ChatListWidget::GetCategoryForChat(const ChatInfo &chat) const {
   // Determine which category this chat belongs to
   if (chat.isPinned) {
-    parent = m_pinnedChats;
+    return m_pinnedChats;
   } else if (chat.isBot) {
-    parent = m_bots;
+    return m_bots;
   } else if (chat.isChannel) {
-    parent = m_channels;
+    return m_channels;
   } else if (chat.isGroup || chat.isSupergroup) {
-    parent = m_groups;
+    return m_groups;
   } else if (chat.isPrivate) {
-    parent = m_privateChats;
+    return m_privateChats;
   } else {
-    parent = m_privateChats; // Default
+    return m_privateChats; // Default
   }
+}
+
+wxTreeItemId ChatListWidget::AddChatToCategory(const ChatInfo &chat) {
+  wxTreeItemId parent = GetCategoryForChat(chat);
 
   // Format title with unread count and online indicator
   wxString title = FormatChatTitle(chat);
@@ -440,4 +461,63 @@ void ChatListWidget::OnSelectionChanged(wxTreeEvent &event) {
   }
 
   event.Skip(); // Allow event to propagate to MainFrame
+}
+
+void ChatListWidget::OnTreeScrolled(wxScrollWinEvent &event) {
+  event.Skip();
+  
+  // Check if we need to load more chats
+  CheckAndTriggerLazyLoad();
+}
+
+void ChatListWidget::OnTreeExpanded(wxTreeEvent &event) {
+  event.Skip();
+  
+  // When a category is expanded, check if we need more chats
+  CheckAndTriggerLazyLoad();
+}
+
+void ChatListWidget::CheckAndTriggerLazyLoad() {
+  if (!m_hasMoreChats || m_isLoadingChats || !m_loadMoreCallback) {
+    return;
+  }
+  
+  if (IsNearBottom()) {
+    m_isLoadingChats = true;
+    m_loadMoreCallback();
+  }
+}
+
+bool ChatListWidget::IsNearBottom() const {
+  if (!m_chatTree) {
+    return false;
+  }
+  
+  // Get scroll position info
+  int scrollPos = m_chatTree->GetScrollPos(wxVERTICAL);
+  int scrollRange = m_chatTree->GetScrollRange(wxVERTICAL);
+  int thumbSize = m_chatTree->GetScrollThumb(wxVERTICAL);
+  
+  // If there's no scrollbar or very little content, don't trigger
+  if (scrollRange <= thumbSize) {
+    // Not enough content to scroll - might need more chats if we just started
+    // Trigger load if we have very few chats displayed
+    size_t totalItems = 0;
+    wxTreeItemIdValue cookie;
+    for (wxTreeItemId cat = m_chatTree->GetFirstChild(m_treeRoot, cookie);
+         cat.IsOk();
+         cat = m_chatTree->GetNextChild(m_treeRoot, cookie)) {
+      totalItems += m_chatTree->GetChildrenCount(cat, false);
+    }
+    return totalItems < 20;  // Load more if we have fewer than 20 visible chats
+  }
+  
+  // Check if we're within 20% of the bottom
+  int maxScroll = scrollRange - thumbSize;
+  if (maxScroll <= 0) {
+    return false;
+  }
+  
+  float scrollPercent = (float)scrollPos / (float)maxScroll;
+  return scrollPercent > 0.8f;  // Within last 20%
 }

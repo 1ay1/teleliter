@@ -103,20 +103,31 @@ public:
     return m_connectionState == ConnectionState::Ready;
   }
 
-  void LoadChats(int limit = 100);
+  // Lazy loading for chat list
+  void LoadChats(int limit = 30);  // Initial/incremental load
+  void LoadMoreChats();            // Load next batch when scrolling
+  bool HasMoreChats() const { return !m_allChatsLoaded; }
+  bool IsLoadingChats() const { return m_isLoadingChats; }
+  size_t GetLoadedChatCount() const;
+  
   std::map<int64_t, ChatInfo> GetChats() const;
   ChatInfo GetChat(int64_t chatId, bool *found = nullptr) const;
 
   void OpenChat(int64_t chatId);
   void CloseChat(int64_t chatId);
-  void OpenChatAndLoadMessages(int64_t chatId, int limit = 100);
+  void OpenChatAndLoadMessages(int64_t chatId, int limit = 30);  // Reduced initial load
 
   // Track current active chat for download prioritization
   void SetCurrentChatId(int64_t chatId) { m_currentChatId = chatId; }
   int64_t GetCurrentChatId() const { return m_currentChatId; }
-  void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 100);
+  void LoadMessages(int64_t chatId, int64_t fromMessageId = 0, int limit = 30);
   void LoadMessagesWithRetry(int64_t chatId, int limit, int retryCount);
-  void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 100);
+  void LoadMoreMessages(int64_t chatId, int64_t fromMessageId, int limit = 30);
+  
+  // Lazy loading state for messages
+  bool HasMoreMessages(int64_t chatId) const;
+  bool IsLoadingMessages() const { return m_isLoadingMessages; }
+  void SetAllMessagesLoaded(int64_t chatId, bool loaded);
   void SendMessage(int64_t chatId, const wxString &text);
   void SendMessage(int64_t chatId, const wxString &text,
                    int64_t replyToMessageId);
@@ -213,6 +224,17 @@ private:
   std::map<int64_t, std::vector<MessageInfo>> m_messages;
   mutable std::shared_mutex
       m_dataMutex; // Protects m_chats, m_users, m_messages
+
+  // Lazy loading state for chat list
+  std::atomic<bool> m_allChatsLoaded{false};
+  std::atomic<bool> m_isLoadingChats{false};
+  static constexpr int CHAT_BATCH_SIZE = 30;
+  
+  // Lazy loading state for messages
+  std::atomic<bool> m_isLoadingMessages{false};
+  std::set<int64_t> m_chatsWithAllMessagesLoaded;
+  mutable std::mutex m_messageLoadStateMutex;
+  static constexpr int MESSAGE_BATCH_SIZE = 30;
 
   std::uint64_t m_currentQueryId;
   std::map<std::uint64_t,

@@ -833,22 +833,52 @@ void TelegramClient::LogOut() {
 }
 
 void TelegramClient::LoadChats(int limit) {
+  // Prevent concurrent loads
+  if (m_isLoadingChats.exchange(true)) {
+    TDLOG("LoadChats: Already loading, skipping");
+    return;
+  }
+  
+  // Don't load if we already have all chats
+  if (m_allChatsLoaded) {
+    TDLOG("LoadChats: All chats already loaded");
+    m_isLoadingChats = false;
+    return;
+  }
+  
+  TDLOG("LoadChats: Requesting %d chats", limit);
+  
   auto request = td_api::make_object<td_api::loadChats>();
   request->chat_list_ = td_api::make_object<td_api::chatListMain>();
   request->limit_ = limit;
 
-  Send(std::move(request), [this](td_api::object_ptr<td_api::Object> result) {
+  Send(std::move(request), [this, limit](td_api::object_ptr<td_api::Object> result) {
     if (result->get_id() == td_api::error::ID) {
-      // No more chats or error
+      auto error = td_api::move_object_as<td_api::error>(result);
+      TDLOG("LoadChats: Error or no more chats: %d - %s", error->code_, error->message_.c_str());
+      
+      // Error 404 means no more chats to load
+      if (error->code_ == 404) {
+        m_allChatsLoaded = true;
+        TDLOG("LoadChats: All chats loaded (404 response)");
+      }
+      m_isLoadingChats = false;
+      SetDirty(DirtyFlag::ChatList);
       return;
     }
 
-    // Get the chat list
+    // Get the current chat count before fetching
+    size_t prevChatCount = GetLoadedChatCount();
+
+    // Get the chat list - request more than we loaded to see what's available
     Send(td_api::make_object<td_api::getChats>(
-             td_api::make_object<td_api::chatListMain>(), 100),
-         [this](td_api::object_ptr<td_api::Object> result) {
+             td_api::make_object<td_api::chatListMain>(), 500),
+         [this, limit, prevChatCount](td_api::object_ptr<td_api::Object> result) {
            if (result->get_id() == td_api::chats::ID) {
              auto chats = td_api::move_object_as<td_api::chats>(result);
+             size_t chatCount = chats->chat_ids_.size();
+             
+             TDLOG("LoadChats: Got %zu chat IDs from getChats", chatCount);
 
              for (auto chatId : chats->chat_ids_) {
                // Get full chat info
@@ -861,17 +891,57 @@ void TelegramClient::LoadChats(int limit) {
                       }
                     });
              }
+             
+             // Check if we got fewer new chats than requested - means we've loaded all
+             size_t newChatCount = GetLoadedChatCount();
+             size_t addedChats = newChatCount - prevChatCount;
+             if (addedChats < (size_t)limit || chatCount == newChatCount) {
+               m_allChatsLoaded = true;
+               TDLOG("LoadChats: All chats loaded (got %zu new, requested %d)", addedChats, limit);
+             }
 
              // REACTIVE MVC: Set dirty flag instead of posting callback
              SetDirty(DirtyFlag::ChatList);
            }
+           m_isLoadingChats = false;
          });
   });
+}
+
+void TelegramClient::LoadMoreChats() {
+  // Load next batch of chats when user scrolls
+  if (m_allChatsLoaded || m_isLoadingChats) {
+    TDLOG("LoadMoreChats: Skipping (allLoaded=%d, isLoading=%d)", 
+          m_allChatsLoaded.load(), m_isLoadingChats.load());
+    return;
+  }
+  
+  TDLOG("LoadMoreChats: Loading next batch of %d chats", CHAT_BATCH_SIZE);
+  LoadChats(CHAT_BATCH_SIZE);
+}
+
+size_t TelegramClient::GetLoadedChatCount() const {
+  std::shared_lock<std::shared_mutex> lock(m_dataMutex);
+  return m_chats.size();
 }
 
 std::map<int64_t, ChatInfo> TelegramClient::GetChats() const {
   std::shared_lock<std::shared_mutex> lock(m_dataMutex);
   return m_chats;
+}
+
+bool TelegramClient::HasMoreMessages(int64_t chatId) const {
+  std::lock_guard<std::mutex> lock(m_messageLoadStateMutex);
+  return m_chatsWithAllMessagesLoaded.find(chatId) == m_chatsWithAllMessagesLoaded.end();
+}
+
+void TelegramClient::SetAllMessagesLoaded(int64_t chatId, bool loaded) {
+  std::lock_guard<std::mutex> lock(m_messageLoadStateMutex);
+  if (loaded) {
+    m_chatsWithAllMessagesLoaded.insert(chatId);
+  } else {
+    m_chatsWithAllMessagesLoaded.erase(chatId);
+  }
 }
 
 ChatInfo TelegramClient::GetChat(int64_t chatId, bool *found) const {
@@ -976,22 +1046,60 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
           // NOTE: No auto-download here! We use lazy loading:
           // - Thumbnails are downloaded when messages are rendered
           // - Full media is downloaded on-demand (hover/click)
-
-          // If we got fewer messages than requested, TDLib may still be syncing
-          // Try to load more after a brief moment
-          if (count < (size_t)limit && count > 0) {
-            // Get the oldest message ID from what we received
+          // - More history is loaded on-demand when user scrolls up
+          
+          // If we got very few messages (less than 10), TDLib may still be syncing
+          // Load more ONCE to fill the initial view (but don't cascade)
+          if (count < 10 && count > 0) {
             int64_t oldestMsgId = 0;
             if (!messages->messages_.empty() && messages->messages_.back()) {
               oldestMsgId = messages->messages_.back()->id_;
             }
-
-            TDLOG(
-                "Got partial history, will try to load more from message %lld",
-                (long long)oldestMsgId);
-
-            // Schedule another fetch for older messages
-            LoadMoreMessages(chatId, oldestMsgId, limit);
+            if (oldestMsgId != 0) {
+              TDLOG("Initial load got only %zu messages, loading more once", count);
+              // Load more to fill initial view - this won't cascade because
+              // LoadMoreMessages uses OnMoreMessagesLoaded which buffers
+              auto moreRequest = td_api::make_object<td_api::getChatHistory>();
+              moreRequest->chat_id_ = chatId;
+              moreRequest->from_message_id_ = oldestMsgId;
+              moreRequest->offset_ = 0;
+              moreRequest->limit_ = 30;
+              moreRequest->only_local_ = false;
+              
+              Send(std::move(moreRequest), [this, chatId](td_api::object_ptr<td_api::Object> moreResult) {
+                if (moreResult->get_id() == td_api::messages::ID) {
+                  auto moreMessages = td_api::move_object_as<td_api::messages>(moreResult);
+                  if (!moreMessages->messages_.empty()) {
+                    std::vector<MessageInfo> moreMsgList;
+                    for (auto &msg : moreMessages->messages_) {
+                      if (msg) {
+                        moreMsgList.push_back(ConvertMessage(msg.get()));
+                      }
+                    }
+                    // Merge with existing
+                    {
+                      std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+                      auto &existing = m_messages[chatId];
+                      std::set<int64_t> existingIds;
+                      for (const auto &m : existing) existingIds.insert(m.id);
+                      for (const auto &m : moreMsgList) {
+                        if (existingIds.find(m.id) == existingIds.end()) {
+                          existing.push_back(m);
+                        }
+                      }
+                      std::sort(existing.begin(), existing.end(),
+                                [](const MessageInfo &a, const MessageInfo &b) { return a.id < b.id; });
+                      moreMsgList = existing;
+                    }
+                    PostToMainThread([this, chatId, moreMsgList]() {
+                      if (m_mainFrame) {
+                        m_mainFrame->OnMessagesLoaded(chatId, moreMsgList);
+                      }
+                    });
+                  }
+                }
+              });
+            }
           }
         } else if (result->get_id() == td_api::error::ID) {
           auto error = td_api::move_object_as<td_api::error>(result);
@@ -1005,23 +1113,38 @@ void TelegramClient::OpenChatAndLoadMessages(int64_t chatId, int limit) {
 
 void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId,
                                       int limit) {
-  TDLOG("LoadMoreMessages for chatId=%lld from=%lld", (long long)chatId,
-        (long long)fromMessageId);
+  // Prevent concurrent message loads
+  if (m_isLoadingMessages.exchange(true)) {
+    TDLOG("LoadMoreMessages: Already loading, skipping");
+    return;
+  }
+  
+  // Check if all messages are already loaded for this chat
+  if (!HasMoreMessages(chatId)) {
+    TDLOG("LoadMoreMessages: All messages already loaded for chatId=%lld", (long long)chatId);
+    m_isLoadingMessages = false;
+    return;
+  }
+  
+  TDLOG("LoadMoreMessages for chatId=%lld from=%lld limit=%d", (long long)chatId,
+        (long long)fromMessageId, limit);
 
   auto request = td_api::make_object<td_api::getChatHistory>();
   request->chat_id_ = chatId;
   request->from_message_id_ = fromMessageId;
   request->offset_ = 0;
-  request->limit_ = limit > 0 ? limit : 100;
+  request->limit_ = limit > 0 ? limit : MESSAGE_BATCH_SIZE;
   request->only_local_ = false;
 
-  Send(std::move(request), [this,
-                            chatId](td_api::object_ptr<td_api::Object> result) {
+  Send(std::move(request), [this, chatId](td_api::object_ptr<td_api::Object>
+                                              result) {
     if (result->get_id() == td_api::messages::ID) {
       auto messages = td_api::move_object_as<td_api::messages>(result);
 
       if (messages->messages_.empty()) {
-        TDLOG("No more messages to load for chatId=%lld", (long long)chatId);
+        TDLOG("No more messages to load for chatId=%lld - marking as complete", (long long)chatId);
+        SetAllMessagesLoaded(chatId, true);
+        m_isLoadingMessages = false;
         return;
       }
 
@@ -1035,8 +1158,8 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId,
         }
       }
 
-      // Merge with existing messages, avoiding duplicates
-      std::vector<MessageInfo> allMessages;
+      // Filter to only truly new messages (not duplicates)
+      std::vector<MessageInfo> actuallyNewMessages;
       {
         std::unique_lock<std::shared_mutex> lock(m_dataMutex);
         auto &existing = m_messages[chatId];
@@ -1052,6 +1175,7 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId,
           if (existingIds.find(msg.id) == existingIds.end()) {
             existing.push_back(msg);
             existingIds.insert(msg.id);
+            actuallyNewMessages.push_back(msg);
           }
         }
 
@@ -1060,18 +1184,22 @@ void TelegramClient::LoadMoreMessages(int64_t chatId, int64_t fromMessageId,
                   [](const MessageInfo &a, const MessageInfo &b) {
                     return a.id < b.id;
                   });
-
-        allMessages = existing; // Copy for thread-safe access
       }
 
-      TDLOG("Total messages after LoadMore: %zu", allMessages.size());
+      TDLOG("LoadMoreMessages: %zu new messages (filtered from %zu)", 
+            actuallyNewMessages.size(), newMessages.size());
+      
+      m_isLoadingMessages = false;
 
-      // Notify UI to refresh with all messages
-      PostToMainThread([this, chatId, allMessages]() {
-        if (m_mainFrame) {
-          m_mainFrame->OnMessagesLoaded(chatId, allMessages);
-        }
-      });
+      // Only send the NEW messages to UI - not all messages
+      // UI will add them incrementally without full re-render
+      if (!actuallyNewMessages.empty()) {
+        PostToMainThread([this, chatId, actuallyNewMessages]() {
+          if (m_mainFrame) {
+            m_mainFrame->OnMoreMessagesLoaded(chatId, actuallyNewMessages);
+          }
+        });
+      }
     }
   });
 }
@@ -1151,11 +1279,14 @@ void TelegramClient::LoadMessages(int64_t chatId, int64_t fromMessageId,
            });
          } else if (result->get_id() == td_api::error::ID) {
            auto error = td_api::move_object_as<td_api::error>(result);
-           TDLOG("LoadMessages ERROR: %d - %s", error->code_,
+           TDLOG("LoadMoreMessages ERROR: %d - %s", error->code_,
                  error->message_.c_str());
+           m_isLoadingMessages = false;
+         } else {
+           m_isLoadingMessages = false;
          }
        });
-}
+     }
 
 void TelegramClient::SendMessage(int64_t chatId, const wxString &text) {
   SendMessage(chatId, text, 0); // No reply

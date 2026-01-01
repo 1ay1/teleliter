@@ -1,6 +1,7 @@
 #ifndef CHATLISTWIDGET_H
 #define CHATLISTWIDGET_H
 
+#include <functional>
 #include <map>
 #include <vector>
 #include <wx/srchctrl.h>
@@ -56,9 +57,16 @@ public:
   void SetSearchFilter(const wxString &filter);
   void ClearSearch();
 
+  // Lazy loading
+  void SetLoadMoreCallback(std::function<void()> callback) { m_loadMoreCallback = callback; }
+  void SetHasMoreChats(bool hasMore) { m_hasMoreChats = hasMore; }
+  void SetIsLoadingChats(bool loading) { m_isLoadingChats = loading; }
+  bool IsNearBottom() const;
+
 private:
   void CreateLayout();
   void CreateCategories();
+  wxTreeItemId GetCategoryForChat(const ChatInfo &chat) const;
   wxTreeItemId AddChatToCategory(const ChatInfo &chat);
   void UpdateChatItem(const wxTreeItemId &item, const ChatInfo &chat);
   wxString FormatChatTitle(const ChatInfo &chat) const;
@@ -69,6 +77,11 @@ private:
   void OnSearchText(wxCommandEvent &event);
   void OnSearchCancel(wxCommandEvent &event);
   void OnSelectionChanged(wxTreeEvent &event);
+  void OnTreeScrolled(wxScrollWinEvent &event);
+  void OnTreeExpanded(wxTreeEvent &event);
+  
+  // Lazy loading helper
+  void CheckAndTriggerLazyLoad();
 
   TelegramClient *m_telegramClient;
 
@@ -98,6 +111,11 @@ private:
   wxColour m_fgColor;
   wxColour m_selBgColor;
   wxFont m_font;
+
+  // Lazy loading state
+  std::function<void()> m_loadMoreCallback;
+  bool m_hasMoreChats = true;
+  bool m_isLoadingChats = false;
 
   // Online indicator
   static const wxString ONLINE_INDICATOR;

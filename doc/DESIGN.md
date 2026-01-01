@@ -177,6 +177,62 @@ src/
 
 4. **Lazy media loading**: Media is downloaded on-demand or with low priority for background chats
 
+5. **Smart lazy loading**: Industry-standard pagination for chats and messages
+
+## Lazy Loading Architecture
+
+The app implements smart lazy loading for both chat lists and message history to maintain responsiveness and reduce memory usage.
+
+### Chat List Lazy Loading
+
+- **Initial load**: 30 chats loaded on startup
+- **Scroll detection**: Monitors scroll position in `ChatListWidget`
+- **Prefetch threshold**: Loads more when within 20% of bottom (or fewer than 20 visible chats)
+- **State tracking**: `m_allChatsLoaded` and `m_isLoadingChats` flags prevent duplicate requests
+- **TDLib integration**: Uses `loadChats()` with pagination, detects completion via 404 response
+
+```
+User scrolls → ChatListWidget::OnTreeScrolled()
+                      ↓
+              IsNearBottom() check (80% scroll position)
+                      ↓
+              m_loadMoreCallback() → TelegramClient::LoadMoreChats()
+                      ↓
+              loadChats(30) → getChats() → OnChatUpdate() for each
+                      ↓
+              SetDirty(ChatList) → UI refresh
+```
+
+### Message History Lazy Loading
+
+- **Initial load**: 30 messages when opening a chat
+- **Scroll detection**: Both `wxEVT_SCROLLWIN` and mouse wheel events
+- **Prefetch threshold**: 20% from top (not at the very edge - smoother UX)
+- **Anchor scrolling**: Maintains scroll position when prepending old messages
+- **State tracking**: Per-chat `m_chatsWithAllMessagesLoaded` set, `m_isLoadingMessages` flag
+
+```
+User scrolls up → ChatViewWidget::OnScroll() / OnMouseWheel()
+                      ↓
+              scrollPercent < 0.20 (within top 20%)
+                      ↓
+              MainFrame::LoadMoreMessages(oldestId)
+                      ↓
+              TelegramClient::LoadMoreMessages(chatId, fromId, 30)
+                      ↓
+              getChatHistory() → ConvertMessage() → Queue
+                      ↓
+              SetDirty(Messages) → RefreshDisplay() with anchor scroll
+```
+
+### Key Design Decisions
+
+1. **Batch sizes**: 30 items per batch balances responsiveness vs network efficiency
+2. **Prefetch at 20%**: Starts loading before user hits the edge for seamless experience  
+3. **Concurrent request prevention**: Atomic flags prevent duplicate loads
+4. **State synchronization**: `ChatViewWidget` and `ChatListWidget` sync state with `TelegramClient`
+5. **Empty response detection**: TDLib returns empty array when no more history exists
+
 ## Future Considerations
 
 Features that could be added while maintaining the philosophy:

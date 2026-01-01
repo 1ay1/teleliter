@@ -28,6 +28,12 @@ public:
   void DisplayMessage(const MessageInfo &msg);
   void DisplayMessages(const std::vector<MessageInfo> &messages);
   void ClearMessages();
+  
+  // Scroll-based lazy loading - immediately renders older messages with scroll preservation
+  void BufferOlderMessages(const std::vector<MessageInfo> &messages);
+  void RenderBufferedMessages();  // Legacy - now a no-op, BufferOlderMessages renders immediately
+  size_t GetBufferedMessageCount() const { return 0; }  // Always 0 - no buffering
+  bool HasBufferedMessages() const { return false; }    // Always false - no buffering
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
 
@@ -61,6 +67,18 @@ public:
   // completes
   void SetReloading(bool reloading) { m_isReloading = reloading; }
   bool IsReloading() const { return m_isReloading; }
+
+  // Lazy loading state - sync with TelegramClient
+  void SetAllHistoryLoaded(bool loaded) { m_allHistoryLoaded = loaded; }
+  bool IsAllHistoryLoaded() const { return m_allHistoryLoaded; }
+  void SetIsLoadingHistory(bool loading) { m_isLoadingHistory = loading; }
+  bool IsLoadingHistory() const { return m_isLoadingHistory; }
+  
+  // Loading indicator functions for scroll-based lazy loading
+  void ShowLoadMoreIndicator(size_t count);  // Legacy - now calls ShowLoadingIndicator
+  void HideLoadMoreIndicator();              // Legacy - now calls HideLoadingIndicator
+  void ShowLoadingIndicator();
+  void HideLoadingIndicator();
 
   // Smart scrolling - only auto-scroll if at bottom
   void ScrollToBottomIfAtBottom();
@@ -185,6 +203,12 @@ private:
   // Timer callback for highlight animation (fade effect on newly read messages)
   void OnHighlightTimer(wxTimerEvent &event);
 
+  // Lazy loading helper - checks scroll position and triggers history load if near top
+  void CheckAndTriggerHistoryLoad();
+  
+  // Load more button click handler
+  void OnLoadMoreButtonClick(wxCommandEvent &event);
+
   // Event handlers
   void OnMouseMove(wxMouseEvent &event);
   void OnMouseLeave(wxMouseEvent &event);
@@ -262,6 +286,7 @@ private:
   bool m_isLoading;
   bool m_isLoadingHistory; // specific flag for loading older messages
   bool m_allHistoryLoaded; // flag to stop requesting when no more messages
+  int64_t m_scrollAnchorMessageId = 0; // Message ID to scroll back to after loading history
 
   // Highlight timer for fade animation on newly read messages
   wxTimer m_highlightTimer;
@@ -280,6 +305,12 @@ private:
   // Messages are kept sorted by ID for consistent ordering
   std::vector<MessageInfo> m_messages;
   mutable std::mutex m_messagesMutex; // Protects m_messages
+  
+  // Loading indicator for scroll-based lazy loading
+  wxStaticText *m_loadingIndicator;
+  
+  // Legacy load more button - kept for compatibility but hidden
+  wxButton *m_loadMoreButton;
 
   // Fast lookup: message ID -> index in m_messages for O(1) access
   std::map<int64_t, size_t> m_messageIdToIndex;

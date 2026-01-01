@@ -147,6 +147,13 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   // Connect chat list widget to telegram client (for online status lookup)
   if (m_chatListWidget) {
     m_chatListWidget->SetTelegramClient(m_telegramClient);
+    
+    // Set up lazy loading callback for chat list
+    m_chatListWidget->SetLoadMoreCallback([this]() {
+      if (m_telegramClient && m_telegramClient->HasMoreChats()) {
+        m_telegramClient->LoadMoreChats();
+      }
+    });
   }
 
   // Setup transfer manager callbacks
@@ -1259,8 +1266,15 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
           }
         }
 
+        // Reset message loading state for this chat
+        m_telegramClient->SetAllMessagesLoaded(chatId, false);
+        if (m_chatViewWidget) {
+          m_chatViewWidget->SetAllHistoryLoaded(false);
+          m_chatViewWidget->SetIsLoadingHistory(false);
+        }
+        
         m_telegramClient->OpenChatAndLoadMessages(
-            chatId, 50); // Load 50 initially, more on scroll
+            chatId, 30); // Load 30 initially (lazy loading), more on scroll
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
       } else {
@@ -1442,6 +1456,10 @@ void MainFrame::RefreshChatList() {
   if (!m_telegramClient || !m_chatListWidget)
     return;
 
+  // Update lazy loading state in chat list widget
+  m_chatListWidget->SetHasMoreChats(m_telegramClient->HasMoreChats());
+  m_chatListWidget->SetIsLoadingChats(m_telegramClient->IsLoadingChats());
+
   // Get chats from TelegramClient
   const auto &chats = m_telegramClient->GetChats();
 
@@ -1545,8 +1563,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   // Clear reloading state now that we have fresh messages
   m_chatViewWidget->SetReloading(false);
 
-  // Clear existing messages first
-  m_chatViewWidget->ClearMessages();
+  // NOTE: Don't call ClearMessages here - it's already called in OnChatTreeSelectionChanged
+  // Calling it again would clear messages that might have arrived via reactive updates
 
   // Set read status for outgoing message indicators BEFORE displaying
   // (must be after ClearMessages since that resets the read status)
@@ -1608,6 +1626,40 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   }
 
   DBGLOG("Finished displaying messages, scrolled to bottom");
+}
+
+void MainFrame::OnMoreMessagesLoaded(int64_t chatId,
+                                     const std::vector<MessageInfo> &messages) {
+  // This is called when loading older history (lazy loading)
+  // DO NOT scroll to bottom - user is scrolling up
+  if (chatId != m_currentChatId || !m_chatViewWidget) {
+    return;
+  }
+
+  if (messages.empty()) {
+    m_chatViewWidget->SetAllHistoryLoaded(true);
+    m_chatViewWidget->SetIsLoadingHistory(false);
+    return;
+  }
+
+  DBGLOG("OnMoreMessagesLoaded: " << messages.size() << " messages for chat " << chatId);
+
+  // Buffer messages without re-rendering - user clicks "Load more" to see them
+  // This is the efficient approach - no re-render until user explicitly requests
+  m_chatViewWidget->BufferOlderMessages(messages);
+
+  // Download thumbnails for new messages
+  if (m_telegramClient) {
+    for (const auto &msg : messages) {
+      if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
+        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail", 0);
+      }
+      if (msg.hasSticker && msg.mediaFileId != 0 &&
+          msg.mediaLocalPath.IsEmpty() && msg.mediaThumbnailFileId == 0) {
+        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker", msg.mediaFileSize);
+      }
+    }
+  }
 }
 
 void MainFrame::OnNewMessage(const MessageInfo &message) {
@@ -2040,6 +2092,13 @@ void MainFrame::ReactiveRefresh() {
   // Handle message updates for current chat
   if ((flags & DirtyFlag::Messages) != DirtyFlag::None &&
       m_currentChatId != 0 && m_chatViewWidget) {
+    // Sync lazy loading state with TelegramClient
+    bool allLoaded = !m_telegramClient->HasMoreMessages(m_currentChatId);
+    m_chatViewWidget->SetAllHistoryLoaded(allLoaded);
+    if (!m_telegramClient->IsLoadingMessages()) {
+      m_chatViewWidget->SetIsLoadingHistory(false);
+    }
+    
     // Begin batch update to prevent flicker from multiple individual updates
     m_chatViewWidget->BeginBatchUpdate();
 
@@ -2277,6 +2336,16 @@ int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const {
 
 void MainFrame::LoadMoreMessages(int64_t fromMessageId) {
   if (m_telegramClient && m_currentChatId != 0) {
-    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 50);
+    // Check if already loading or all loaded
+    if (m_telegramClient->IsLoadingMessages()) {
+      return;
+    }
+    if (!m_telegramClient->HasMoreMessages(m_currentChatId)) {
+      if (m_chatViewWidget) {
+        m_chatViewWidget->SetAllHistoryLoaded(true);
+      }
+      return;
+    }
+    m_telegramClient->LoadMoreMessages(m_currentChatId, fromMessageId, 30);
   }
 }
