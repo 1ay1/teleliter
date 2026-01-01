@@ -27,6 +27,11 @@ public:
   void SetLinkSpanCallback(LinkSpanCallback callback) {
     m_linkSpanCallback = callback;
   }
+  
+  // Fast mode - skips expensive operations like URL detection
+  // Use during bulk loading for better performance
+  void SetFastMode(bool fast) { m_fastMode = fast; }
+  bool IsFastMode() const { return m_fastMode; }
 
   // Message formatting methods (HexChat-style)
   // These delegate to ChatArea but add link detection and media span tracking
@@ -173,6 +178,9 @@ private:
 
   // Callback for link spans
   LinkSpanCallback m_linkSpanCallback;
+  
+  // Fast mode flag - when true, skips URL detection and other expensive ops
+  bool m_fastMode = false;
 
   // Message grouping state (HexChat-style)
   wxString m_lastSender;

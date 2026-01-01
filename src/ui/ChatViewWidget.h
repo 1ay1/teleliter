@@ -34,6 +34,10 @@ public:
   void RenderBufferedMessages();  // Legacy - now a no-op, BufferOlderMessages renders immediately
   size_t GetBufferedMessageCount() const { return 0; }  // Always 0 - no buffering
   bool HasBufferedMessages() const { return false; }    // Always false - no buffering
+  
+  // Virtual window display - only renders a subset of messages for performance
+  void RefreshDisplayWindow();  // Render only messages in current window
+  void AdjustDisplayWindow(bool scrollingUp);  // Shift window when scrolling
   void ScrollToBottom();
   void ForceScrollToBottom(); // Force scroll and set m_wasAtBottom = true
 
@@ -286,6 +290,12 @@ private:
   bool m_isLoading;
   bool m_isLoadingHistory; // specific flag for loading older messages
   bool m_allHistoryLoaded; // flag to stop requesting when no more messages
+  
+  // Virtual window - limit displayed messages for performance
+  // Only render MAX_DISPLAYED_MESSAGES, keep rest in m_messages storage
+  static const size_t MAX_DISPLAYED_MESSAGES = 150;
+  size_t m_displayWindowStart = 0;  // Index in m_messages where display window starts
+  size_t m_displayWindowEnd = 0;    // Index in m_messages where display window ends
 
   // Highlight timer for fade animation on newly read messages
   wxTimer m_highlightTimer;

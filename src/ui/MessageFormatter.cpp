@@ -524,11 +524,6 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
   int continuationIndent = 11 + m_usernameWidth + 3;
   wxString indentStr = wxString(' ', continuationIndent);
 
-  // URL regex pattern - matches http://, https://, and www. URLs
-  static wxRegEx urlRegex(
-      "(https?://[^\\s<>\"'\\)\\]]+|www\\.[^\\s<>\"'\\)\\]]+)",
-      wxRE_EXTENDED | wxRE_ICASE);
-
   // Helper lambda to write plain text with continuation line indentation
   auto writeTextWithIndent = [this, &indentStr](const wxString &chunk) {
     if (chunk.IsEmpty())
@@ -545,6 +540,17 @@ void MessageFormatter::WriteTextWithLinks(const wxString &text) {
       m_chatArea->WriteText(lines[i]);
     }
   };
+
+  // FAST MODE: Skip expensive URL detection during bulk loading
+  if (m_fastMode) {
+    writeTextWithIndent(text);
+    return;
+  }
+
+  // URL regex pattern - matches http://, https://, and www. URLs
+  static wxRegEx urlRegex(
+      "(https?://[^\\s<>\"'\\)\\]]+|www\\.[^\\s<>\"'\\)\\]]+)",
+      wxRE_EXTENDED | wxRE_ICASE);
 
   if (!urlRegex.IsValid()) {
     // Fallback - just write plain text with indent handling
