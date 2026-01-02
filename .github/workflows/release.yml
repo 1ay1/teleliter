@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 env:
   BUILD_TYPE: Release
@@ -13,89 +13,202 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Read version from VERSION file
-      id: version
-      run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+      - name: Read version from VERSION file
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          cmake \
-          libwxgtk3.2-dev \
-          libssl-dev \
-          zlib1g-dev \
-          libwebp-dev \
-          libavformat-dev \
-          libavcodec-dev \
-          libswscale-dev \
-          libswresample-dev \
-          libavutil-dev \
-          libsdl2-dev \
-          librlottie-dev \
-          gperf
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libwxgtk3.2-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libwebp-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libavutil-dev \
+            libsdl2-dev \
+            librlottie-dev \
+            gperf
 
-    - name: Build TDLib
-      run: |
-        git clone --depth 1 https://github.com/tdlib/td.git
-        cd td
-        mkdir build && cd build
-        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local ..
-        cmake --build . --target install -j$(nproc)
+      - name: Build TDLib
+        run: |
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local ..
+          cmake --build . --target install -j$(nproc)
 
-    - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-    - name: Build
-      run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
+      - name: Build
+        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
 
-    - name: Package
-      run: |
-        mkdir -p release
-        cp build/teleliter release/
-        cp VERSION release/
-        cp -r doc release/ 2>/dev/null || true
-        cd release
-        tar -czvf ../teleliter-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz *
+      - name: Package
+        run: |
+          mkdir -p release
+          cp build/teleliter release/
+          cp VERSION release/
+          cp -r doc release/ 2>/dev/null || true
+          cd release
+          tar -czvf ../teleliter-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz *
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: teleliter-linux-x86_64
-        path: teleliter-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleliter-linux-x86_64
+          path: teleliter-${{ steps.version.outputs.VERSION }}-linux-x86_64.tar.gz
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from VERSION file
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: |
+          brew install \
+            cmake \
+            wxwidgets \
+            openssl \
+            zlib \
+            webp \
+            ffmpeg \
+            sdl2 \
+            rlottie \
+            tdlib
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl)
+
+      - name: Build
+        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(sysctl -n hw.ncpu)
+
+      - name: Package
+        run: |
+          mkdir -p release
+          cp build/teleliter release/
+          cp VERSION release/
+          cp -r doc release/ 2>/dev/null || true
+          cd release
+          tar -czvf ../teleliter-${{ steps.version.outputs.VERSION }}-macos-arm64.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleliter-macos-arm64
+          path: teleliter-${{ steps.version.outputs.VERSION }}-macos-arm64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from VERSION file
+        id: version
+        shell: bash
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          echo "C:\vcpkg" >> $env:GITHUB_PATH
+
+      - name: Install dependencies via vcpkg
+        run: |
+          C:\vcpkg\vcpkg install --triplet=x64-windows `
+            wxwidgets `
+            openssl `
+            zlib `
+            libwebp `
+            ffmpeg `
+            sdl2 `
+            rlottie
+
+      - name: Build TDLib
+        shell: cmd
+        run: |
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build
+          cd build
+          cmake -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tdlib ..
+          cmake --build . --target install --config Release -j %NUMBER_OF_PROCESSORS%
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -A x64 `
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DTDLIB_ROOT=C:/tdlib
+
+      - name: Build
+        run: cmake --build build --config ${{env.BUILD_TYPE}} -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p release
+          cp build/Release/teleliter.exe release/
+          cp VERSION release/
+          cp -r doc release/ 2>/dev/null || true
+          cd release
+          7z a ../teleliter-${{ steps.version.outputs.VERSION }}-windows-x86_64.zip *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleliter-windows-x86_64
+          path: teleliter-${{ steps.version.outputs.VERSION }}-windows-x86_64.zip
 
   create-release:
-    needs: [build-ubuntu]
+    needs: [build-ubuntu, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Read version from VERSION file
-      id: version
-      run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+      - name: Read version from VERSION file
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
 
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        name: Teleliter v${{ steps.version.outputs.VERSION }}
-        tag_name: ${{ github.ref_name }}
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          artifacts/**/*.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Teleliter v${{ steps.version.outputs.VERSION }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
