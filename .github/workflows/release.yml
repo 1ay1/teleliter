@@ -141,7 +141,7 @@ jobs:
             /usr/local/include/rlottie*
             /usr/local/lib/cmake/rlottie
             /usr/local/lib/pkgconfig/rlottie.pc
-          key: rlottie-macos-${{ runner.arch }}-v3
+          key: rlottie-macos-${{ runner.arch }}-v4
           restore-keys: |
             rlottie-macos-${{ runner.arch }}-
             rlottie-macos-
@@ -161,6 +161,9 @@ jobs:
           # The original condition is: #if !defined(__SSE2__) && !defined(__ARM_NEON__)
           # We change it to always enable the fallback by removing the ARM_NEON check
           sed -i '' 's/#if !defined(__SSE2__) && !defined(__ARM_NEON__)/#if !defined(__SSE2__)/' src/vector/vdrawhelper.cpp
+          # Patch vdrawhelper_common.cpp to not call neon() on ARM64 macOS
+          # Remove the #if defined(__ARM_NEON__) block that calls neon()
+          sed -i '' 's/#if defined(__ARM_NEON__)/\#if 0 \&\& defined(__ARM_NEON__)/' src/vector/vdrawhelper_common.cpp
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
