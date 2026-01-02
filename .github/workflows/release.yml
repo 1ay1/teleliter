@@ -130,15 +130,32 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Samsung/rlottie.git
           cd rlottie
-          # Remove NEON source file and filter out NEON references from CMakeLists
-          rm -f src/vector/vdrawhelper_neon.cpp
-          grep -v "VDRAWHELPER_NEON\|vdrawhelper_neon" src/vector/CMakeLists.txt > src/vector/CMakeLists.txt.new
-          mv src/vector/CMakeLists.txt.new src/vector/CMakeLists.txt
           # Disable examples to avoid linking issues
           grep -v "add_subdirectory(example)" CMakeLists.txt > CMakeLists.txt.new
           mv CMakeLists.txt.new CMakeLists.txt
+          # Disable ARM NEON by undefining __ARM_NEON__ and provide memfill32 fallback
+          # Patch vdrawhelper.h to add memfill32 fallback for non-NEON builds
+          cat >> src/vector/vdrawhelper.h << 'EOFPATCH'
+
+          // Fallback memfill32 for non-NEON builds
+          #ifndef __ARM_NEON__
+          inline void memfill32(uint32_t* dest, uint32_t value, int count) {
+              for (int i = 0; i < count; ++i) {
+                  dest[i] = value;
+              }
+          }
+          #endif
+          EOFPATCH
           mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DLIB_INSTALL_DIR=/usr/local/lib -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DLOTTIE_MODULE=OFF -DBUILD_SHARED_LIBS=OFF ..
+          # Build with NEON disabled via compiler flag
+          cmake -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DLIB_INSTALL_DIR=/usr/local/lib \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DLOTTIE_MODULE=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_CXX_FLAGS="-U__ARM_NEON__ -D__ARM_NEON__=0" \
+            ..
           make -j$(sysctl -n hw.ncpu)
           sudo make install
 
