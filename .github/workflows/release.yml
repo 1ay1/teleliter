@@ -266,16 +266,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg_cache
-          key: vcpkg-binary-windows-x64-v2-${{ hashFiles('.github/workflows/release.yml') }}
+          key: vcpkg-binary-windows-x64-v3-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: |
-            vcpkg-binary-windows-x64-v2-
+            vcpkg-binary-windows-x64-v3-
 
       - name: Cache vcpkg installed packages
         id: cache-vcpkg
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-installed-windows-x64-v2-${{ hashFiles('.github/workflows/release.yml') }}
+          key: vcpkg-installed-windows-x64-v3-${{ hashFiles('.github/workflows/release.yml') }}
 
       - name: Setup vcpkg
         run: |
@@ -285,11 +285,19 @@ jobs:
           }
           C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           echo "C:\vcpkg" >> $env:GITHUB_PATH
+          # Create release-only triplet to skip debug builds
+          $tripletContent = @"
+          set(VCPKG_TARGET_ARCHITECTURE x64)
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE dynamic)
+          set(VCPKG_BUILD_TYPE release)
+          "@
+          $tripletContent | Out-File -FilePath "C:\vcpkg\triplets\x64-windows-release.cmake" -Encoding UTF8
 
       - name: Install dependencies via vcpkg
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
-          C:\vcpkg\vcpkg install --triplet=x64-windows `
+          C:\vcpkg\vcpkg install --triplet=x64-windows-release `
             wxwidgets `
             openssl `
             zlib `
@@ -304,9 +312,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\tdlib
-          key: tdlib-windows-${{ env.TDLIB_COMMIT }}-x64-v2
+          key: tdlib-windows-${{ env.TDLIB_COMMIT }}-x64-v3
           restore-keys: |
-            tdlib-windows-${{ env.TDLIB_COMMIT }}-x64-v2
+            tdlib-windows-${{ env.TDLIB_COMMIT }}-x64-v3
 
       - name: Build TDLib
         if: steps.cache-tdlib-windows.outputs.cache-hit != 'true'
@@ -317,7 +325,7 @@ jobs:
           git checkout %TDLIB_COMMIT%
           mkdir build
           cd build
-          cmake -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tdlib -DGPERF_EXECUTABLE=C:/vcpkg/installed/x64-windows/tools/gperf/gperf.exe ..
+          cmake -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-release -DCMAKE_INSTALL_PREFIX=C:/tdlib -DGPERF_EXECUTABLE=C:/vcpkg/installed/x64-windows-release/tools/gperf/gperf.exe ..
           cmake --build . --target install --config Release -j %NUMBER_OF_PROCESSORS%
 
       - name: Configure CMake
@@ -325,6 +333,7 @@ jobs:
           cmake -B build -A x64 `
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} `
             -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-release `
             -DTDLIB_ROOT=C:/tdlib
 
       - name: Build
@@ -336,7 +345,7 @@ jobs:
           mkdir -p release
           cp build/Release/teleliter.exe release/
           # Copy required DLLs from vcpkg
-          cp C:/vcpkg/installed/x64-windows/bin/*.dll release/ 2>/dev/null || true
+          cp C:/vcpkg/installed/x64-windows-release/bin/*.dll release/ 2>/dev/null || true
           cp VERSION release/
           cp -r doc release/ 2>/dev/null || true
           cd release
