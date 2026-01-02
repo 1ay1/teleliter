@@ -17,6 +17,7 @@ InputBoxWidget::InputBoxWidget(wxWindow *parent, MainFrame *mainFrame)
       m_historyIndex(0), m_tabCompletionIndex(0), m_tabCompletionActive(false),
       m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW)),
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT)),
+      m_font(wxFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL)),
       m_placeholder("Type a command or message..."), m_showingPlaceholder(true),
       m_placeholderColor(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT)) {
   CreateLayout();
@@ -61,13 +62,8 @@ void InputBoxWidget::CreateLayout() {
   m_inputBox->Bind(wxEVT_SET_FOCUS, &InputBoxWidget::OnFocusGained, this);
   m_inputBox->Bind(wxEVT_KILL_FOCUS, &InputBoxWidget::OnFocusLost, this);
 
-  // Use fixed-width font for input (matches chat area)
-#ifdef __WXGTK__
-  wxFont fixedFont = wxFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
-#else
-  wxFont fixedFont = wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT);
-#endif
-  m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, fixedFont);
+  // Use member font (will be updated by SetInputFont from MainFrame::ApplySavedFonts)
+  m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, m_font);
   m_inputBox->StyleClearAll();
 
   // Show placeholder initially
@@ -82,7 +78,7 @@ void InputBoxWidget::CreateLayout() {
   // Set minimal height based on font line height
   int lineHeight = m_inputBox->TextHeight(0);
   if (lineHeight <= 0) {
-    lineHeight = fixedFont.GetPixelSize().GetHeight();
+    lineHeight = m_font.GetPixelSize().GetHeight();
     if (lineHeight <= 0) {
       lineHeight = 16; // Fallback
     }
@@ -327,6 +323,9 @@ void InputBoxWidget::SetColors(const wxColour &bg, const wxColour &fg) {
 }
 
 void InputBoxWidget::SetInputFont(const wxFont &font) {
+  if (!font.IsOk())
+    return;
+    
   m_font = font;
 
   if (m_inputBox) {
@@ -335,22 +334,32 @@ void InputBoxWidget::SetInputFont(const wxFont &font) {
     int cursorPos = m_inputBox->GetCurrentPos();
     bool wasPlaceholder = m_showingPlaceholder;
     
-    // Apply font to default style
+    // Apply font to default style and propagate to all styles
     m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, m_font);
     
-    // Apply font to all text without clearing - use Colourise to restyle
-    int textLen = m_inputBox->GetTextLength();
-    if (textLen > 0) {
-      m_inputBox->StartStyling(0);
-      m_inputBox->SetStyling(textLen, wxSTC_STYLE_DEFAULT);
+    // Set colors before StyleClearAll so they propagate
+    if (m_showingPlaceholder) {
+      m_inputBox->StyleSetForeground(wxSTC_STYLE_DEFAULT, m_placeholderColor);
+    } else {
+      m_inputBox->StyleSetForeground(wxSTC_STYLE_DEFAULT, m_fgColor);
     }
+    m_inputBox->StyleSetBackground(wxSTC_STYLE_DEFAULT, m_bgColor);
+    m_inputBox->StyleClearAll(); // Propagate default style (font + colors) to all styles
+    
+    // Also set caret color to match text
+    m_inputBox->SetCaretForeground(m_fgColor);
 
-    // Calculate height based on font
-    int fontHeight = m_font.GetPixelSize().GetHeight();
-    if (fontHeight <= 0) {
-      fontHeight = m_font.GetPointSize() * 4 / 3; // Approximate
+    // Calculate height based on actual text height in the control
+    int lineHeight = m_inputBox->TextHeight(0);
+    if (lineHeight <= 0) {
+      // Fallback: calculate from font metrics
+      int fontHeight = m_font.GetPixelSize().GetHeight();
+      if (fontHeight <= 0) {
+        fontHeight = m_font.GetPointSize() * 4 / 3; // Approximate
+      }
+      lineHeight = fontHeight;
     }
-    int newHeight = fontHeight + 4; // Add some padding
+    int newHeight = lineHeight + 4; // Add some padding
     SetMinSize(wxSize(-1, newHeight));
     SetMaxSize(wxSize(-1, newHeight));
 
@@ -361,6 +370,11 @@ void InputBoxWidget::SetInputFont(const wxFont &font) {
     
     m_inputBox->Refresh();
     Layout();
+    
+    // Request parent to re-layout as well
+    if (GetParent()) {
+      GetParent()->Layout();
+    }
   }
 }
 
@@ -381,15 +395,11 @@ void InputBoxWidget::UpdatePlaceholder() {
     // Show placeholder
     m_showingPlaceholder = true;
     m_inputBox->SetText(m_placeholder);
-    m_inputBox->StyleSetForeground(
-        wxSTC_STYLE_DEFAULT,
-        wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
-    // Restyle placeholder text
-    int textLen = m_inputBox->GetTextLength();
-    if (textLen > 0) {
-      m_inputBox->StartStyling(0);
-      m_inputBox->SetStyling(textLen, wxSTC_STYLE_DEFAULT);
-    }
+    // Set placeholder color and propagate
+    m_inputBox->StyleSetForeground(wxSTC_STYLE_DEFAULT, m_placeholderColor);
+    m_inputBox->StyleSetBackground(wxSTC_STYLE_DEFAULT, m_bgColor);
+    m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, m_font);
+    m_inputBox->StyleClearAll();
     m_inputBox->GotoPos(0);
   }
 }
@@ -400,10 +410,12 @@ void InputBoxWidget::OnFocusGained(wxFocusEvent &event) {
   if (m_showingPlaceholder && m_inputBox) {
     m_showingPlaceholder = false;
     m_inputBox->ClearAll();
-    m_inputBox->StyleSetForeground(
-        wxSTC_STYLE_DEFAULT,
-        wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    // No need to StyleClearAll - text is already cleared
+    // Set normal text color and propagate to all styles
+    m_inputBox->StyleSetForeground(wxSTC_STYLE_DEFAULT, m_fgColor);
+    m_inputBox->StyleSetBackground(wxSTC_STYLE_DEFAULT, m_bgColor);
+    m_inputBox->StyleSetFont(wxSTC_STYLE_DEFAULT, m_font);
+    m_inputBox->StyleClearAll(); // Propagate to all style numbers
+    m_inputBox->SetCaretForeground(m_fgColor);
   }
   event.Skip();
 }

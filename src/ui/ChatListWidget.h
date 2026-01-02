@@ -37,6 +37,7 @@ public:
   void SetTreeColors(const wxColour &bg, const wxColour &fg,
                      const wxColour &selBg);
   void SetTreeFont(const wxFont &font);
+  void SetUIFont(const wxFont &font);  // For UserInfoPopup
 
   // Tree item IDs
   wxTreeItemId GetTeleliterItem() const { return m_teleliterItem; }

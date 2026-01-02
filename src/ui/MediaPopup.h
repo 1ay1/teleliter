@@ -32,6 +32,9 @@ public:
     virtual ~MediaPopup();
 
     void ShowMedia(const MediaInfo& info, const wxPoint& pos);
+    
+    // Font control - uses UI font from preferences
+    void SetUIFont(const wxFont& font) { m_uiFont = font; }
     void SetImage(const wxImage& image);
     void SetImage(const wxString& path);
     void ShowLoading();
@@ -110,6 +113,9 @@ private:
     wxColour m_borderColor;
     wxColour m_textColor;
     wxColour m_labelColor;
+    
+    // UI font from preferences
+    wxFont m_uiFont;
 
     MediaInfo m_mediaInfo;
     wxBitmap m_bitmap;

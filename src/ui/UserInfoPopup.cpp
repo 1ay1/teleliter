@@ -11,10 +11,12 @@ wxEND_EVENT_TABLE()
 
 UserInfoPopup::UserInfoPopup(wxWindow* parent)
     : wxPopupWindow(parent, wxBORDER_NONE)
+    , m_uiFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT))
     , m_hasPhoto(false)
     , m_isLoadingPhoto(false)
     , m_telegramClient(nullptr)
 {
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
     ApplyHexChatStyle();
     SetSize(POPUP_WIDTH, POPUP_MIN_HEIGHT);
     SetMinSize(wxSize(POPUP_WIDTH, POPUP_MIN_HEIGHT));
@@ -31,7 +33,8 @@ UserInfoPopup::~UserInfoPopup()
 void UserInfoPopup::ApplyHexChatStyle()
 {
     m_bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
-    m_borderColor = wxSystemSettings::GetColour(wxSYS_COLOUR_ACTIVEBORDER);
+    // Use window text color for visible border (matching MediaPopup)
+    m_borderColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     m_textColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     m_labelColor = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
     m_onlineColor = wxColour(76, 175, 80);   // Green for online
@@ -221,7 +224,9 @@ wxBitmap UserInfoPopup::CreateInitialsAvatar(const wxString& name, int size)
     
     // Draw initials
     dc.SetTextForeground(*wxWHITE);
-    wxFont font(size / 3, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+    wxFont font = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+    font.SetPointSize(size / 3);
+    font.SetWeight(wxFONTWEIGHT_BOLD);
     dc.SetFont(font);
     
     wxSize textSize = dc.GetTextExtent(initials);
@@ -311,13 +316,9 @@ void UserInfoPopup::OnPaint(wxPaintEvent& event)
     wxAutoBufferedPaintDC dc(this);
     wxSize size = GetClientSize();
     
-    // Background
-    dc.SetBackground(wxBrush(m_bgColor));
-    dc.Clear();
-    
-    // Border
+    // Background and border (matching MediaPopup style)
+    dc.SetBrush(wxBrush(m_bgColor));
     dc.SetPen(wxPen(m_borderColor, BORDER_WIDTH));
-    dc.SetBrush(*wxTRANSPARENT_BRUSH);
     dc.DrawRectangle(0, 0, size.GetWidth(), size.GetHeight());
     
     int x = PADDING;
@@ -345,7 +346,8 @@ void UserInfoPopup::DrawProfilePhoto(wxDC& dc, const wxRect& photoRect)
                      PHOTO_SIZE / 2);
         
         dc.SetTextForeground(*wxWHITE);
-        wxFont font(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+        wxFont font = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+        font.SetPointSize(10);
         dc.SetFont(font);
         wxString loadingText = "...";
         wxSize textSize = dc.GetTextExtent(loadingText);
@@ -374,7 +376,9 @@ void UserInfoPopup::DrawProfilePhoto(wxDC& dc, const wxRect& photoRect)
 void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
 {
     // Display name - centered and bold
-    wxFont nameFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+    wxFont nameFont = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+    nameFont.SetPointSize(12);
+    nameFont.SetWeight(wxFONTWEIGHT_BOLD);
     dc.SetFont(nameFont);
     dc.SetTextForeground(m_textColor);
     
@@ -399,7 +403,8 @@ void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
     
     // Username - centered in gray
     if (!m_userInfo.username.IsEmpty()) {
-        wxFont smallFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+        wxFont smallFont = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+        smallFont.SetPointSize(10);
         dc.SetFont(smallFont);
         dc.SetTextForeground(m_labelColor);
         
@@ -411,7 +416,8 @@ void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
     
     // Phone number - centered
     if (!m_userInfo.phoneNumber.IsEmpty()) {
-        wxFont smallFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+        wxFont smallFont = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+        smallFont.SetPointSize(10);
         dc.SetFont(smallFont);
         dc.SetTextForeground(m_labelColor);
         
@@ -424,7 +430,9 @@ void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
     // Bio if present
     if (!m_userInfo.bio.IsEmpty()) {
         y += PADDING / 2;
-        wxFont bioFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL);
+        wxFont bioFont = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+        bioFont.SetPointSize(9);
+        bioFont.SetStyle(wxFONTSTYLE_ITALIC);
         dc.SetFont(bioFont);
         dc.SetTextForeground(m_textColor);
         
@@ -450,7 +458,8 @@ void UserInfoPopup::DrawUserDetails(wxDC& dc, int x, int y, int width)
     
     // Status line - centered
     y += PADDING / 2;
-    wxFont statusFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+    wxFont statusFont = m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+    statusFont.SetPointSize(10);
     dc.SetFont(statusFont);
     
     wxString statusText = m_userInfo.GetLastSeenString();

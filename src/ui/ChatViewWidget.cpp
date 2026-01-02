@@ -2336,6 +2336,12 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
   }
 }
 
+void ChatViewWidget::SetUIFont(const wxFont &font) {
+  if (m_mediaPopup && font.IsOk()) {
+    m_mediaPopup->SetUIFont(font);
+  }
+}
+
 void ChatViewWidget::HideMediaPopup() {
   // Clear tracking state
   m_currentlyShowingMedia = MediaInfo();

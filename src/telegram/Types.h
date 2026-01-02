@@ -2,6 +2,7 @@
 #define TELEGRAM_TYPES_H
 
 #include <cstdint>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <vector>

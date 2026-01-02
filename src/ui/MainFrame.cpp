@@ -11,10 +11,13 @@
 #include <ctime>
 #include <wx/artprov.h>
 #include <wx/config.h>
+#include <wx/file.h>
 #include <wx/filename.h>
 #include <wx/fontpicker.h>
 #include <wx/settings.h>
+#include <wx/srchctrl.h>
 #include <wx/statbox.h>
+#include <wx/stdpaths.h>
 
 // Helper function to format last seen time
 static wxString FormatLastSeen(int64_t lastSeenTime) {
@@ -63,6 +66,7 @@ static wxString FormatLastSeen(int64_t lastSeenTime) {
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
     EVT_MENU(wxID_ABOUT, MainFrame::OnAbout) EVT_MENU(
         ID_LOGIN, MainFrame::OnLogin) EVT_MENU(ID_LOGOUT, MainFrame::OnLogout)
+        EVT_MENU(ID_RAW_LOG, MainFrame::OnRawLog)
         EVT_MENU(ID_NEW_CHAT, MainFrame::OnNewChat) EVT_MENU(
             ID_NEW_GROUP,
             MainFrame::OnNewGroup) EVT_MENU(ID_NEW_CHANNEL,
@@ -82,6 +86,10 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
                                 EVT_MENU(ID_FULLSCREEN, MainFrame::OnFullscreen)
                                     EVT_MENU(ID_UNREAD_FIRST,
                                              MainFrame::OnToggleUnreadFirst)
+    EVT_MENU(ID_PREV_CHAT, MainFrame::OnPrevChat)
+    EVT_MENU(ID_NEXT_CHAT, MainFrame::OnNextChat)
+    EVT_MENU(ID_CLOSE_CHAT, MainFrame::OnCloseChat)
+    EVT_MENU(ID_DOCUMENTATION, MainFrame::OnDocumentation)
     // Tree events are bound dynamically in CreateMainLayout() since tree is in
     // ChatListWidget
     EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST,
@@ -334,9 +342,15 @@ void MainFrame::ApplySavedFonts() {
     m_inputBoxWidget->SetInputFont(m_chatFont);
   }
 
-  // Apply UI font to chat list
+  // Apply UI font to chat list and its UserInfoPopup
   if (m_chatListWidget) {
     m_chatListWidget->SetTreeFont(m_uiFont);
+    m_chatListWidget->SetUIFont(m_uiFont);
+  }
+
+  // Apply UI font to ChatViewWidget's MediaPopup
+  if (m_chatViewWidget) {
+    m_chatViewWidget->SetUIFont(m_uiFont);
   }
 
   // Apply UI font to member list and count label
@@ -408,15 +422,15 @@ void MainFrame::CreateMenuBar() {
 
   // Window menu
   wxMenu *menuWindow = new wxMenu;
-  menuWindow->Append(wxID_ANY, "Previous Chat\tCtrl+PgUp");
-  menuWindow->Append(wxID_ANY, "Next Chat\tCtrl+PgDn");
+  menuWindow->Append(ID_PREV_CHAT, "Previous Chat\tCtrl+PgUp");
+  menuWindow->Append(ID_NEXT_CHAT, "Next Chat\tCtrl+PgDn");
   menuWindow->AppendSeparator();
-  menuWindow->Append(wxID_ANY, "Close Chat\tCtrl+W");
+  menuWindow->Append(ID_CLOSE_CHAT, "Close Chat\tCtrl+W");
   menuBar->Append(menuWindow, "&Window");
 
   // Help menu
   wxMenu *menuHelp = new wxMenu;
-  menuHelp->Append(wxID_ANY, "Documentation\tF1");
+  menuHelp->Append(ID_DOCUMENTATION, "Documentation\tF1");
   menuHelp->AppendSeparator();
   menuHelp->Append(wxID_ABOUT, "About");
   menuBar->Append(menuHelp, "&Help");
@@ -839,57 +853,251 @@ void MainFrame::OnLogout(wxCommandEvent &event) {
 }
 
 void MainFrame::OnNewChat(wxCommandEvent &event) {
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
   wxTextEntryDialog dlg(this,
-                        "Enter username or phone number:", "New Private Chat");
+                        "Enter username (without @) or phone number (+1234...):",
+                        "New Private Chat", "", wxOK | wxCANCEL | wxCENTRE);
   if (dlg.ShowModal() == wxID_OK) {
-    wxString contact = dlg.GetValue();
+    wxString contact = dlg.GetValue().Trim().Trim(false);
+    if (contact.IsEmpty()) return;
+    
+    // Remove @ prefix if user included it
+    if (contact.StartsWith("@")) {
+      contact = contact.Mid(1);
+    }
+    
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
           wxDateTime::Now().Format("%H:%M:%S"),
-          "Starting chat with " + contact);
+          "Searching for user: " + contact + "...");
+    }
+    
+    // TODO: Call TelegramClient::SearchPublicChat when implemented
+    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
+      m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
+          wxDateTime::Now().Format("%H:%M:%S"),
+          "Use /query " + contact + " to start a chat (feature in development)");
     }
   }
 }
 
 void MainFrame::OnNewGroup(wxCommandEvent &event) {
-  wxTextEntryDialog dlg(this, "Enter group name:", "New Group");
-  if (dlg.ShowModal() == wxID_OK) {
-    wxString groupName = dlg.GetValue();
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
+  wxDialog dialog(this, wxID_ANY, "New Group", wxDefaultPosition, wxSize(400, 200));
+  wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+  
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Group Name:"), 0, wxALL, 10);
+  wxTextCtrl *nameCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+  sizer->Add(nameCtrl, 0, wxLEFT | wxRIGHT, 10);
+  
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Description (optional):"), 0, wxALL, 10);
+  wxTextCtrl *descCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60), wxTE_MULTILINE);
+  sizer->Add(descCtrl, 0, wxLEFT | wxRIGHT, 10);
+  
+  wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
+  btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Cancel"), 0, wxALL, 5);
+  btnSizer->Add(new wxButton(&dialog, wxID_OK, "Create"), 0, wxALL, 5);
+  sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxTOP, 15);
+  
+  dialog.SetSizer(sizer);
+  
+  if (dialog.ShowModal() == wxID_OK) {
+    wxString groupName = nameCtrl->GetValue().Trim().Trim(false);
+    if (groupName.IsEmpty()) {
+      wxMessageBox("Group name cannot be empty.", "Error", wxOK | wxICON_ERROR, this);
+      return;
+    }
+    
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
-          wxDateTime::Now().Format("%H:%M:%S"), "Creating group: " + groupName);
+          wxDateTime::Now().Format("%H:%M:%S"), 
+          "Creating group '" + groupName + "'... (feature in development)");
     }
+    
+    // TODO: Call TelegramClient::CreateBasicGroupChat when implemented
   }
 }
 
 void MainFrame::OnNewChannel(wxCommandEvent &event) {
-  wxTextEntryDialog dlg(this, "Enter channel name:", "New Channel");
-  if (dlg.ShowModal() == wxID_OK) {
-    wxString channelName = dlg.GetValue();
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
+  wxDialog dialog(this, wxID_ANY, "New Channel", wxDefaultPosition, wxSize(400, 250));
+  wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+  
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Channel Name:"), 0, wxALL, 10);
+  wxTextCtrl *nameCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+  sizer->Add(nameCtrl, 0, wxLEFT | wxRIGHT, 10);
+  
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Description:"), 0, wxALL, 10);
+  wxTextCtrl *descCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60), wxTE_MULTILINE);
+  sizer->Add(descCtrl, 0, wxLEFT | wxRIGHT, 10);
+  
+  wxCheckBox *publicCheck = new wxCheckBox(&dialog, wxID_ANY, "Public channel (anyone can find and join)");
+  sizer->Add(publicCheck, 0, wxALL, 10);
+  
+  wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
+  btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Cancel"), 0, wxALL, 5);
+  btnSizer->Add(new wxButton(&dialog, wxID_OK, "Create"), 0, wxALL, 5);
+  sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxTOP, 10);
+  
+  dialog.SetSizer(sizer);
+  
+  if (dialog.ShowModal() == wxID_OK) {
+    wxString channelName = nameCtrl->GetValue().Trim().Trim(false);
+    if (channelName.IsEmpty()) {
+      wxMessageBox("Channel name cannot be empty.", "Error", wxOK | wxICON_ERROR, this);
+      return;
+    }
+    
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
           wxDateTime::Now().Format("%H:%M:%S"),
-          "Creating channel: " + channelName);
+          "Creating channel '" + channelName + "'... (feature in development)");
     }
+    
+    // TODO: Call TelegramClient::CreateSupergroupChat when implemented
   }
 }
 
 void MainFrame::OnContacts(wxCommandEvent &event) {
-  wxMessageBox("Contacts dialog will be implemented.", "Contacts", wxOK, this);
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
+  // Show contacts dialog with list from TelegramClient
+  wxDialog dialog(this, wxID_ANY, "Contacts", wxDefaultPosition, wxSize(400, 500));
+  wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+  
+  wxSearchCtrl *searchBox = new wxSearchCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+  searchBox->SetHint("Search contacts...");
+  sizer->Add(searchBox, 0, wxALL | wxEXPAND, 10);
+  
+  wxListCtrl *contactList = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(350, 350),
+                                           wxLC_REPORT | wxLC_SINGLE_SEL);
+  contactList->AppendColumn("Name", wxLIST_FORMAT_LEFT, 200);
+  contactList->AppendColumn("Username", wxLIST_FORMAT_LEFT, 130);
+  
+  // Populate from TelegramClient users cache
+  if (m_telegramClient) {
+    auto chats = m_telegramClient->GetChats();
+    int idx = 0;
+    for (const auto &pair : chats) {
+      const ChatInfo &chat = pair.second;
+      if (chat.isPrivate && !chat.isBot) {
+        contactList->InsertItem(idx, chat.title);
+        // Try to get username from user info
+        if (chat.userId != 0) {
+          bool found = false;
+          UserInfo user = m_telegramClient->GetUser(chat.userId, &found);
+          if (found && !user.username.IsEmpty()) {
+            contactList->SetItem(idx, 1, "@" + user.username);
+          }
+        }
+        idx++;
+      }
+    }
+  }
+  
+  sizer->Add(contactList, 1, wxALL | wxEXPAND, 10);
+  
+  wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
+  btnSizer->Add(new wxButton(&dialog, wxID_OK, "Open Chat"), 0, wxALL, 5);
+  btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Close"), 0, wxALL, 5);
+  sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxBOTTOM, 10);
+  
+  dialog.SetSizer(sizer);
+  dialog.ShowModal();
 }
 
 void MainFrame::OnSearch(wxCommandEvent &event) {
-  wxTextEntryDialog dlg(this, "Search messages, chats, and users:", "Search");
-  if (dlg.ShowModal() == wxID_OK) {
-    wxString query = dlg.GetValue();
-    if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
-      m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
-          wxDateTime::Now().Format("%H:%M:%S"), "Searching for: " + query);
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
+  wxDialog dialog(this, wxID_ANY, "Search", wxDefaultPosition, wxSize(500, 400));
+  wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+  
+  wxBoxSizer *searchSizer = new wxBoxSizer(wxHORIZONTAL);
+  wxSearchCtrl *searchBox = new wxSearchCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(400, -1));
+  searchBox->SetHint("Search chats and messages...");
+  searchSizer->Add(searchBox, 1, wxRIGHT, 5);
+  wxButton *searchBtn = new wxButton(&dialog, wxID_FIND, "Search");
+  searchSizer->Add(searchBtn, 0);
+  sizer->Add(searchSizer, 0, wxALL | wxEXPAND, 10);
+  
+  wxListCtrl *resultList = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(460, 250),
+                                          wxLC_REPORT | wxLC_SINGLE_SEL);
+  resultList->AppendColumn("Chat", wxLIST_FORMAT_LEFT, 150);
+  resultList->AppendColumn("Message", wxLIST_FORMAT_LEFT, 290);
+  sizer->Add(resultList, 1, wxALL | wxEXPAND, 10);
+  
+  wxButton *closeBtn = new wxButton(&dialog, wxID_CANCEL, "Close");
+  sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
+  
+  dialog.SetSizer(sizer);
+  
+  // Filter chats as user types
+  if (m_telegramClient) {
+    wxString currentFilter;
+    auto chats = m_telegramClient->GetChats();
+    for (const auto &pair : chats) {
+      resultList->InsertItem(resultList->GetItemCount(), pair.second.title);
+      if (!pair.second.lastMessage.IsEmpty()) {
+        wxString preview = pair.second.lastMessage;
+        if (preview.Length() > 50) preview = preview.Left(47) + "...";
+        resultList->SetItem(resultList->GetItemCount() - 1, 1, preview);
+      }
     }
   }
+  
+  dialog.ShowModal();
 }
 
 void MainFrame::OnSavedMessages(wxCommandEvent &event) {
+  if (!m_isLoggedIn) {
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    return;
+  }
+  
+  // Saved Messages is a chat with yourself (chatId = your userId)
+  if (m_telegramClient) {
+    const UserInfo &currentUser = m_telegramClient->GetCurrentUser();
+    if (currentUser.id != 0) {
+      // The saved messages chat ID is the same as user ID
+      int64_t savedChatId = currentUser.id;
+      
+      // Try to find and select it in the chat list
+      if (m_chatListWidget) {
+        m_chatListWidget->SelectChat(savedChatId);
+      }
+      
+      // Open the chat
+      m_telegramClient->OpenChatAndLoadMessages(savedChatId);
+      m_currentChatId = savedChatId;
+      m_currentChatTitle = "Saved Messages";
+      m_currentChatType = TelegramChatType::SavedMessages;
+      
+      if (m_chatViewWidget) {
+        m_chatViewWidget->SetTopicText("Saved Messages", "Your cloud storage");
+      }
+      return;
+    }
+  }
+  
+  // Fallback if not logged in or user not found
   m_currentChatTitle = "Saved Messages";
   m_currentChatType = TelegramChatType::SavedMessages;
   if (m_chatViewWidget) {
@@ -1022,9 +1230,15 @@ void MainFrame::OnPreferences(wxCommandEvent &event) {
     if (newUIFont.IsOk()) {
       m_uiFont = newUIFont;
 
-      // Apply to chat list
+      // Apply to chat list and its UserInfoPopup
       if (m_chatListWidget) {
         m_chatListWidget->SetTreeFont(m_uiFont);
+        m_chatListWidget->SetUIFont(m_uiFont);
+      }
+
+      // Apply to ChatViewWidget's MediaPopup
+      if (m_chatViewWidget) {
+        m_chatViewWidget->SetUIFont(m_uiFont);
       }
 
       // Apply to member list and count label
@@ -1100,6 +1314,246 @@ void MainFrame::OnFullscreen(wxCommandEvent &event) {
   ShowFullScreen(!IsFullScreen(),
                  wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR |
                      wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION);
+}
+
+void MainFrame::OnRawLog(wxCommandEvent &event) {
+  // Show TDLib log file location or a log viewer dialog
+  wxString logPath = wxStandardPaths::Get().GetUserDataDir() + "/tdlib.log";
+  
+  wxDialog dialog(this, wxID_ANY, "TDLib Log", wxDefaultPosition, wxSize(600, 400));
+  wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+  
+  wxTextCtrl *logText = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, 
+                                        wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxHSCROLL);
+  logText->SetFont(m_chatFont.IsOk() ? m_chatFont : wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+  
+  // Try to read log file
+  if (wxFileExists(logPath)) {
+    wxFile file(logPath);
+    if (file.IsOpened()) {
+      wxString content;
+      file.ReadAll(&content);
+      // Show last 50KB or so
+      if (content.Length() > 50000) {
+        content = "...(truncated)...\n\n" + content.Right(50000);
+      }
+      logText->SetValue(content);
+      logText->SetInsertionPointEnd();
+    }
+  } else {
+    logText->SetValue("Log file not found at: " + logPath + "\n\nTDLib logging may not be enabled.");
+  }
+  
+  sizer->Add(logText, 1, wxEXPAND | wxALL, 10);
+  
+  wxButton *closeBtn = new wxButton(&dialog, wxID_OK, "Close");
+  sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
+  
+  dialog.SetSizer(sizer);
+  dialog.ShowModal();
+}
+
+void MainFrame::OnPrevChat(wxCommandEvent &event) {
+  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl()) return;
+  
+  wxTreeCtrl *tree = m_chatListWidget->GetTreeCtrl();
+  wxTreeItemId current = tree->GetSelection();
+  
+  if (!current.IsOk()) {
+    // Nothing selected, select first chat
+    m_chatListWidget->SelectTeleliter();
+    return;
+  }
+  
+  // Get previous sibling, or parent's previous sibling's last child
+  wxTreeItemId prev = tree->GetPrevSibling(current);
+  if (prev.IsOk()) {
+    // If it's a category, get its last child
+    if (tree->ItemHasChildren(prev)) {
+      wxTreeItemIdValue cookie;
+      wxTreeItemId child = tree->GetFirstChild(prev, cookie);
+      wxTreeItemId lastChild = child;
+      while (child.IsOk()) {
+        lastChild = child;
+        child = tree->GetNextSibling(child);
+      }
+      if (lastChild.IsOk()) {
+        tree->SelectItem(lastChild);
+        return;
+      }
+    }
+    tree->SelectItem(prev);
+  } else {
+    // Go to parent's previous sibling
+    wxTreeItemId parent = tree->GetItemParent(current);
+    if (parent.IsOk()) {
+      wxTreeItemId parentPrev = tree->GetPrevSibling(parent);
+      if (parentPrev.IsOk() && tree->ItemHasChildren(parentPrev)) {
+        // Get last child of previous category
+        wxTreeItemIdValue cookie;
+        wxTreeItemId child = tree->GetFirstChild(parentPrev, cookie);
+        wxTreeItemId lastChild = child;
+        while (child.IsOk()) {
+          lastChild = child;
+          child = tree->GetNextSibling(child);
+        }
+        if (lastChild.IsOk()) {
+          tree->SelectItem(lastChild);
+          return;
+        }
+      } else if (parentPrev.IsOk()) {
+        tree->SelectItem(parentPrev);
+      }
+    }
+  }
+}
+
+void MainFrame::OnNextChat(wxCommandEvent &event) {
+  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl()) return;
+  
+  wxTreeCtrl *tree = m_chatListWidget->GetTreeCtrl();
+  wxTreeItemId current = tree->GetSelection();
+  
+  if (!current.IsOk()) {
+    // Nothing selected, select first chat
+    m_chatListWidget->SelectTeleliter();
+    return;
+  }
+  
+  // If current item has children, go to first child
+  if (tree->ItemHasChildren(current)) {
+    wxTreeItemIdValue cookie;
+    wxTreeItemId firstChild = tree->GetFirstChild(current, cookie);
+    if (firstChild.IsOk()) {
+      tree->SelectItem(firstChild);
+      return;
+    }
+  }
+  
+  // Get next sibling
+  wxTreeItemId next = tree->GetNextSibling(current);
+  if (next.IsOk()) {
+    // If it's a category, get its first child
+    if (tree->ItemHasChildren(next)) {
+      wxTreeItemIdValue cookie;
+      wxTreeItemId firstChild = tree->GetFirstChild(next, cookie);
+      if (firstChild.IsOk()) {
+        tree->SelectItem(firstChild);
+        return;
+      }
+    }
+    tree->SelectItem(next);
+  } else {
+    // Go to parent's next sibling
+    wxTreeItemId parent = tree->GetItemParent(current);
+    if (parent.IsOk()) {
+      wxTreeItemId parentNext = tree->GetNextSibling(parent);
+      if (parentNext.IsOk()) {
+        // If it's a category, get first child
+        if (tree->ItemHasChildren(parentNext)) {
+          wxTreeItemIdValue cookie;
+          wxTreeItemId firstChild = tree->GetFirstChild(parentNext, cookie);
+          if (firstChild.IsOk()) {
+            tree->SelectItem(firstChild);
+            return;
+          }
+        }
+        tree->SelectItem(parentNext);
+      }
+    }
+  }
+}
+
+void MainFrame::OnCloseChat(wxCommandEvent &event) {
+  if (!m_chatListWidget) return;
+  
+  // Close current chat by selecting Teleliter (welcome screen)
+  if (m_currentChatId != 0) {
+    // Close the chat in TelegramClient
+    if (m_telegramClient) {
+      m_telegramClient->CloseChat(m_currentChatId);
+    }
+    m_currentChatId = 0;
+    m_currentChatTitle.Clear();
+    
+    // Clear the chat view
+    if (m_chatViewWidget) {
+      m_chatViewWidget->ClearMessages();
+      m_chatViewWidget->ClearTopicText();
+    }
+    
+    // Select Teleliter in the tree
+    m_chatListWidget->SelectTeleliter();
+  }
+}
+
+void MainFrame::OnDocumentation(wxCommandEvent &event) {
+  // Open the design document or show help
+  wxString docPath = wxGetCwd() + "/doc/DESIGN.md";
+  
+  // Try to open in default text editor/browser
+  if (wxFileExists(docPath)) {
+    wxLaunchDefaultApplication(docPath);
+  } else {
+    // Show inline help
+    wxDialog dialog(this, wxID_ANY, "Teleliter Documentation", wxDefaultPosition, wxSize(600, 500));
+    wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+    
+    wxTextCtrl *helpText = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, 
+                                          wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+    helpText->SetFont(m_chatFont.IsOk() ? m_chatFont : wxFont(11, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+    
+    wxString help = 
+      "TELELITER - A HexChat-style Telegram Client\n"
+      "============================================\n\n"
+      "KEYBOARD SHORTCUTS\n"
+      "------------------\n"
+      "Ctrl+L        Login\n"
+      "Ctrl+N        New Private Chat\n"
+      "Ctrl+G        New Group\n"
+      "Ctrl+F        Search\n"
+      "Ctrl+U        Upload File\n"
+      "Ctrl+E        Preferences\n"
+      "Ctrl+W        Close Current Chat\n"
+      "Ctrl+PgUp     Previous Chat\n"
+      "Ctrl+PgDn     Next Chat\n"
+      "Ctrl+Shift+L  Clear Chat Window\n"
+      "F7            Toggle Members List\n"
+      "F9            Toggle Chat List\n"
+      "F11           Fullscreen\n"
+      "Escape        Exit Fullscreen\n\n"
+      "COMMANDS\n"
+      "--------\n"
+      "/me <action>     Send an action message\n"
+      "/clear           Clear chat window\n"
+      "/query <user>    Open private chat\n"
+      "/whois <user>    View user info\n"
+      "/leave           Leave current chat\n"
+      "/help            Show available commands\n\n"
+      "PHILOSOPHY\n"
+      "----------\n"
+      "Teleliter follows the HexChat/IRC aesthetic:\n"
+      "- Text-first, minimal UI\n"
+      "- Keyboard-friendly with slash commands\n"
+      "- Read-only for advanced features\n"
+      "  (displays reactions, edits, etc. but\n"
+      "   doesn't provide UI to send them)\n\n"
+      "MEDIA\n"
+      "-----\n"
+      "- Photos: Shown as clickable spans\n"
+      "- Videos: Click to play in popup\n"
+      "- Stickers: Hover to preview\n"
+      "- Voice notes: Click to play\n";
+    
+    helpText->SetValue(help);
+    sizer->Add(helpText, 1, wxEXPAND | wxALL, 10);
+    
+    wxButton *closeBtn = new wxButton(&dialog, wxID_OK, "Close");
+    sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
+    
+    dialog.SetSizer(sizer);
+    dialog.ShowModal();
+  }
 }
 
 void MainFrame::OnCharHook(wxKeyEvent &event) {

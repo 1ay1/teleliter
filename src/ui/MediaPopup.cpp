@@ -113,7 +113,9 @@ wxBEGIN_EVENT_TABLE(MediaPopup, wxPopupWindow) EVT_PAINT(MediaPopup::OnPaint)
     wxEND_EVENT_TABLE()
 
         MediaPopup::MediaPopup(wxWindow *parent)
-    : wxPopupWindow(parent, wxBORDER_NONE), m_hasImage(false),
+    : wxPopupWindow(parent, wxBORDER_NONE), 
+      m_uiFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT)),
+      m_hasImage(false),
       m_isLoading(false), m_isDownloadingMedia(false), m_hasError(false),
       m_loadingTimer(this, LOADING_TIMER_ID), m_loadingFrame(0),
       m_isPlayingFFmpeg(false), m_videoLoadPending(false),
@@ -1199,14 +1201,14 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       static const wxString spinnerChars[] = {"|", "/", "-", "\\",
                                               "|", "/", "-", "\\"};
       wxString spinner = spinnerChars[m_loadingFrame % 8];
-      dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
+      dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Bold() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
       dc.SetTextForeground(
           wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
       wxSize spinnerSize = dc.GetTextExtent(spinner);
       dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2,
                   centerY - spinnerSize.GetHeight() / 2);
 
-      dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
+      dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Italic() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
       wxString statusText = "Downloading...";
       wxSize statusSize = dc.GetTextExtent(statusText);
       dc.DrawText(statusText, centerX - statusSize.GetWidth() / 2,
@@ -1228,7 +1230,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       dc.SetPen(*wxTRANSPARENT_PEN);
       dc.DrawPolygon(3, triangle);
 
-      dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
+      dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Italic() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Italic());
       dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
       wxString hint = "Click to play";
       wxSize hintSize = dc.GetTextExtent(hint);
@@ -1240,7 +1242,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
 
   } else if (m_hasError) {
     dc.SetTextForeground(wxColour(0xCC, 0x00, 0x00));
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
 
     wxString errorText =
         m_errorMessage.IsEmpty() ? "Error loading media" : m_errorMessage;
@@ -1262,8 +1264,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     dc.SetPen(*wxTRANSPARENT_PEN);
     dc.DrawCircle(centerX, centerY, radius);
 
-    dc.SetFont(
-        wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Bold().Scaled(2.0) : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold().Scaled(2.0));
     dc.SetTextForeground(
         wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
 
@@ -1271,7 +1272,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     dc.DrawText(spinner, centerX - spinnerSize.GetWidth() / 2,
                 centerY - spinnerSize.GetHeight() / 2);
 
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
     dc.SetTextForeground(m_textColor);
     wxString statusText = "Downloading...";
     wxSize statusSize = dc.GetTextExtent(statusText);
@@ -1290,8 +1291,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       icon = m_mediaInfo.emoji;
     }
 
-    dc.SetFont(
-        wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Scaled(scaleFactor) : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Scaled(scaleFactor));
     dc.SetTextForeground(m_textColor);
 
     wxSize iconSize = dc.GetTextExtent(icon);
@@ -1305,7 +1305,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
       typeText = "Sticker";
     }
 
-    dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Bold() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
     dc.SetTextForeground(m_textColor);
 
     wxSize typeSize = dc.GetTextExtent(typeText);
@@ -1325,7 +1325,7 @@ void MediaPopup::OnPaint(wxPaintEvent &event) {
     }
 
     if (!infoText.IsEmpty()) {
-      dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Smaller());
+      dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Smaller() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Smaller());
       dc.SetTextForeground(m_labelColor);
 
       wxSize infoSize = dc.GetTextExtent(infoText);
@@ -1349,7 +1349,7 @@ void MediaPopup::DrawMediaLabel(wxDC &dc, const wxSize &size) {
   wxString label = GetMediaLabel();
 
   dc.SetTextForeground(m_labelColor);
-  dc.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+  dc.SetFont(m_uiFont.IsOk() ? m_uiFont : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
 
   int maxLabelWidth = size.GetWidth() - (PADDING * 2);
   wxSize labelSize = dc.GetTextExtent(label);
@@ -1368,8 +1368,7 @@ void MediaPopup::DrawMediaLabel(wxDC &dc, const wxSize &size) {
   dc.DrawText(label, labelX, labelY);
 
   if (!m_mediaInfo.caption.IsEmpty()) {
-    dc.SetFont(
-        wxSystemSettings::GetFont(wxSYS_ANSI_FIXED_FONT).Smaller().Italic());
+    dc.SetFont(m_uiFont.IsOk() ? m_uiFont.Smaller().Italic() : wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Smaller().Italic());
 
     wxString caption = m_mediaInfo.caption;
     wxSize captionSize = dc.GetTextExtent(caption);

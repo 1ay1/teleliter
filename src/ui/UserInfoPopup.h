@@ -44,6 +44,9 @@ public:
     
     // Set the Telegram client for fetching additional user info
     void SetTelegramClient(TelegramClient* client) { m_telegramClient = client; }
+    
+    // Font control - uses UI font from preferences
+    void SetUIFont(const wxFont& font) { m_uiFont = font; }
 
 protected:
     void OnPaint(wxPaintEvent& event);
@@ -77,6 +80,9 @@ private:
     wxColour m_verifiedColor;
     wxColour m_botColor;
     
+    // UI font from preferences
+    wxFont m_uiFont;
+    
     // User data
     UserInfo m_userInfo;
     wxBitmap m_profilePhoto;
@@ -98,7 +104,7 @@ private:
     static constexpr int POPUP_MAX_HEIGHT = 300;
     static constexpr int PHOTO_SIZE = 64;
     static constexpr int PADDING = 12;
-    static constexpr int BORDER_WIDTH = 1;
+    static constexpr int BORDER_WIDTH = 2;
     static constexpr int LINE_HEIGHT = 20;
     static constexpr int SMALL_LINE_HEIGHT = 16;
     

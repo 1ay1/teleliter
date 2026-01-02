@@ -342,6 +342,13 @@ void ChatListWidget::SetTreeFont(const wxFont &font) {
   }
 }
 
+void ChatListWidget::SetUIFont(const wxFont &font) {
+  // Apply UI font to UserInfoPopup
+  if (m_userInfoPopup && font.IsOk()) {
+    m_userInfoPopup->SetUIFont(font);
+  }
+}
+
 int64_t ChatListWidget::GetChatIdFromTreeItem(const wxTreeItemId &item) const {
   auto it = m_treeItemToChatId.find(item);
   if (it != m_treeItemToChatId.end()) {

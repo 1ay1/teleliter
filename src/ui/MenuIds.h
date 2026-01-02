@@ -31,6 +31,14 @@ enum {
     ID_UNREAD_FIRST,
     ID_TOGGLE_READ_RECEIPTS,
     
+    // Window menu
+    ID_PREV_CHAT,
+    ID_NEXT_CHAT,
+    ID_CLOSE_CHAT,
+    
+    // Help menu
+    ID_DOCUMENTATION,
+    
     // Widget IDs
     ID_CHAT_TREE,
     ID_MEMBER_LIST,

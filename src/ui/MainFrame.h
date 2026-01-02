@@ -127,6 +127,11 @@ private:
   void OnFullscreen(wxCommandEvent &event);
   void OnToggleUnreadFirst(wxCommandEvent &event);
   void OnToggleReadReceipts(wxCommandEvent &event);
+  void OnRawLog(wxCommandEvent &event);
+  void OnPrevChat(wxCommandEvent &event);
+  void OnNextChat(wxCommandEvent &event);
+  void OnCloseChat(wxCommandEvent &event);
+  void OnDocumentation(wxCommandEvent &event);
 
   // Timer event handlers
   void OnRefreshTimer(wxTimerEvent &event);
