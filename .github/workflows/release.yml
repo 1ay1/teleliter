@@ -7,7 +7,7 @@ on:
 
 env:
   BUILD_TYPE: Release
-  TDLIB_VERSION: "1.8.31"
+  TDLIB_COMMIT: "5742c287cd514e7a1ee7908d63b4e5fca8638799"
 
 jobs:
   build-ubuntu:
@@ -45,13 +45,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local
-          key: tdlib-linux-${{ env.TDLIB_VERSION }}-${{ runner.arch }}
+          key: tdlib-linux-${{ env.TDLIB_COMMIT }}-${{ runner.arch }}
 
       - name: Build TDLib
         if: steps.cache-tdlib.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch v${{ env.TDLIB_VERSION }} https://github.com/tdlib/td.git
+          git clone https://github.com/tdlib/td.git
           cd td
+          git checkout ${{ env.TDLIB_COMMIT }}
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local ..
           cmake --build . --target install -j$(nproc)
@@ -187,14 +188,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\tdlib
-          key: tdlib-windows-${{ env.TDLIB_VERSION }}-x64
+          key: tdlib-windows-${{ env.TDLIB_COMMIT }}-x64
 
       - name: Build TDLib
         if: steps.cache-tdlib-windows.outputs.cache-hit != 'true'
         shell: cmd
         run: |
-          git clone --depth 1 --branch v%TDLIB_VERSION% https://github.com/tdlib/td.git
+          git clone https://github.com/tdlib/td.git
           cd td
+          git checkout %TDLIB_COMMIT%
           mkdir build
           cd build
           cmake -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tdlib ..
