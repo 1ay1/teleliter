@@ -113,12 +113,13 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Samsung/rlottie.git
           cd rlottie
-          # Completely remove NEON source file to avoid arm64 linking issues
+          # Remove NEON source file and filter out NEON references from CMakeLists
           rm -f src/vector/vdrawhelper_neon.cpp
-          # Remove NEON references from CMakeLists
-          sed -i '' '/VDRAWHELPER_NEON/d' src/vector/CMakeLists.txt
+          grep -v "VDRAWHELPER_NEON\|vdrawhelper_neon" src/vector/CMakeLists.txt > src/vector/CMakeLists.txt.new
+          mv src/vector/CMakeLists.txt.new src/vector/CMakeLists.txt
           # Disable examples to avoid linking issues
-          sed -i '' 's/add_subdirectory(example)/#add_subdirectory(example)/' CMakeLists.txt
+          grep -v "add_subdirectory(example)" CMakeLists.txt > CMakeLists.txt.new
+          mv CMakeLists.txt.new CMakeLists.txt
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DLOTTIE_MODULE=OFF -DBUILD_SHARED_LIBS=OFF ..
           make -j$(sysctl -n hw.ncpu)
