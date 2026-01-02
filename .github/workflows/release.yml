@@ -227,8 +227,8 @@ jobs:
 
       - name: Build rlottie from source
         run: |
-          git clone --depth 1 https://github.com/user/rlottie.git /tmp/rlottie || git clone --depth 1 https://github.com/Samsung/rlottie.git /tmp/rlottie
-          cd /tmp/rlottie
+          git clone --depth 1 https://github.com/Samsung/rlottie.git rlottie-src
+          cd rlottie-src
           mkdir build && cd build
           cmake -G "MinGW Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
