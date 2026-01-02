@@ -113,9 +113,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Samsung/rlottie.git
           cd rlottie
-          # Disable NEON assembly on macOS arm64 - it has linking issues
-          sed -i '' 's/set(VDRAWHELPER_NEON_SOURCE/# set(VDRAWHELPER_NEON_SOURCE/' src/vector/CMakeLists.txt
-          sed -i '' 's/target_sources(rlottie PRIVATE ${VDRAWHELPER_NEON_SOURCE})/# target_sources(rlottie PRIVATE ${VDRAWHELPER_NEON_SOURCE})/' src/vector/CMakeLists.txt
+          # Completely remove NEON source file to avoid arm64 linking issues
+          rm -f src/vector/vdrawhelper_neon.cpp
+          # Remove NEON references from CMakeLists
+          sed -i '' '/VDRAWHELPER_NEON/d' src/vector/CMakeLists.txt
+          # Disable examples to avoid linking issues
+          sed -i '' 's/add_subdirectory(example)/#add_subdirectory(example)/' CMakeLists.txt
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DLOTTIE_MODULE=OFF -DBUILD_SHARED_LIBS=OFF ..
           make -j$(sysctl -n hw.ncpu)
