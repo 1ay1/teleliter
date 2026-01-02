@@ -101,10 +101,20 @@ jobs:
           Comment=Telegram client
           EOF
 
-          # Create a simple icon (placeholder)
-          convert -size 256x256 xc:steelblue -fill white -gravity center -pointsize 48 -annotate 0 'TL' AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png 2>/dev/null || \
-            wget -q -O AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png "https://via.placeholder.com/256/4682B4/FFFFFF?text=TL" 2>/dev/null || \
-            touch AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png
+          # Create a simple icon using ImageMagick or Python
+          sudo apt-get install -y imagemagick || true
+          convert -size 256x256 xc:'#4682B4' -fill white -gravity center -pointsize 72 -annotate 0 'TL' AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png || \
+            python3 -c "
+          from PIL import Image, ImageDraw
+          img = Image.new('RGB', (256, 256), '#4682B4')
+          draw = ImageDraw.Draw(img)
+          draw.text((80, 80), 'TL', fill='white')
+          img.save('AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png')
+          " || \
+            # Fallback: download a valid placeholder PNG
+            wget -q -O AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png "https://raw.githubusercontent.com/nicehash/NiceHashMiner/master/src/NiceHashMiner/Resources/icon.png" || \
+            # Last resort: create minimal valid PNG with printf
+            printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00\x00\x00\x01\x00\x08\x02\x00\x00\x00\xd3\x10?1\x00\x00\x00\x12IDATx\x9cc\xfc\xcf\xc0\xf0\x9f\x81\x81\x81\x81\x81\x81\x01\x00\x05\x04\x01\x01\xb2\xce\xf7\xf1\x00\x00\x00\x00IEND\xaeB`\x82' > AppDir/usr/share/icons/hicolor/256x256/apps/teleliter.png
 
           # Create AppImage with bundled libraries
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage \
