@@ -24,10 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # Try wxWidgets 3.2 first, fall back to 3.0 if not available
+          sudo apt-get install -y libwxgtk3.2-dev || sudo apt-get install -y libwxgtk3.0-gtk3-dev
           sudo apt-get install -y \
             build-essential \
             cmake \
-            libwxgtk3.2-dev \
             libssl-dev \
             zlib1g-dev \
             libwebp-dev \
