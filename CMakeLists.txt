@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.10)
-project(teleliter)
+
+# Read version from central VERSION file
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PROJECT_VERSION)
+string(STRIP "${PROJECT_VERSION}" PROJECT_VERSION)
+
+project(teleliter VERSION ${PROJECT_VERSION})
+
+message(STATUS "Building teleliter version ${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
