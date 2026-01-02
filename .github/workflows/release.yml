@@ -195,98 +195,50 @@ jobs:
   build-windows:
     runs-on: windows-latest
 
-    env:
-      VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg_cache
+    defaults:
+      run:
+        shell: msys2 {0}
 
     steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-wxwidgets3.2-msw
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libwebp
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-rlottie
+            mingw-w64-x86_64-tdlib
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Read version from VERSION file
         id: version
-        shell: bash
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
-
-      - name: Create vcpkg binary cache directory
-        run: |
-          if (!(Test-Path "$env:VCPKG_DEFAULT_BINARY_CACHE")) {
-            New-Item -ItemType Directory -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" -Force
-          }
-
-      - name: Cache vcpkg binary cache
-        id: cache-vcpkg-binary
-        uses: actions/cache@v4
-        with:
-          path: C:\vcpkg_cache
-          key: vcpkg-binary-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
-          restore-keys: |
-            vcpkg-binary-windows-x64-
-
-      - name: Cache vcpkg installed packages
-        id: cache-vcpkg
-        uses: actions/cache@v4
-        with:
-          path: C:\vcpkg\installed
-          key: vcpkg-installed-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
-
-      - name: Setup vcpkg
-        run: |
-          if (!(Test-Path "C:\vcpkg\.git")) {
-            Remove-Item -Recurse -Force "C:\vcpkg" -ErrorAction SilentlyContinue
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          }
-          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          echo "C:\vcpkg" >> $env:GITHUB_PATH
-
-      - name: Install dependencies via vcpkg
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
-        run: |
-          C:\vcpkg\vcpkg install --triplet=x64-windows `
-            wxwidgets `
-            openssl `
-            zlib `
-            libwebp `
-            ffmpeg `
-            sdl2 `
-            rlottie
-
-      - name: Cache TDLib
-        id: cache-tdlib-windows
-        uses: actions/cache@v4
-        with:
-          path: C:\tdlib
-          key: tdlib-windows-${{ env.TDLIB_COMMIT }}-x64
-          restore-keys: |
-            tdlib-windows-${{ env.TDLIB_COMMIT }}-
-            tdlib-windows-
-
-      - name: Build TDLib
-        if: steps.cache-tdlib-windows.outputs.cache-hit != 'true'
-        shell: cmd
-        run: |
-          git clone https://github.com/tdlib/td.git
-          cd td
-          git checkout %TDLIB_COMMIT%
-          mkdir build
-          cd build
-          cmake -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tdlib ..
-          cmake --build . --target install --config Release -j %NUMBER_OF_PROCESSORS%
 
       - name: Configure CMake
         run: |
-          cmake -B build -A x64 `
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} `
-            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
-            -DTDLIB_ROOT=C:/tdlib
+          cmake -B build -G "MinGW Makefiles" \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
       - name: Build
-        run: cmake --build build --config ${{env.BUILD_TYPE}} -j $env:NUMBER_OF_PROCESSORS
+        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
 
       - name: Package
-        shell: bash
         run: |
           mkdir -p release
-          cp build/Release/teleliter.exe release/
+          cp build/teleliter.exe release/
+          # Copy required DLLs
+          ldd build/teleliter.exe | grep mingw64 | awk '{print $3}' | xargs -I{} cp {} release/
           cp VERSION release/
           cp -r doc release/ 2>/dev/null || true
           cd release
