@@ -24,10 +24,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # Install wxWidgets - try different package names for compatibility
-          sudo apt-get install -y libwxgtk3.2-dev libwxgtk-webview3.2-dev 2>/dev/null || \
-            sudo apt-get install -y libwxgtk3.0-gtk3-dev libwxgtk-webview3.0-gtk3-dev 2>/dev/null || \
+          # Install wxWidgets - check what's available and install
+          if apt-cache show libwxgtk3.2-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libwxgtk3.2-dev libwxgtk-media3.2-dev
+          elif apt-cache show libwxgtk3.0-gtk3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libwxgtk3.0-gtk3-dev libwxgtk-media3.0-gtk3-dev
+          else
             sudo apt-get install -y libwxgtk3.0-dev
+          fi
           sudo apt-get install -y \
             build-essential \
             cmake \
