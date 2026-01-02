@@ -89,8 +89,16 @@ jobs:
             webp \
             ffmpeg \
             sdl2 \
-            rlottie \
             tdlib
+
+      - name: Build rlottie from source
+        run: |
+          git clone --depth 1 https://github.com/Samsung/rlottie.git
+          cd rlottie
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local ..
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
 
       - name: Configure CMake
         run: |
