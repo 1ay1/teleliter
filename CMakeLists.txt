@@ -11,6 +11,9 @@ message(STATUS "Building teleliter version ${PROJECT_VERSION}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Option for static linking on Linux
+option(STATIC_LINK "Link dependencies statically on Linux" OFF)
+
 # Find wxWidgets
 find_package(wxWidgets REQUIRED COMPONENTS core base richtext media stc)
 include(${wxWidgets_USE_FILE})
@@ -252,7 +255,11 @@ if(APPLE)
     endif()
 elseif(UNIX)
     if(PkgConfig_FOUND)
-        pkg_check_modules(SDL2 sdl2)
+        if(STATIC_LINK AND UNIX AND NOT APPLE)
+            pkg_check_modules(SDL2 STATIC sdl2)
+        else()
+            pkg_check_modules(SDL2 sdl2)
+        endif()
     endif()
     if(NOT SDL2_FOUND)
         find_path(SDL2_INCLUDE_DIRS SDL.h
@@ -279,7 +286,11 @@ endif()
 set(RLOTTIE_FOUND FALSE)
 
 if(PkgConfig_FOUND)
-    pkg_check_modules(RLOTTIE rlottie)
+    if(STATIC_LINK AND UNIX AND NOT APPLE)
+        pkg_check_modules(RLOTTIE STATIC rlottie)
+    else()
+        pkg_check_modules(RLOTTIE rlottie)
+    endif()
 endif()
 
 if(NOT RLOTTIE_FOUND)
@@ -343,17 +354,37 @@ if(RLOTTIE_FOUND)
 endif()
 
 # Link libraries - order matters for static linking
-target_link_libraries(teleliter
-    ${wxWidgets_LIBRARIES}
-    ${TDLIB_LIBRARIES}
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    ZLIB::ZLIB
-    ${WEBP_LIBRARIES}
-    ${FFMPEG_LIBRARIES}
-    ${SDL2_LIBRARIES}
-    m
-)
+if(STATIC_LINK AND UNIX AND NOT APPLE)
+    # For static linking, we need to link whole archives and resolve all dependencies
+    target_link_libraries(teleliter
+        ${wxWidgets_LIBRARIES}
+        ${TDLIB_LIBRARIES}
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        ZLIB::ZLIB
+        ${WEBP_LIBRARIES}
+        ${FFMPEG_LIBRARIES}
+        ${SDL2_LIBRARIES}
+        # Additional dependencies for static FFmpeg
+        -lx264 -lx265 -lvpx -lmp3lame -lopus -lvorbis -lvorbisenc -logg
+        -lva -lva-drm -lva-x11 -ldrm
+        -lXext -lX11 -lxcb -lXau -lXdmcp
+        -lbz2 -llzma
+        m
+    )
+else()
+    target_link_libraries(teleliter
+        ${wxWidgets_LIBRARIES}
+        ${TDLIB_LIBRARIES}
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        ZLIB::ZLIB
+        ${WEBP_LIBRARIES}
+        ${FFMPEG_LIBRARIES}
+        ${SDL2_LIBRARIES}
+        m
+    )
+endif()
 
 if(RLOTTIE_FOUND)
     target_link_libraries(teleliter ${RLOTTIE_LIBRARIES})
