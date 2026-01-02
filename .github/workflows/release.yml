@@ -7,6 +7,7 @@ on:
 
 env:
   BUILD_TYPE: Release
+  TDLIB_VERSION: "1.8.31"
 
 jobs:
   build-ubuntu:
@@ -39,9 +40,17 @@ jobs:
             librlottie-dev \
             gperf
 
+      - name: Cache TDLib
+        id: cache-tdlib
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: tdlib-linux-${{ env.TDLIB_VERSION }}-${{ runner.arch }}
+
       - name: Build TDLib
+        if: steps.cache-tdlib.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/tdlib/td.git
+          git clone --depth 1 --branch v${{ env.TDLIB_VERSION }} https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local ..
@@ -91,7 +100,15 @@ jobs:
             sdl2 \
             tdlib
 
+      - name: Cache rlottie
+        id: cache-rlottie
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librlottie*
+          key: rlottie-macos-${{ runner.arch }}
+
       - name: Build rlottie from source
+        if: steps.cache-rlottie.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 https://github.com/Samsung/rlottie.git
           cd rlottie
@@ -138,13 +155,23 @@ jobs:
         shell: bash
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
 
+      - name: Cache vcpkg packages
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+
       - name: Install vcpkg
         run: |
-          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          if (!(Test-Path "C:\vcpkg")) {
+            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          }
           C:\vcpkg\bootstrap-vcpkg.bat
           echo "C:\vcpkg" >> $env:GITHUB_PATH
 
       - name: Install dependencies via vcpkg
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
           C:\vcpkg\vcpkg install --triplet=x64-windows `
             wxwidgets `
@@ -155,10 +182,18 @@ jobs:
             sdl2 `
             rlottie
 
+      - name: Cache TDLib
+        id: cache-tdlib-windows
+        uses: actions/cache@v4
+        with:
+          path: C:\tdlib
+          key: tdlib-windows-${{ env.TDLIB_VERSION }}-x64
+
       - name: Build TDLib
+        if: steps.cache-tdlib-windows.outputs.cache-hit != 'true'
         shell: cmd
         run: |
-          git clone --depth 1 https://github.com/tdlib/td.git
+          git clone --depth 1 --branch v%TDLIB_VERSION% https://github.com/tdlib/td.git
           cd td
           mkdir build
           cd build
