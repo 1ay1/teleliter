@@ -920,8 +920,8 @@ wxString MediaPopup::GetMediaLabel() const {
   case MediaType::Video:
     return "Video";
   case MediaType::Sticker:
-    return "Sticker" +
-           (m_mediaInfo.emoji.IsEmpty() ? "" : " " + m_mediaInfo.emoji);
+    return wxString("Sticker") +
+           (m_mediaInfo.emoji.IsEmpty() ? wxString("") : wxString(" ") + m_mediaInfo.emoji);
   case MediaType::GIF:
     return "GIF";
   case MediaType::Voice:

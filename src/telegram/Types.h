@@ -8,6 +8,11 @@
 #include <vector>
 #include <wx/wx.h>
 
+// Undefine Windows macros that conflict with our type names
+#ifdef SendMessageCallback
+#undef SendMessageCallback
+#endif
+
 // Authentication state
 enum class AuthState {
   WaitTdlibParameters,
