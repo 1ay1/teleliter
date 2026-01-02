@@ -50,34 +50,43 @@ if(TDLIB_ROOT)
     set(TDLIB_INCLUDE_DIRS "${TDLIB_ROOT}/include")
     set(TDLIB_LIBRARY_DIR "${TDLIB_ROOT}/lib")
 
+    # Determine library prefix and suffix based on platform
+    if(WIN32)
+        set(TDLIB_LIB_PREFIX "")
+        set(TDLIB_LIB_SUFFIX ".lib")
+    else()
+        set(TDLIB_LIB_PREFIX "lib")
+        set(TDLIB_LIB_SUFFIX ".a")
+    endif()
+
     # Find all TDLib static libraries for C++ interface
     # Order matters for static linking - dependencies must come after dependents
-    # Check for newer TDLib structure (has libtdmtproto, libtde2e)
-    if(EXISTS "${TDLIB_LIBRARY_DIR}/libtdmtproto.a")
+    # Check for newer TDLib structure (has tdmtproto, tde2e)
+    if(EXISTS "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdmtproto${TDLIB_LIB_SUFFIX}")
         # Newer TDLib (1.8.x+)
         set(TDLIB_STATIC_LIBS
-            "${TDLIB_LIBRARY_DIR}/libtdclient.a"
-            "${TDLIB_LIBRARY_DIR}/libtdcore.a"
-            "${TDLIB_LIBRARY_DIR}/libtdapi.a"
-            "${TDLIB_LIBRARY_DIR}/libtdmtproto.a"
-            "${TDLIB_LIBRARY_DIR}/libtddb.a"
-            "${TDLIB_LIBRARY_DIR}/libtdsqlite.a"
-            "${TDLIB_LIBRARY_DIR}/libtdnet.a"
-            "${TDLIB_LIBRARY_DIR}/libtde2e.a"
-            "${TDLIB_LIBRARY_DIR}/libtdactor.a"
-            "${TDLIB_LIBRARY_DIR}/libtdutils.a"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdclient${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdcore${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdapi${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdmtproto${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tddb${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdsqlite${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdnet${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tde2e${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdactor${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdutils${TDLIB_LIB_SUFFIX}"
         )
     else()
         # Older TDLib
         set(TDLIB_STATIC_LIBS
-            "${TDLIB_LIBRARY_DIR}/libtdclient.a"
-            "${TDLIB_LIBRARY_DIR}/libtdcore.a"
-            "${TDLIB_LIBRARY_DIR}/libtdapi.a"
-            "${TDLIB_LIBRARY_DIR}/libtddb.a"
-            "${TDLIB_LIBRARY_DIR}/libtdsqlite.a"
-            "${TDLIB_LIBRARY_DIR}/libtdnet.a"
-            "${TDLIB_LIBRARY_DIR}/libtdactor.a"
-            "${TDLIB_LIBRARY_DIR}/libtdutils.a"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdclient${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdcore${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdapi${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tddb${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdsqlite${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdnet${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdactor${TDLIB_LIB_SUFFIX}"
+            "${TDLIB_LIBRARY_DIR}/${TDLIB_LIB_PREFIX}tdutils${TDLIB_LIB_SUFFIX}"
         )
     endif()
 
