@@ -215,8 +215,8 @@ jobs:
             mingw-w64-x86_64-libwebp
             mingw-w64-x86_64-ffmpeg
             mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-rlottie
             mingw-w64-x86_64-tdlib
+            git
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -224,6 +224,21 @@ jobs:
       - name: Read version from VERSION file
         id: version
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Build rlottie from source
+        run: |
+          git clone --depth 1 https://github.com/user/rlottie.git /tmp/rlottie || git clone --depth 1 https://github.com/Samsung/rlottie.git /tmp/rlottie
+          cd /tmp/rlottie
+          mkdir build && cd build
+          cmake -G "MinGW Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/mingw64 \
+            -DLIB_INSTALL_DIR=/mingw64/lib \
+            -DLOTTIE_MODULE=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            ..
+          mingw32-make -j$(nproc)
+          mingw32-make install
 
       - name: Configure CMake
         run: |
