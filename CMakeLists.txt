@@ -15,25 +15,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(wxWidgets REQUIRED COMPONENTS core base richtext media stc)
 include(${wxWidgets_USE_FILE})
 
-# Find TDLib - prefer locally built version in ~/.local
-set(LOCAL_TDLIB_PATH "$ENV{HOME}/.local")
-if(EXISTS "${LOCAL_TDLIB_PATH}/include/td/telegram/Client.h")
-    set(TDLIB_ROOT "${LOCAL_TDLIB_PATH}")
-    message(STATUS "Found TDLib in ~/.local: ${TDLIB_ROOT}")
-elseif(EXISTS "/usr/include/td/telegram/Client.h")
-    set(TDLIB_ROOT "/usr")
-    message(STATUS "Found TDLib in /usr: ${TDLIB_ROOT}")
-elseif(APPLE)
-    # Fall back to Homebrew on macOS
-    execute_process(
-        COMMAND brew --prefix tdlib
-        OUTPUT_VARIABLE HOMEBREW_TDLIB_PREFIX
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    if(HOMEBREW_TDLIB_PREFIX)
-        set(TDLIB_ROOT "${HOMEBREW_TDLIB_PREFIX}")
-        message(STATUS "Found TDLib via Homebrew: ${TDLIB_ROOT}")
+# Find TDLib - check if TDLIB_ROOT was passed via -DTDLIB_ROOT=, otherwise auto-detect
+if(TDLIB_ROOT)
+    message(STATUS "Using TDLib from specified TDLIB_ROOT: ${TDLIB_ROOT}")
+else()
+    # Auto-detect TDLib location - prefer locally built version in ~/.local
+    set(LOCAL_TDLIB_PATH "$ENV{HOME}/.local")
+    if(EXISTS "${LOCAL_TDLIB_PATH}/include/td/telegram/Client.h")
+        set(TDLIB_ROOT "${LOCAL_TDLIB_PATH}")
+        message(STATUS "Found TDLib in ~/.local: ${TDLIB_ROOT}")
+    elseif(EXISTS "/usr/include/td/telegram/Client.h")
+        set(TDLIB_ROOT "/usr")
+        message(STATUS "Found TDLib in /usr: ${TDLIB_ROOT}")
+    elseif(APPLE)
+        # Fall back to Homebrew on macOS
+        execute_process(
+            COMMAND brew --prefix tdlib
+            OUTPUT_VARIABLE HOMEBREW_TDLIB_PREFIX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(HOMEBREW_TDLIB_PREFIX)
+            set(TDLIB_ROOT "${HOMEBREW_TDLIB_PREFIX}")
+            message(STATUS "Found TDLib via Homebrew: ${TDLIB_ROOT}")
+        endif()
     endif()
 endif()
 

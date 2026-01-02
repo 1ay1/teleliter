@@ -99,7 +99,24 @@ jobs:
             webp \
             ffmpeg \
             sdl2 \
-            tdlib
+            gperf
+
+      - name: Cache TDLib
+        id: cache-tdlib-macos
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: tdlib-macos-${{ env.TDLIB_COMMIT }}-${{ runner.arch }}
+
+      - name: Build TDLib
+        if: steps.cache-tdlib-macos.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/tdlib/td.git
+          cd td
+          git checkout ${{ env.TDLIB_COMMIT }}
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) ..
+          cmake --build . --target install -j$(sysctl -n hw.ncpu)
 
       - name: Cache rlottie
         id: cache-rlottie
@@ -128,7 +145,8 @@ jobs:
       - name: Configure CMake
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl)
+            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) \
+            -DTDLIB_ROOT=$HOME/.local
 
       - name: Build
         run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(sysctl -n hw.ncpu)
