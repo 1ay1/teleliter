@@ -475,33 +475,32 @@ void MessageFormatter::AppendReactions(
 
   m_chatArea->ResetStyles();
 
-  // Indent to align with message content
-  // Timestamp is [HH:MM:SS] = 11 chars, username column = m_usernameWidth + 3
-  wxString indent = "           ";              // Timestamp width (11 chars)
-  indent += wxString(' ', m_usernameWidth + 3); // Username column
-
+  // Simple fixed indent + reaction indicator
+  // Using a short fixed indent that looks good regardless of username width
   m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
-  m_chatArea->WriteText(indent);
-  m_chatArea->WriteText(wxString::FromUTF8("╰ "));
+  m_chatArea->WriteText("                    ");  // Fixed 20-char indent
+  m_chatArea->WriteText(wxString::FromUTF8("\xE2\x94\x94\xE2\x94\x80 "));  // └─ (box drawing chars)
   m_chatArea->EndTextColour();
 
   bool first = true;
   for (const auto &[emoji, users] : reactions) {
     if (!first) {
       m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
-      m_chatArea->WriteText(" · ");
+      m_chatArea->WriteText("  ");  // Simple space separator
       m_chatArea->EndTextColour();
     }
     first = false;
 
+    // Write emoji
     m_chatArea->WriteText(emoji);
+    m_chatArea->WriteText(" ");
 
-    // Show count or usernames
+    // Show count or usernames in gray
     m_chatArea->BeginTextColour(m_chatArea->GetTimestampColor());
     if (users.size() == 1) {
-      m_chatArea->WriteText(" " + users[0]);
+      m_chatArea->WriteText(users[0]);
     } else {
-      m_chatArea->WriteText(wxString::Format(" %zu", users.size()));
+      m_chatArea->WriteText(wxString::Format("%zu", users.size()));
     }
     m_chatArea->EndTextColour();
   }

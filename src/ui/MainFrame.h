@@ -97,6 +97,8 @@ private:
   void SetupFonts();
   void ApplySavedFonts();
   void PopulateDummyData();
+  void InitDemoMode();
+  void PopulateDemoChatList();
 
   // Transfer handling
   void UpdateTransferProgress(const TransferInfo &info);

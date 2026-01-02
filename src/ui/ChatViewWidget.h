@@ -159,6 +159,7 @@ public:
                       int parentBottom = -1);
   void HideMediaPopup();
   void UpdateMediaPopup(int32_t fileId, const wxString &localPath);
+  MediaPopup *GetMediaPopup() { return m_mediaPopup; }
   
   // Font control for media popup
   void SetUIFont(const wxFont &font);
