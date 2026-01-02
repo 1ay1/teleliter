@@ -134,7 +134,7 @@ jobs:
             /usr/local/include/rlottie*
             /usr/local/lib/cmake/rlottie
             /usr/local/lib/pkgconfig/rlottie.pc
-          key: rlottie-macos-${{ runner.arch }}-v2
+          key: rlottie-macos-${{ runner.arch }}-v3
           restore-keys: |
             rlottie-macos-${{ runner.arch }}-
             rlottie-macos-
@@ -147,28 +147,20 @@ jobs:
           # Disable examples to avoid linking issues
           grep -v "add_subdirectory(example)" CMakeLists.txt > CMakeLists.txt.new
           mv CMakeLists.txt.new CMakeLists.txt
-          # Disable ARM NEON by undefining __ARM_NEON__ and provide memfill32 fallback
-          # Patch vdrawhelper.h to add memfill32 fallback for non-NEON builds
-          cat >> src/vector/vdrawhelper.h << 'EOFPATCH'
-
-          // Fallback memfill32 for non-NEON builds
-          #ifndef __ARM_NEON__
-          inline void memfill32(uint32_t* dest, uint32_t value, int count) {
-              for (int i = 0; i < count; ++i) {
-                  dest[i] = value;
-              }
-          }
-          #endif
-          EOFPATCH
+          # Remove the NEON source file entirely to avoid pixman assembly symbol issues on ARM64 macOS
+          # The vdrawhelper_neon.cpp file references external pixman asm symbols that aren't available
+          sed -i '' 's|"${CMAKE_CURRENT_LIST_DIR}/vdrawhelper_neon.cpp"||' src/vector/CMakeLists.txt
+          # Patch vdrawhelper.cpp to always use fallback memfill32 on ARM64 macOS
+          # The original condition is: #if !defined(__SSE2__) && !defined(__ARM_NEON__)
+          # We change it to always enable the fallback by removing the ARM_NEON check
+          sed -i '' 's/#if !defined(__SSE2__) && !defined(__ARM_NEON__)/#if !defined(__SSE2__)/' src/vector/vdrawhelper.cpp
           mkdir build && cd build
-          # Build with NEON disabled via compiler flag
           cmake -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DLIB_INSTALL_DIR=/usr/local/lib \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DLOTTIE_MODULE=OFF \
             -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_CXX_FLAGS="-U__ARM_NEON__ -D__ARM_NEON__=0" \
             ..
           make -j$(sysctl -n hw.ncpu)
           sudo make install
