@@ -297,15 +297,33 @@ jobs:
       - name: Install dependencies via vcpkg
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
-          C:\vcpkg\vcpkg install --triplet=x64-windows-release `
-            wxwidgets `
-            openssl `
-            zlib `
-            libwebp `
-            ffmpeg `
-            sdl2 `
-            rlottie `
-            gperf
+          # Retry logic for flaky network
+          $maxRetries = 3
+          $retryCount = 0
+          $success = $false
+          while (-not $success -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            Write-Host "Attempt $retryCount of $maxRetries"
+            C:\vcpkg\vcpkg install --triplet=x64-windows-release `
+              wxwidgets `
+              openssl `
+              zlib `
+              libwebp `
+              ffmpeg[core,avcodec,avformat,swscale,swresample] `
+              sdl2 `
+              rlottie `
+              gperf
+            if ($LASTEXITCODE -eq 0) {
+              $success = $true
+            } else {
+              Write-Host "vcpkg install failed, retrying in 30 seconds..."
+              Start-Sleep -Seconds 30
+            }
+          }
+          if (-not $success) {
+            Write-Host "vcpkg install failed after $maxRetries attempts"
+            exit 1
+          }
 
       - name: Cache TDLib
         id: cache-tdlib-windows
