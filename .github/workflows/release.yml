@@ -305,7 +305,7 @@ jobs:
             $retryCount++
             Write-Host "Attempt $retryCount of $maxRetries"
             C:\vcpkg\vcpkg install --triplet=x64-windows-release `
-              wxwidgets `
+                wxwidgets[core,sound,media] `
               openssl `
               zlib `
               libwebp `
