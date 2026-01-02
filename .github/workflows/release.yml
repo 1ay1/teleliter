@@ -215,7 +215,7 @@ jobs:
             mingw-w64-x86_64-libwebp
             mingw-w64-x86_64-ffmpeg
             mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-tdlib
+            mingw-w64-x86_64-gperf
             git
 
       - name: Checkout
@@ -224,6 +224,18 @@ jobs:
       - name: Read version from VERSION file
         id: version
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Build TDLib from source
+        run: |
+          git clone --depth 1 https://github.com/tdlib/td.git tdlib-src
+          cd tdlib-src
+          mkdir build && cd build
+          cmake -G "MinGW Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/mingw64 \
+            ..
+          mingw32-make -j$(nproc)
+          mingw32-make install
 
       - name: Build rlottie from source
         run: |
