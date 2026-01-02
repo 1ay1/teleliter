@@ -96,7 +96,7 @@ jobs:
           git clone --depth 1 https://github.com/Samsung/rlottie.git
           cd rlottie
           mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local ..
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
           make -j$(sysctl -n hw.ncpu)
           sudo make install
 
