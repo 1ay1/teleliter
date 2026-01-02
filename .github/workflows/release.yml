@@ -169,6 +169,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
 
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg_cache
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -178,19 +181,35 @@ jobs:
         shell: bash
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
 
-      - name: Cache vcpkg packages
+      - name: Create vcpkg binary cache directory
+        run: |
+          if (!(Test-Path "$env:VCPKG_DEFAULT_BINARY_CACHE")) {
+            New-Item -ItemType Directory -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" -Force
+          }
+
+      - name: Cache vcpkg binary cache
+        id: cache-vcpkg-binary
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg_cache
+          key: vcpkg-binary-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-binary-windows-x64-
+
+      - name: Cache vcpkg installed packages
         id: cache-vcpkg
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          key: vcpkg-installed-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
 
-      - name: Install vcpkg
+      - name: Setup vcpkg
         run: |
-          if (!(Test-Path "C:\vcpkg")) {
+          if (!(Test-Path "C:\vcpkg\.git")) {
+            Remove-Item -Recurse -Force "C:\vcpkg" -ErrorAction SilentlyContinue
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
           }
-          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           echo "C:\vcpkg" >> $env:GITHUB_PATH
 
       - name: Install dependencies via vcpkg
