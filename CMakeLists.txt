@@ -170,7 +170,24 @@ endif()
 # Find FFmpeg libraries for all media playback (single source of truth)
 set(FFMPEG_FOUND FALSE)
 
-if(APPLE)
+if(WIN32)
+    # Windows - use vcpkg
+    find_path(FFMPEG_INCLUDE_DIRS libavformat/avformat.h)
+    find_library(AVFORMAT_LIBRARY avformat)
+    find_library(AVCODEC_LIBRARY avcodec)
+    find_library(SWSCALE_LIBRARY swscale)
+    find_library(SWRESAMPLE_LIBRARY swresample)
+    find_library(AVUTIL_LIBRARY avutil)
+
+    if(AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY AND AVUTIL_LIBRARY)
+        set(FFMPEG_FOUND TRUE)
+        set(FFMPEG_LIBRARIES ${AVFORMAT_LIBRARY} ${AVCODEC_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY} ${AVUTIL_LIBRARY})
+        message(STATUS "Found FFmpeg libraries: ${FFMPEG_LIBRARIES}")
+        add_definitions(-DHAVE_FFMPEG)
+    else()
+        message(WARNING "FFmpeg not found on Windows")
+    endif()
+elseif(APPLE)
     # Try Homebrew first on macOS
     execute_process(
         COMMAND brew --prefix ffmpeg
@@ -246,7 +263,20 @@ endif()
 # Find SDL2 for audio playback
 set(SDL2_FOUND FALSE)
 
-if(APPLE)
+if(WIN32)
+    # Windows - use vcpkg
+    find_path(SDL2_INCLUDE_DIRS SDL.h PATH_SUFFIXES SDL2)
+    find_library(SDL2_LIBRARY SDL2)
+    find_library(SDL2MAIN_LIBRARY SDL2main)
+    if(SDL2_INCLUDE_DIRS AND SDL2_LIBRARY)
+        set(SDL2_FOUND TRUE)
+        set(SDL2_LIBRARIES ${SDL2MAIN_LIBRARY} ${SDL2_LIBRARY})
+        message(STATUS "Found SDL2: ${SDL2_LIBRARIES}")
+        add_definitions(-DHAVE_SDL2)
+    else()
+        message(WARNING "SDL2 not found on Windows")
+    endif()
+elseif(APPLE)
     execute_process(
         COMMAND brew --prefix sdl2
         OUTPUT_VARIABLE SDL2_PREFIX
@@ -423,6 +453,22 @@ if(UNIX AND NOT APPLE)
         pthread
         dl
     )
+endif()
+
+# On Windows, link required system libraries
+if(WIN32)
+    target_link_libraries(teleliter
+        Crypt32
+        Ws2_32
+        Normaliz
+        Psapi
+        Shlwapi
+        Bcrypt
+        Mswsock
+        Userenv
+    )
+    # Set Windows subsystem to avoid console window
+    set_target_properties(teleliter PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 # Enable warnings
