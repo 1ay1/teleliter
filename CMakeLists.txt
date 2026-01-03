@@ -391,8 +391,11 @@ else()
         ${WEBP_LIBRARIES}
         ${FFMPEG_LIBRARIES}
         ${SDL2_LIBRARIES}
-        m
     )
+    # Link math library only on Unix (not needed on Windows)
+    if(UNIX)
+        target_link_libraries(teleliter m)
+    endif()
 endif()
 
 if(RLOTTIE_FOUND)
