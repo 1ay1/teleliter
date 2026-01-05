@@ -3167,7 +3167,7 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent &event) {
     MediaSpan *mediaSpan = GetMediaSpanAtPosition(charPos);
     if (mediaSpan) {
       MediaInfo info = GetMediaInfoForSpan(*mediaSpan);
-      ShowMediaPopup(info, ClientToScreen(pos),
+      ShowMediaPopup(info, display->ClientToScreen(pos),
                      GetScreenRect().GetBottom()); // Use ChatViewWidget bottom
       return;
     }
@@ -3175,7 +3175,7 @@ void ChatViewWidget::OnLeftDown(wxMouseEvent &event) {
     // Check for edit markers
     EditSpan *editSpan = GetEditSpanAtPosition(charPos);
     if (editSpan) {
-      ShowEditHistoryPopup(*editSpan, ClientToScreen(pos));
+      ShowEditHistoryPopup(*editSpan, display->ClientToScreen(pos));
       return;
     }
   }
