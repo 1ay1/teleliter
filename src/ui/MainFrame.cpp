@@ -63,10 +63,11 @@ static wxString FormatLastSeen(int64_t lastSeenTime) {
   do {                                                                         \
   } while (0)
 
-wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
-    EVT_MENU(wxID_ABOUT, MainFrame::OnAbout) EVT_MENU(
-        ID_LOGIN, MainFrame::OnLogin) EVT_MENU(ID_LOGOUT, MainFrame::OnLogout)
-        EVT_MENU(ID_RAW_LOG, MainFrame::OnRawLog)
+wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
+    wxID_EXIT, MainFrame::OnExit) EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
+    EVT_MENU(ID_LOGIN, MainFrame::OnLogin) EVT_MENU(
+        ID_LOGOUT, MainFrame::OnLogout) EVT_MENU(ID_RAW_LOG,
+                                                 MainFrame::OnRawLog)
         EVT_MENU(ID_NEW_CHAT, MainFrame::OnNewChat) EVT_MENU(
             ID_NEW_GROUP,
             MainFrame::OnNewGroup) EVT_MENU(ID_NEW_CHANNEL,
@@ -86,10 +87,16 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
                                 EVT_MENU(ID_FULLSCREEN, MainFrame::OnFullscreen)
                                     EVT_MENU(ID_UNREAD_FIRST,
                                              MainFrame::OnToggleUnreadFirst)
-    EVT_MENU(ID_PREV_CHAT, MainFrame::OnPrevChat)
-    EVT_MENU(ID_NEXT_CHAT, MainFrame::OnNextChat)
-    EVT_MENU(ID_CLOSE_CHAT, MainFrame::OnCloseChat)
-    EVT_MENU(ID_DOCUMENTATION, MainFrame::OnDocumentation)
+                                        EVT_MENU(ID_PREV_CHAT,
+                                                 MainFrame::OnPrevChat)
+                                            EVT_MENU(ID_NEXT_CHAT,
+                                                     MainFrame::OnNextChat)
+                                                EVT_MENU(ID_CLOSE_CHAT,
+                                                         MainFrame::OnCloseChat)
+                                                    EVT_MENU(
+                                                        ID_DOCUMENTATION,
+                                                        MainFrame::
+                                                            OnDocumentation)
     // Tree events are bound dynamically in CreateMainLayout() since tree is in
     // ChatListWidget
     EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST,
@@ -158,14 +165,14 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(wxID_EXIT, MainFrame::OnExit)
   m_serviceLog->SetStatusBarManager(m_statusBar);
   m_serviceLog->SetTelegramClient(m_telegramClient);
   m_serviceLog->Start();
-  
+
   // Log initial startup message
   m_serviceLog->LogSystem("Teleliter started - connecting to Telegram...");
 
   // Connect chat list widget to telegram client (for online status lookup)
   if (m_chatListWidget) {
     m_chatListWidget->SetTelegramClient(m_telegramClient);
-    
+
     // Set up lazy loading callback for chat list
     m_chatListWidget->SetLoadMoreCallback([this]() {
       if (m_telegramClient && m_telegramClient->HasMoreChats()) {
@@ -854,141 +861,163 @@ void MainFrame::OnLogout(wxCommandEvent &event) {
 
 void MainFrame::OnNewChat(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
-  wxTextEntryDialog dlg(this,
-                        "Enter username (without @) or phone number (+1234...):",
-                        "New Private Chat", "", wxOK | wxCANCEL | wxCENTRE);
+
+  wxTextEntryDialog dlg(
+      this, "Enter username (without @) or phone number (+1234...):",
+      "New Private Chat", "", wxOK | wxCANCEL | wxCENTRE);
   if (dlg.ShowModal() == wxID_OK) {
     wxString contact = dlg.GetValue().Trim().Trim(false);
-    if (contact.IsEmpty()) return;
-    
+    if (contact.IsEmpty())
+      return;
+
     // Remove @ prefix if user included it
     if (contact.StartsWith("@")) {
       contact = contact.Mid(1);
     }
-    
+
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
           wxDateTime::Now().Format("%H:%M:%S"),
           "Searching for user: " + contact + "...");
     }
-    
+
     // TODO: Call TelegramClient::SearchPublicChat when implemented
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
           wxDateTime::Now().Format("%H:%M:%S"),
-          "Use /query " + contact + " to start a chat (feature in development)");
+          "Use /query " + contact +
+              " to start a chat (feature in development)");
     }
   }
 }
 
 void MainFrame::OnNewGroup(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
-  wxDialog dialog(this, wxID_ANY, "New Group", wxDefaultPosition, wxSize(400, 200));
+
+  wxDialog dialog(this, wxID_ANY, "New Group", wxDefaultPosition,
+                  wxSize(400, 200));
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-  
+
   sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Group Name:"), 0, wxALL, 10);
-  wxTextCtrl *nameCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+  wxTextCtrl *nameCtrl =
+      new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
   sizer->Add(nameCtrl, 0, wxLEFT | wxRIGHT, 10);
-  
-  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Description (optional):"), 0, wxALL, 10);
-  wxTextCtrl *descCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60), wxTE_MULTILINE);
+
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Description (optional):"), 0,
+             wxALL, 10);
+  wxTextCtrl *descCtrl =
+      new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60),
+                     wxTE_MULTILINE);
   sizer->Add(descCtrl, 0, wxLEFT | wxRIGHT, 10);
-  
+
   wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
   btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Cancel"), 0, wxALL, 5);
   btnSizer->Add(new wxButton(&dialog, wxID_OK, "Create"), 0, wxALL, 5);
   sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxTOP, 15);
-  
+
   dialog.SetSizer(sizer);
-  
+
   if (dialog.ShowModal() == wxID_OK) {
     wxString groupName = nameCtrl->GetValue().Trim().Trim(false);
     if (groupName.IsEmpty()) {
-      wxMessageBox("Group name cannot be empty.", "Error", wxOK | wxICON_ERROR, this);
+      wxMessageBox("Group name cannot be empty.", "Error", wxOK | wxICON_ERROR,
+                   this);
       return;
     }
-    
+
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
-          wxDateTime::Now().Format("%H:%M:%S"), 
+          wxDateTime::Now().Format("%H:%M:%S"),
           "Creating group '" + groupName + "'... (feature in development)");
     }
-    
+
     // TODO: Call TelegramClient::CreateBasicGroupChat when implemented
   }
 }
 
 void MainFrame::OnNewChannel(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
-  wxDialog dialog(this, wxID_ANY, "New Channel", wxDefaultPosition, wxSize(400, 250));
+
+  wxDialog dialog(this, wxID_ANY, "New Channel", wxDefaultPosition,
+                  wxSize(400, 250));
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-  
-  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Channel Name:"), 0, wxALL, 10);
-  wxTextCtrl *nameCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+
+  sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Channel Name:"), 0, wxALL,
+             10);
+  wxTextCtrl *nameCtrl =
+      new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
   sizer->Add(nameCtrl, 0, wxLEFT | wxRIGHT, 10);
-  
+
   sizer->Add(new wxStaticText(&dialog, wxID_ANY, "Description:"), 0, wxALL, 10);
-  wxTextCtrl *descCtrl = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60), wxTE_MULTILINE);
+  wxTextCtrl *descCtrl =
+      new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, 60),
+                     wxTE_MULTILINE);
   sizer->Add(descCtrl, 0, wxLEFT | wxRIGHT, 10);
-  
-  wxCheckBox *publicCheck = new wxCheckBox(&dialog, wxID_ANY, "Public channel (anyone can find and join)");
+
+  wxCheckBox *publicCheck = new wxCheckBox(
+      &dialog, wxID_ANY, "Public channel (anyone can find and join)");
   sizer->Add(publicCheck, 0, wxALL, 10);
-  
+
   wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
   btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Cancel"), 0, wxALL, 5);
   btnSizer->Add(new wxButton(&dialog, wxID_OK, "Create"), 0, wxALL, 5);
   sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxTOP, 10);
-  
+
   dialog.SetSizer(sizer);
-  
+
   if (dialog.ShowModal() == wxID_OK) {
     wxString channelName = nameCtrl->GetValue().Trim().Trim(false);
     if (channelName.IsEmpty()) {
-      wxMessageBox("Channel name cannot be empty.", "Error", wxOK | wxICON_ERROR, this);
+      wxMessageBox("Channel name cannot be empty.", "Error",
+                   wxOK | wxICON_ERROR, this);
       return;
     }
-    
+
     if (m_chatViewWidget && m_chatViewWidget->GetMessageFormatter()) {
       m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
           wxDateTime::Now().Format("%H:%M:%S"),
           "Creating channel '" + channelName + "'... (feature in development)");
     }
-    
+
     // TODO: Call TelegramClient::CreateSupergroupChat when implemented
   }
 }
 
 void MainFrame::OnContacts(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
+
   // Show contacts dialog with list from TelegramClient
-  wxDialog dialog(this, wxID_ANY, "Contacts", wxDefaultPosition, wxSize(400, 500));
+  wxDialog dialog(this, wxID_ANY, "Contacts", wxDefaultPosition,
+                  wxSize(400, 500));
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-  
-  wxSearchCtrl *searchBox = new wxSearchCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
+
+  wxSearchCtrl *searchBox = new wxSearchCtrl(
+      &dialog, wxID_ANY, "", wxDefaultPosition, wxSize(350, -1));
   searchBox->SetHint("Search contacts...");
   sizer->Add(searchBox, 0, wxALL | wxEXPAND, 10);
-  
-  wxListCtrl *contactList = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(350, 350),
-                                           wxLC_REPORT | wxLC_SINGLE_SEL);
+
+  wxListCtrl *contactList =
+      new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(350, 350),
+                     wxLC_REPORT | wxLC_SINGLE_SEL);
   contactList->AppendColumn("Name", wxLIST_FORMAT_LEFT, 200);
   contactList->AppendColumn("Username", wxLIST_FORMAT_LEFT, 130);
-  
+
   // Populate from TelegramClient users cache
   if (m_telegramClient) {
     auto chats = m_telegramClient->GetChats();
@@ -1009,94 +1038,99 @@ void MainFrame::OnContacts(wxCommandEvent &event) {
       }
     }
   }
-  
+
   sizer->Add(contactList, 1, wxALL | wxEXPAND, 10);
-  
+
   wxBoxSizer *btnSizer = new wxBoxSizer(wxHORIZONTAL);
   btnSizer->Add(new wxButton(&dialog, wxID_OK, "Open Chat"), 0, wxALL, 5);
   btnSizer->Add(new wxButton(&dialog, wxID_CANCEL, "Close"), 0, wxALL, 5);
   sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxBOTTOM, 10);
-  
+
   dialog.SetSizer(sizer);
   dialog.ShowModal();
 }
 
 void MainFrame::OnSearch(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
-  wxDialog dialog(this, wxID_ANY, "Search", wxDefaultPosition, wxSize(500, 400));
+
+  wxDialog dialog(this, wxID_ANY, "Search", wxDefaultPosition,
+                  wxSize(500, 400));
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-  
+
   wxBoxSizer *searchSizer = new wxBoxSizer(wxHORIZONTAL);
-  wxSearchCtrl *searchBox = new wxSearchCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxSize(400, -1));
+  wxSearchCtrl *searchBox = new wxSearchCtrl(
+      &dialog, wxID_ANY, "", wxDefaultPosition, wxSize(400, -1));
   searchBox->SetHint("Search chats and messages...");
   searchSizer->Add(searchBox, 1, wxRIGHT, 5);
   wxButton *searchBtn = new wxButton(&dialog, wxID_FIND, "Search");
   searchSizer->Add(searchBtn, 0);
   sizer->Add(searchSizer, 0, wxALL | wxEXPAND, 10);
-  
-  wxListCtrl *resultList = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(460, 250),
-                                          wxLC_REPORT | wxLC_SINGLE_SEL);
+
+  wxListCtrl *resultList =
+      new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxSize(460, 250),
+                     wxLC_REPORT | wxLC_SINGLE_SEL);
   resultList->AppendColumn("Chat", wxLIST_FORMAT_LEFT, 150);
   resultList->AppendColumn("Message", wxLIST_FORMAT_LEFT, 290);
   sizer->Add(resultList, 1, wxALL | wxEXPAND, 10);
-  
+
   wxButton *closeBtn = new wxButton(&dialog, wxID_CANCEL, "Close");
   sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
-  
+
   dialog.SetSizer(sizer);
-  
+
   // Filter chats as user types
   if (m_telegramClient) {
-    wxString currentFilter;
     auto chats = m_telegramClient->GetChats();
     for (const auto &pair : chats) {
       resultList->InsertItem(resultList->GetItemCount(), pair.second.title);
       if (!pair.second.lastMessage.IsEmpty()) {
         wxString preview = pair.second.lastMessage;
-        if (preview.Length() > 50) preview = preview.Left(47) + "...";
+        if (preview.Length() > 50)
+          preview = preview.Left(47) + "...";
         resultList->SetItem(resultList->GetItemCount() - 1, 1, preview);
       }
     }
   }
-  
+
   dialog.ShowModal();
 }
 
 void MainFrame::OnSavedMessages(wxCommandEvent &event) {
   if (!m_isLoggedIn) {
-    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING, this);
+    wxMessageBox("Please login first.", "Not Logged In", wxOK | wxICON_WARNING,
+                 this);
     return;
   }
-  
+
   // Saved Messages is a chat with yourself (chatId = your userId)
   if (m_telegramClient) {
     const UserInfo &currentUser = m_telegramClient->GetCurrentUser();
     if (currentUser.id != 0) {
       // The saved messages chat ID is the same as user ID
       int64_t savedChatId = currentUser.id;
-      
+
       // Try to find and select it in the chat list
       if (m_chatListWidget) {
         m_chatListWidget->SelectChat(savedChatId);
       }
-      
+
       // Open the chat
       m_telegramClient->OpenChatAndLoadMessages(savedChatId);
       m_currentChatId = savedChatId;
       m_currentChatTitle = "Saved Messages";
       m_currentChatType = TelegramChatType::SavedMessages;
-      
+
       if (m_chatViewWidget) {
         m_chatViewWidget->SetTopicText("Saved Messages", "Your cloud storage");
       }
       return;
     }
   }
-  
+
   // Fallback if not logged in or user not found
   m_currentChatTitle = "Saved Messages";
   m_currentChatType = TelegramChatType::SavedMessages;
@@ -1319,14 +1353,19 @@ void MainFrame::OnFullscreen(wxCommandEvent &event) {
 void MainFrame::OnRawLog(wxCommandEvent &event) {
   // Show TDLib log file location or a log viewer dialog
   wxString logPath = wxStandardPaths::Get().GetUserDataDir() + "/tdlib.log";
-  
-  wxDialog dialog(this, wxID_ANY, "TDLib Log", wxDefaultPosition, wxSize(600, 400));
+
+  wxDialog dialog(this, wxID_ANY, "TDLib Log", wxDefaultPosition,
+                  wxSize(600, 400));
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-  
-  wxTextCtrl *logText = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, 
-                                        wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxHSCROLL);
-  logText->SetFont(m_chatFont.IsOk() ? m_chatFont : wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-  
+
+  wxTextCtrl *logText =
+      new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxDefaultSize,
+                     wxTE_MULTILINE | wxTE_READONLY | wxHSCROLL);
+  logText->SetFont(m_chatFont.IsOk()
+                       ? m_chatFont
+                       : wxFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                                wxFONTWEIGHT_NORMAL));
+
   // Try to read log file
   if (wxFileExists(logPath)) {
     wxFile file(logPath);
@@ -1341,30 +1380,32 @@ void MainFrame::OnRawLog(wxCommandEvent &event) {
       logText->SetInsertionPointEnd();
     }
   } else {
-    logText->SetValue("Log file not found at: " + logPath + "\n\nTDLib logging may not be enabled.");
+    logText->SetValue("Log file not found at: " + logPath +
+                      "\n\nTDLib logging may not be enabled.");
   }
-  
+
   sizer->Add(logText, 1, wxEXPAND | wxALL, 10);
-  
+
   wxButton *closeBtn = new wxButton(&dialog, wxID_OK, "Close");
   sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
-  
+
   dialog.SetSizer(sizer);
   dialog.ShowModal();
 }
 
 void MainFrame::OnPrevChat(wxCommandEvent &event) {
-  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl()) return;
-  
+  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl())
+    return;
+
   wxTreeCtrl *tree = m_chatListWidget->GetTreeCtrl();
   wxTreeItemId current = tree->GetSelection();
-  
+
   if (!current.IsOk()) {
     // Nothing selected, select first chat
     m_chatListWidget->SelectTeleliter();
     return;
   }
-  
+
   // Get previous sibling, or parent's previous sibling's last child
   wxTreeItemId prev = tree->GetPrevSibling(current);
   if (prev.IsOk()) {
@@ -1409,17 +1450,18 @@ void MainFrame::OnPrevChat(wxCommandEvent &event) {
 }
 
 void MainFrame::OnNextChat(wxCommandEvent &event) {
-  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl()) return;
-  
+  if (!m_chatListWidget || !m_chatListWidget->GetTreeCtrl())
+    return;
+
   wxTreeCtrl *tree = m_chatListWidget->GetTreeCtrl();
   wxTreeItemId current = tree->GetSelection();
-  
+
   if (!current.IsOk()) {
     // Nothing selected, select first chat
     m_chatListWidget->SelectTeleliter();
     return;
   }
-  
+
   // If current item has children, go to first child
   if (tree->ItemHasChildren(current)) {
     wxTreeItemIdValue cookie;
@@ -1429,7 +1471,7 @@ void MainFrame::OnNextChat(wxCommandEvent &event) {
       return;
     }
   }
-  
+
   // Get next sibling
   wxTreeItemId next = tree->GetNextSibling(current);
   if (next.IsOk()) {
@@ -1465,8 +1507,9 @@ void MainFrame::OnNextChat(wxCommandEvent &event) {
 }
 
 void MainFrame::OnCloseChat(wxCommandEvent &event) {
-  if (!m_chatListWidget) return;
-  
+  if (!m_chatListWidget)
+    return;
+
   // Close current chat by selecting Teleliter (welcome screen)
   if (m_currentChatId != 0) {
     // Close the chat in TelegramClient
@@ -1475,13 +1518,13 @@ void MainFrame::OnCloseChat(wxCommandEvent &event) {
     }
     m_currentChatId = 0;
     m_currentChatTitle.Clear();
-    
+
     // Clear the chat view
     if (m_chatViewWidget) {
       m_chatViewWidget->ClearMessages();
       m_chatViewWidget->ClearTopicText();
     }
-    
+
     // Select Teleliter in the tree
     m_chatListWidget->SelectTeleliter();
   }
@@ -1490,67 +1533,71 @@ void MainFrame::OnCloseChat(wxCommandEvent &event) {
 void MainFrame::OnDocumentation(wxCommandEvent &event) {
   // Open the design document or show help
   wxString docPath = wxGetCwd() + "/doc/DESIGN.md";
-  
+
   // Try to open in default text editor/browser
   if (wxFileExists(docPath)) {
     wxLaunchDefaultApplication(docPath);
   } else {
     // Show inline help
-    wxDialog dialog(this, wxID_ANY, "Teleliter Documentation", wxDefaultPosition, wxSize(600, 500));
+    wxDialog dialog(this, wxID_ANY, "Teleliter Documentation",
+                    wxDefaultPosition, wxSize(600, 500));
     wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-    
-    wxTextCtrl *helpText = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, 
-                                          wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
-    helpText->SetFont(m_chatFont.IsOk() ? m_chatFont : wxFont(11, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-    
-    wxString help = 
-      "TELELITER - A HexChat-style Telegram Client\n"
-      "============================================\n\n"
-      "KEYBOARD SHORTCUTS\n"
-      "------------------\n"
-      "Ctrl+L        Login\n"
-      "Ctrl+N        New Private Chat\n"
-      "Ctrl+G        New Group\n"
-      "Ctrl+F        Search\n"
-      "Ctrl+U        Upload File\n"
-      "Ctrl+E        Preferences\n"
-      "Ctrl+W        Close Current Chat\n"
-      "Ctrl+PgUp     Previous Chat\n"
-      "Ctrl+PgDn     Next Chat\n"
-      "Ctrl+Shift+L  Clear Chat Window\n"
-      "F7            Toggle Members List\n"
-      "F9            Toggle Chat List\n"
-      "F11           Fullscreen\n"
-      "Escape        Exit Fullscreen\n\n"
-      "COMMANDS\n"
-      "--------\n"
-      "/me <action>     Send an action message\n"
-      "/clear           Clear chat window\n"
-      "/query <user>    Open private chat\n"
-      "/whois <user>    View user info\n"
-      "/leave           Leave current chat\n"
-      "/help            Show available commands\n\n"
-      "PHILOSOPHY\n"
-      "----------\n"
-      "Teleliter follows the HexChat/IRC aesthetic:\n"
-      "- Text-first, minimal UI\n"
-      "- Keyboard-friendly with slash commands\n"
-      "- Read-only for advanced features\n"
-      "  (displays reactions, edits, etc. but\n"
-      "   doesn't provide UI to send them)\n\n"
-      "MEDIA\n"
-      "-----\n"
-      "- Photos: Shown as clickable spans\n"
-      "- Videos: Click to play in popup\n"
-      "- Stickers: Hover to preview\n"
-      "- Voice notes: Click to play\n";
-    
+
+    wxTextCtrl *helpText =
+        new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition, wxDefaultSize,
+                       wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+    helpText->SetFont(m_chatFont.IsOk()
+                          ? m_chatFont
+                          : wxFont(11, wxFONTFAMILY_TELETYPE,
+                                   wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+
+    wxString help = "TELELITER - A HexChat-style Telegram Client\n"
+                    "============================================\n\n"
+                    "KEYBOARD SHORTCUTS\n"
+                    "------------------\n"
+                    "Ctrl+L        Login\n"
+                    "Ctrl+N        New Private Chat\n"
+                    "Ctrl+G        New Group\n"
+                    "Ctrl+F        Search\n"
+                    "Ctrl+U        Upload File\n"
+                    "Ctrl+E        Preferences\n"
+                    "Ctrl+W        Close Current Chat\n"
+                    "Ctrl+PgUp     Previous Chat\n"
+                    "Ctrl+PgDn     Next Chat\n"
+                    "Ctrl+Shift+L  Clear Chat Window\n"
+                    "F7            Toggle Members List\n"
+                    "F9            Toggle Chat List\n"
+                    "F11           Fullscreen\n"
+                    "Escape        Exit Fullscreen\n\n"
+                    "COMMANDS\n"
+                    "--------\n"
+                    "/me <action>     Send an action message\n"
+                    "/clear           Clear chat window\n"
+                    "/query <user>    Open private chat\n"
+                    "/whois <user>    View user info\n"
+                    "/leave           Leave current chat\n"
+                    "/help            Show available commands\n\n"
+                    "PHILOSOPHY\n"
+                    "----------\n"
+                    "Teleliter follows the HexChat/IRC aesthetic:\n"
+                    "- Text-first, minimal UI\n"
+                    "- Keyboard-friendly with slash commands\n"
+                    "- Read-only for advanced features\n"
+                    "  (displays reactions, edits, etc. but\n"
+                    "   doesn't provide UI to send them)\n\n"
+                    "MEDIA\n"
+                    "-----\n"
+                    "- Photos: Shown as clickable spans\n"
+                    "- Videos: Click to play in popup\n"
+                    "- Stickers: Hover to preview\n"
+                    "- Voice notes: Click to play\n";
+
     helpText->SetValue(help);
     sizer->Add(helpText, 1, wxEXPAND | wxALL, 10);
-    
+
     wxButton *closeBtn = new wxButton(&dialog, wxID_OK, "Close");
     sizer->Add(closeBtn, 0, wxALIGN_CENTER | wxBOTTOM, 10);
-    
+
     dialog.SetSizer(sizer);
     dialog.ShowModal();
   }
@@ -1727,7 +1774,8 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
             m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
           }
 
-          // Skip SetTopicText for private chats with user info (already handled above)
+          // Skip SetTopicText for private chats with user info (already handled
+          // above)
           if (!(chatInfo.isPrivate && chatInfo.userId != 0)) {
             m_chatViewWidget->SetTopicText(chatInfo.title, topicInfo);
           }
@@ -1740,7 +1788,8 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
 
         // Set up lazy loading callback for older messages BEFORE loading
         // so it's ready when DisplayMessages triggers a lazy load check
-        m_chatViewWidget->SetLoadOlderCallback([this, chatId](int64_t oldestMsgId) {
+        m_chatViewWidget->SetLoadOlderCallback([this,
+                                                chatId](int64_t oldestMsgId) {
           if (m_telegramClient && m_telegramClient->HasMoreMessages(chatId)) {
             m_telegramClient->LoadOlderMessages(chatId, oldestMsgId, 50);
           } else {
@@ -1757,15 +1806,20 @@ void MainFrame::OnChatTreeSelectionChanged(wxTreeEvent &event) {
         m_telegramClient->OpenChatAndLoadMessages(chatId);
         // Note: MarkChatAsRead is called in OnMessagesLoaded after messages are
         // displayed
-        
+
         // Log chat opened to service log
         if (m_serviceLog && chatFound) {
           wxString chatType;
-          if (chatInfo.isChannel) chatType = "channel";
-          else if (chatInfo.isSupergroup) chatType = "supergroup";
-          else if (chatInfo.isGroup) chatType = "group";
-          else if (chatInfo.isBot) chatType = "bot";
-          else chatType = "chat";
+          if (chatInfo.isChannel)
+            chatType = "channel";
+          else if (chatInfo.isSupergroup)
+            chatType = "supergroup";
+          else if (chatInfo.isGroup)
+            chatType = "group";
+          else if (chatInfo.isBot)
+            chatType = "bot";
+          else
+            chatType = "chat";
           m_serviceLog->LogSystem("Opened " + chatType + ": " + chatInfo.title);
         }
       } else {
@@ -2008,8 +2062,13 @@ void MainFrame::RefreshChatList() {
                 }
               }
 
-              // Then by order (descending - higher order first)
-              return a.order > b.order;
+              // Then by last message date (latest first)
+              // Use order as tiebreaker if dates are equal
+              if (a.lastMessageDate != b.lastMessageDate) {
+                return a.lastMessageDate >
+                       b.lastMessageDate; // Descending (latest first)
+              }
+              return a.order > b.order; // Fallback to order
             });
 
   // Refresh chat list widget with sorted chats
@@ -2068,8 +2127,9 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   // Clear reloading state now that we have fresh messages
   m_chatViewWidget->SetReloading(false);
 
-  // NOTE: Don't call ClearMessages here - it's already called in OnChatTreeSelectionChanged
-  // Calling it again would clear messages that might have arrived via reactive updates
+  // NOTE: Don't call ClearMessages here - it's already called in
+  // OnChatTreeSelectionChanged Calling it again would clear messages that might
+  // have arrived via reactive updates
 
   // Set read status for outgoing message indicators BEFORE displaying
   // (must be after ClearMessages since that resets the read status)
@@ -2131,7 +2191,7 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   // This catches edge cases where layout still wasn't ready
   if (m_chatViewWidget) {
     m_chatViewWidget->ScrollToBottomAggressive();
-    
+
     // Schedule final retry scrolls for very large chats
     // Using CallAfter for safe event loop integration
     CallAfter([this]() {
@@ -2139,11 +2199,11 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
         m_chatViewWidget->ScrollToBottomAggressive();
       }
     });
-    
+
     // Timer-based final retries
     for (int delay : {100, 300, 600, 1000}) {
       wxTimer *timer = new wxTimer();
-      timer->Bind(wxEVT_TIMER, [this, timer](wxTimerEvent&) {
+      timer->Bind(wxEVT_TIMER, [this, timer](wxTimerEvent &) {
         if (m_chatViewWidget) {
           m_chatViewWidget->ScrollToBottomAggressive();
         }
@@ -2157,8 +2217,8 @@ void MainFrame::OnMessagesLoaded(int64_t chatId,
   DBGLOG("Finished displaying messages, scrolled to bottom");
 }
 
-void MainFrame::OnOlderMessagesLoaded(int64_t chatId,
-                                      const std::vector<MessageInfo> &messages) {
+void MainFrame::OnOlderMessagesLoaded(
+    int64_t chatId, const std::vector<MessageInfo> &messages) {
   DBGLOG("OnOlderMessagesLoaded called: chatId="
          << chatId << " m_currentChatId=" << m_currentChatId
          << " messages.size()=" << messages.size());
@@ -2178,17 +2238,19 @@ void MainFrame::OnOlderMessagesLoaded(int64_t chatId,
     m_chatViewWidget->AddMessage(msg);
   }
 
-  // IMPORTANT: Keep m_isLoadingOlder TRUE during the refresh so anchor scrolling works
-  // The RefreshDisplay checks this flag to know whether to do anchor scrolling
-  // We call RefreshDisplay directly (not scheduled) to ensure flag is still set
+  // IMPORTANT: Keep m_isLoadingOlder TRUE during the refresh so anchor
+  // scrolling works The RefreshDisplay checks this flag to know whether to do
+  // anchor scrolling We call RefreshDisplay directly (not scheduled) to ensure
+  // flag is still set
   m_chatViewWidget->RefreshDisplay();
-  
+
   // NOW set loading to false, after the refresh has completed
   if (m_chatViewWidget) {
     m_chatViewWidget->SetIsLoadingOlder(false);
     // Check if there are more messages
     if (m_telegramClient) {
-      m_chatViewWidget->SetHasMoreMessages(m_telegramClient->HasMoreMessages(chatId));
+      m_chatViewWidget->SetHasMoreMessages(
+          m_telegramClient->HasMoreMessages(chatId));
     }
   }
 
@@ -2196,20 +2258,19 @@ void MainFrame::OnOlderMessagesLoaded(int64_t chatId,
   if (m_telegramClient) {
     for (const auto &msg : messages) {
       if (msg.mediaThumbnailFileId != 0 && msg.mediaThumbnailPath.IsEmpty()) {
-        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail", 0);
+        m_telegramClient->DownloadFile(msg.mediaThumbnailFileId, 8, "Thumbnail",
+                                       0);
       }
       if (msg.hasSticker && msg.mediaFileId != 0 &&
           msg.mediaLocalPath.IsEmpty() && msg.mediaThumbnailFileId == 0) {
-        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker", msg.mediaFileSize);
+        m_telegramClient->DownloadFile(msg.mediaFileId, 10, "Sticker",
+                                       msg.mediaFileSize);
       }
     }
   }
 
   DBGLOG("Finished adding older messages");
 }
-
-
-
 
 void MainFrame::OnNewMessage(const MessageInfo &message) {
   if (message.chatId != m_currentChatId) {
@@ -2341,7 +2402,7 @@ void MainFrame::OnMessageEdited(int64_t chatId, int64_t messageId,
         wxDateTime::Now().Format("%H:%M:%S"),
         wxString::Format("%s edited: \"%s\"", sender, displayText));
     m_chatViewWidget->ScrollToBottomIfAtBottom();
-    
+
     // Log to service message log
     if (m_serviceLog) {
       m_serviceLog->Log(ServiceMessageType::MessageEdited,
@@ -2429,7 +2490,7 @@ void MainFrame::OnDownloadFailed(int32_t fileId, const wxString &error) {
     if (info && m_serviceLog) {
       m_serviceLog->LogDownloadFailed(info->fileName, error);
     }
-    
+
     m_transferManager.FailTransfer(it->second, error);
     m_fileToTransferId.erase(it);
   }
@@ -2481,14 +2542,14 @@ void MainFrame::OnUserStatusChanged(int64_t userId, bool isOnline,
   // Also verify with IsCurrentlyOnline() for robustness
   bool userFound = false;
   UserInfo userInfo = m_telegramClient->GetUser(userId, &userFound);
-  
+
   wxString topicInfo;
   bool actuallyOnline = isOnline;
   if (userFound) {
     // Use IsCurrentlyOnline() which checks expiry time
     actuallyOnline = userInfo.IsCurrentlyOnline();
   }
-  
+
   if (actuallyOnline) {
     topicInfo = "online";
   } else {
@@ -2683,19 +2744,21 @@ void MainFrame::ReactiveRefresh() {
 
   // Log new messages from other chats (background notifications)
   if ((flags & DirtyFlag::Messages) != DirtyFlag::None && m_serviceLog) {
-    auto otherMessages = m_telegramClient->PeekNewMessagesFromOtherChats(m_currentChatId);
-    for (const auto& [chatId, msg] : otherMessages) {
+    auto otherMessages =
+        m_telegramClient->PeekNewMessagesFromOtherChats(m_currentChatId);
+    for (const auto &[chatId, msg] : otherMessages) {
       if (!msg.isOutgoing) {
         // Get chat name for the message
         bool found = false;
         ChatInfo chat = m_telegramClient->GetChat(chatId, &found);
         wxString chatName = found ? chat.title : "Unknown chat";
-        
+
         wxString preview = msg.text;
         if (preview.length() > 30) {
           preview = preview.Left(27) + "...";
         }
-        m_serviceLog->LogNewMessage(msg.senderName, chatName, preview, chatId, msg.id);
+        m_serviceLog->LogNewMessage(msg.senderName, chatName, preview, chatId,
+                                    msg.id);
       }
     }
   }
@@ -2704,30 +2767,31 @@ void MainFrame::ReactiveRefresh() {
   if ((flags & DirtyFlag::Auth) != DirtyFlag::None) {
     // Log connection state changes
     if (m_serviceLog && m_telegramClient) {
-      static ConnectionState s_lastConnectionState = ConnectionState::WaitingForNetwork;
+      static ConnectionState s_lastConnectionState =
+          ConnectionState::WaitingForNetwork;
       ConnectionState currentState = m_telegramClient->GetConnectionState();
-      
+
       if (currentState != s_lastConnectionState) {
         wxString stateStr;
         switch (currentState) {
-          case ConnectionState::Ready:
-            stateStr = "Online - connected to Telegram";
-            break;
-          case ConnectionState::Connecting:
-            stateStr = "Connecting to Telegram...";
-            break;
-          case ConnectionState::ConnectingToProxy:
-            stateStr = "Connecting through proxy...";
-            break;
-          case ConnectionState::Updating:
-            stateStr = "Syncing with server...";
-            break;
-          case ConnectionState::WaitingForNetwork:
-            stateStr = "Waiting for network connection";
-            break;
-          default:
-            stateStr = "Unknown state";
-            break;
+        case ConnectionState::Ready:
+          stateStr = "Online - connected to Telegram";
+          break;
+        case ConnectionState::Connecting:
+          stateStr = "Connecting to Telegram...";
+          break;
+        case ConnectionState::ConnectingToProxy:
+          stateStr = "Connecting through proxy...";
+          break;
+        case ConnectionState::Updating:
+          stateStr = "Syncing with server...";
+          break;
+        case ConnectionState::WaitingForNetwork:
+          stateStr = "Waiting for network connection";
+          break;
+        default:
+          stateStr = "Unknown state";
+          break;
         }
         m_serviceLog->LogConnectionState(stateStr);
         s_lastConnectionState = currentState;
@@ -2758,14 +2822,15 @@ void MainFrame::ReactiveRefresh() {
     auto newMessages = m_telegramClient->GetNewMessages(m_currentChatId);
     for (const auto &msg : newMessages) {
       OnNewMessage(msg);
-      
+
       // Log new message to service log (only from others)
       if (m_serviceLog && !msg.isOutgoing) {
         wxString preview = msg.text;
         if (preview.length() > 30) {
           preview = preview.Left(27) + "...";
         }
-        m_serviceLog->LogNewMessage(msg.senderName, m_currentChatTitle, preview, m_currentChatId, msg.id);
+        m_serviceLog->LogNewMessage(msg.senderName, m_currentChatTitle, preview,
+                                    m_currentChatId, msg.id);
       }
     }
 
@@ -2796,8 +2861,8 @@ void MainFrame::ReactiveRefresh() {
         m_chatViewWidget->GetMessageFormatter()->AppendServiceMessage(
             wxDateTime::Now().Format("%H:%M:%S"), "A message was deleted");
         if (m_serviceLog) {
-          m_serviceLog->Log(ServiceMessageType::MessageDeleted, 
-                            "Message deleted in " + m_currentChatTitle, 
+          m_serviceLog->Log(ServiceMessageType::MessageDeleted,
+                            "Message deleted in " + m_currentChatTitle,
                             m_currentChatTitle, m_currentChatId);
         }
       } else {
@@ -2806,8 +2871,9 @@ void MainFrame::ReactiveRefresh() {
             wxString::Format("%zu messages were deleted", deletedIds.size()));
         if (m_serviceLog) {
           m_serviceLog->Log(ServiceMessageType::MessageDeleted,
-                            wxString::Format("%zu messages deleted in %s", 
-                                           deletedIds.size(), m_currentChatTitle),
+                            wxString::Format("%zu messages deleted in %s",
+                                             deletedIds.size(),
+                                             m_currentChatTitle),
                             m_currentChatTitle, m_currentChatId);
         }
       }
@@ -2901,10 +2967,16 @@ void MainFrame::ReactiveRefresh() {
             typingText += ", ";
           }
           typingText += name + " is " + action;
-          
+
           // Log typing to service log
           if (m_serviceLog) {
-            m_serviceLog->LogUserAction(name, action, m_currentChatTitle, m_currentChatId);
+            if (action.Lower().Contains("typing")) {
+              m_serviceLog->LogUserTyping(name, m_currentChatTitle,
+                                          m_currentChatId);
+            } else {
+              m_serviceLog->LogUserAction(name, action, m_currentChatTitle,
+                                          m_currentChatId);
+            }
           }
         }
         // Update status bar with animated typing indicator
@@ -2946,17 +3018,18 @@ void MainFrame::OnStatusTimer(wxTimerEvent &event) {
     m_statusBar->SetCurrentChatId(m_currentChatId);
     m_statusBar->UpdateStatusBar();
   }
-  
+
   // Periodically refresh online status for current private chat
   // This catches cases where online status expires while viewing a chat
   if (m_currentChatId != 0 && m_telegramClient && m_chatViewWidget) {
     bool chatFound = false;
     ChatInfo chatInfo = m_telegramClient->GetChat(m_currentChatId, &chatFound);
-    
+
     if (chatFound && chatInfo.isPrivate && chatInfo.userId != 0) {
       bool userFound = false;
-      UserInfo userInfo = m_telegramClient->GetUser(chatInfo.userId, &userFound);
-      
+      UserInfo userInfo =
+          m_telegramClient->GetUser(chatInfo.userId, &userFound);
+
       if (userFound) {
         // Use IsCurrentlyOnline() which checks expiry time
         bool isOnline = userInfo.IsCurrentlyOnline();
@@ -2966,16 +3039,17 @@ void MainFrame::OnStatusTimer(wxTimerEvent &event) {
         } else {
           topicInfo = FormatLastSeen(userInfo.lastSeenTime);
         }
-        
+
         // Get display name with fallbacks
         wxString displayName = chatInfo.title;
         if (displayName.IsEmpty()) {
           displayName = userInfo.GetDisplayName();
         }
-        
+
         // Update user details bar for private chats
         bool userFoundAgain = false;
-        UserInfo updatedUser = m_telegramClient->GetUser(chatInfo.userId, &userFoundAgain);
+        UserInfo updatedUser =
+            m_telegramClient->GetUser(chatInfo.userId, &userFoundAgain);
         if (userFoundAgain) {
           m_chatViewWidget->SetTopicUserInfo(updatedUser);
         } else {
@@ -2984,7 +3058,7 @@ void MainFrame::OnStatusTimer(wxTimerEvent &event) {
       }
     }
   }
-  
+
   // Also refresh online indicators in chat list periodically
   if (m_chatListWidget) {
     m_chatListWidget->RefreshOnlineIndicators();
@@ -3070,7 +3144,3 @@ int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const {
 
   return 0;
 }
-
-
-
-

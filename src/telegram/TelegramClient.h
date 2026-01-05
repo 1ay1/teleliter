@@ -104,21 +104,22 @@ public:
   }
 
   // Lazy loading for chat list
-  void LoadChats(int limit = 30);  // Initial/incremental load
-  void LoadMoreChats();            // Load next batch when scrolling
+  void LoadChats(int limit = 30); // Initial/incremental load
+  void LoadMoreChats();           // Load next batch when scrolling
   bool HasMoreChats() const { return !m_allChatsLoaded; }
   bool IsLoadingChats() const { return m_isLoadingChats; }
   size_t GetLoadedChatCount() const;
-  
+
   std::map<int64_t, ChatInfo> GetChats() const;
   ChatInfo GetChat(int64_t chatId, bool *found = nullptr) const;
 
   void OpenChat(int64_t chatId);
   void CloseChat(int64_t chatId);
-  
-  // Simple message loading: load 100 messages on chat open, then receive new ones reactively
+
+  // Simple message loading: load 100 messages on chat open, then receive new
+  // ones reactively
   void OpenChatAndLoadMessages(int64_t chatId);
-  
+
   // Lazy loading for older messages when scrolling up
   void LoadOlderMessages(int64_t chatId, int64_t fromMessageId, int limit = 50);
   bool IsLoadingMessages() const { return m_isLoadingMessages; }
@@ -183,12 +184,14 @@ public:
 
   // Get new messages since last call for a chat (thread-safe, clears queue)
   std::vector<MessageInfo> GetNewMessages(int64_t chatId);
-  
+
   // Get all pending new messages from all chats (for notifications)
   std::vector<std::pair<int64_t, MessageInfo>> GetAllNewMessages();
-  
-  // Peek at new messages from chats other than the specified one (doesn't clear)
-  std::vector<std::pair<int64_t, MessageInfo>> PeekNewMessagesFromOtherChats(int64_t excludeChatId);
+
+  // Peek at new messages from chats other than the specified one (doesn't
+  // clear)
+  std::vector<std::pair<int64_t, MessageInfo>>
+  PeekNewMessagesFromOtherChats(int64_t excludeChatId);
 
   // Get updated messages since last call for a chat (thread-safe, clears queue)
   std::vector<MessageInfo> GetUpdatedMessages(int64_t chatId);
@@ -238,10 +241,10 @@ private:
   // Lazy loading state for chat list
   std::atomic<bool> m_allChatsLoaded{false};
   std::atomic<bool> m_isLoadingChats{false};
-  
+
   // Lazy loading state for messages
   std::atomic<bool> m_isLoadingMessages{false};
-  std::map<int64_t, bool> m_chatHasMoreMessages;  // chatId -> hasMoreMessages
+  std::map<int64_t, bool> m_chatHasMoreMessages; // chatId -> hasMoreMessages
   mutable std::mutex m_messageLoadingMutex;
   static constexpr int CHAT_BATCH_SIZE = 30;
 
@@ -283,7 +286,7 @@ private:
   void HandleAuthReady();
   void HandleAuthClosed();
   void ConfigureAutoDownload();
-  
+
   // Helper to fetch messages once connection is ready
   void FetchChatMessages(int64_t chatId);
 
@@ -342,6 +345,11 @@ private:
       m_sendFailedMessages;
   std::mutex m_sendFailedMutex;
   wxTimer m_downloadTimeoutTimer;
+
+  // Startup cooldown - prevent download flooding on first launch
+  int64_t m_startupTime;
+  static constexpr int STARTUP_COOLDOWN_SECONDS =
+      5; // Defer low-priority downloads for 5s
 
   // ===== REACTIVE MVC STATE =====
   // Dirty flags - set by background threads, polled by UI
