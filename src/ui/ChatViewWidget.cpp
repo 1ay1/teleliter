@@ -1933,24 +1933,18 @@ void ChatViewWidget::UpdateMediaPath(int32_t fileId,
     return;
 
   // Update m_messages - the SINGLE SOURCE OF TRUTH
-  int updatedCount = 0;
   for (auto &msg : m_messages) {
     if (msg.mediaFileId == fileId) {
       msg.mediaLocalPath = localPath;
-      updatedCount++;
       CVWLOG("UpdateMediaPath: updated message id="
              << msg.id << " mediaLocalPath=" << localPath.ToStdString());
     }
     if (msg.mediaThumbnailFileId == fileId) {
       msg.mediaThumbnailPath = localPath;
-      updatedCount++;
       CVWLOG("UpdateMediaPath: updated message id="
              << msg.id << " mediaThumbnailPath=" << localPath.ToStdString());
     }
   }
-
-  CVWLOG("UpdateMediaPath: fileId=" << fileId << " updated " << updatedCount
-                                    << " messages");
 }
 
 void ChatViewWidget::AddEditSpan(long startPos, long endPos, int64_t messageId,
@@ -2363,6 +2357,7 @@ void ChatViewWidget::ShowMediaPopup(const MediaInfo &info,
   try {
     m_mediaPopup->ShowMedia(info, position);
   } catch (const std::exception &e) {
+    (void)e;
     CVWLOG("ShowMediaPopup: exception in ShowMedia: " << e.what());
   } catch (...) {
     CVWLOG("ShowMediaPopup: unknown exception in ShowMedia");
@@ -2389,6 +2384,7 @@ void ChatViewWidget::HideMediaPopup() {
         m_mediaPopup->Hide();
       }
     } catch (const std::exception &e) {
+      (void)e;
       CVWLOG("HideMediaPopup: exception: " << e.what());
     } catch (...) {
       CVWLOG("HideMediaPopup: unknown exception");
@@ -2484,6 +2480,7 @@ void ChatViewWidget::OpenMedia(const MediaInfo &info) {
     try {
       wxLaunchDefaultApplication(info.localPath);
     } catch (const std::exception &e) {
+      (void)e;
       CVWLOG("OpenMedia: exception launching application: " << e.what());
     }
   } else if (info.fileId != 0 && m_mainFrame) {

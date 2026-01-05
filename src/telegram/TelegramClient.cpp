@@ -37,23 +37,6 @@ static bool IsFileAvailableLocally(const td_api::file *file) {
   return wxFileName::FileExists(wxString::FromUTF8(path));
 }
 
-// Helper to check if we should trigger a download
-static bool ShouldDownloadFile(const td_api::file *file) {
-  if (!file || !file->local_)
-    return true; // No file info, need download
-  if (file->local_->is_downloading_active_)
-    return false; // Already downloading
-  if (!file->local_->is_downloading_completed_)
-    return true; // Not complete
-
-  // File marked as complete - verify it actually exists
-  const std::string &path = file->local_->path_;
-  if (path.empty())
-    return true;
-
-  return !wxFileName::FileExists(wxString::FromUTF8(path));
-}
-
 // Debug logging - disabled by default for release
 #define TDLOG(...)                                                             \
   do {                                                                         \
@@ -2542,18 +2525,23 @@ void TelegramClient::OnFileUpdate(td_api::object_ptr<td_api::file> &file) {
 
 void TelegramClient::OnChatLastMessage(
     int64_t chatId, td_api::object_ptr<td_api::message> &message) {
-  std::unique_lock<std::shared_mutex> lock(m_dataMutex);
-  auto it = m_chats.find(chatId);
-  if (it == m_chats.end())
-    return;
+  {
+    std::unique_lock<std::shared_mutex> lock(m_dataMutex);
+    auto it = m_chats.find(chatId);
+    if (it == m_chats.end())
+      return;
 
-  if (message) {
-    it->second.lastMessage = ExtractMessageText(message->content_.get());
-    it->second.lastMessageDate = message->date_;
-  } else {
-    it->second.lastMessage.Clear();
-    it->second.lastMessageDate = 0;
+    if (message) {
+      it->second.lastMessage = ExtractMessageText(message->content_.get());
+      it->second.lastMessageDate = message->date_;
+    } else {
+      it->second.lastMessage.Clear();
+      it->second.lastMessageDate = 0;
+    }
   }
+
+  // Trigger chat list refresh so it re-sorts by latest message
+  SetDirty(DirtyFlag::ChatList);
 }
 
 void TelegramClient::OnChatReadInbox(int64_t chatId,
@@ -2719,7 +2707,7 @@ MessageInfo TelegramClient::ConvertMessage(td_api::message *msg) {
   if (msg->content_) {
     info.text = ExtractMessageText(msg->content_.get());
 
-    td_api::downcast_call(*msg->content_, [this, &info](auto &c) {
+    td_api::downcast_call(*msg->content_, [&info](auto &c) {
       using T = std::decay_t<decltype(c)>;
 
       if constexpr (std::is_same_v<T, td_api::messagePhoto>) {
@@ -3184,6 +3172,7 @@ void TelegramClient::OnTdlibUpdate(wxThreadEvent &event) {
       try {
         func();
       } catch (const std::exception &e) {
+        (void)e;
         TDLOG("OnTdlibUpdate: exception in callback: %s", e.what());
       } catch (...) {
         TDLOG("OnTdlibUpdate: unknown exception in callback");
