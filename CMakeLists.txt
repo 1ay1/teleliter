@@ -332,17 +332,41 @@ if(PkgConfig_FOUND)
     endif()
 endif()
 
+if(NOT RLOTTIE_FOUND AND APPLE)
+    # Try Homebrew on macOS
+    execute_process(
+        COMMAND brew --prefix rlottie
+        OUTPUT_VARIABLE RLOTTIE_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(RLOTTIE_PREFIX)
+        message(STATUS "Found rlottie in Homebrew: ${RLOTTIE_PREFIX}")
+        set(RLOTTIE_INCLUDE_DIRS "${RLOTTIE_PREFIX}/include")
+        find_library(RLOTTIE_LIBRARY rlottie
+            PATHS "${RLOTTIE_PREFIX}/lib"
+            NO_DEFAULT_PATH
+        )
+        if(RLOTTIE_LIBRARY)
+            set(RLOTTIE_FOUND TRUE)
+            set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
+        endif()
+    endif()
+endif()
+
 if(NOT RLOTTIE_FOUND)
-    # Try to find manually
+    # Try to find manually - use $ENV{HOME} since ~ doesn't expand in CMake
     find_path(RLOTTIE_INCLUDE_DIRS rlottie.h
-        PATHS /usr/include /usr/local/include /opt/homebrew/include
+        PATHS /usr/include /usr/local/include /opt/homebrew/include "$ENV{HOME}/.local/include"
+        PATH_SUFFIXES rlottie
     )
     find_library(RLOTTIE_LIBRARY rlottie
-        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib /usr/lib/x86_64-linux-gnu
+        PATHS /usr/lib /usr/local/lib /opt/homebrew/lib /usr/lib/x86_64-linux-gnu "$ENV{HOME}/.local/lib"
     )
     if(RLOTTIE_INCLUDE_DIRS AND RLOTTIE_LIBRARY)
         set(RLOTTIE_FOUND TRUE)
         set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
+        message(STATUS "Found rlottie manually: includes=${RLOTTIE_INCLUDE_DIRS} libs=${RLOTTIE_LIBRARIES}")
     endif()
 endif()
 
@@ -350,7 +374,7 @@ if(RLOTTIE_FOUND)
     message(STATUS "Found rlottie: ${RLOTTIE_LIBRARIES}")
     add_definitions(-DHAVE_RLOTTIE)
 else()
-    message(WARNING "rlottie not found - TGS sticker animations will not be displayed. Install with: apt install librlottie-dev (Linux) or brew install rlottie (macOS)")
+    message(WARNING "rlottie not found - TGS sticker animations will not be displayed. Install from source or check https://github.com/AyushKumar-AK/rlottie-mac for macOS")
 endif()
 
 # Source files
