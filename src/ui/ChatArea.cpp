@@ -40,34 +40,75 @@ ChatArea::ChatArea(wxWindow *parent, wxWindowID id)
 void ChatArea::SetupColors() {
   // Default to monospace font (Teletype) - actual font will be set from
   // settings via SetChatFont()
+#ifdef __WXMSW__
+  // On Windows, prefer Consolas for better Unicode/emoji support
+  m_chatFont = wxFont(11, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL,
+                      wxFONTWEIGHT_NORMAL, false, "Consolas");
+  if (!m_chatFont.IsOk()) {
+    m_chatFont = wxFont(11, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                        wxFONTWEIGHT_NORMAL);
+  }
+#else
   m_chatFont = wxFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
                       wxFONTWEIGHT_NORMAL);
+#endif
 
-  // Only set colors that are actually needed for semantic meaning
-  // All other colors will use native defaults
-  m_errorColor = wxColour(0xCC, 0x00, 0x00);   // Red for errors
-  m_successColor = wxColour(0x00, 0x80, 0x00); // Green for success
-  m_readColor = wxColour(0x00, 0xAA, 0x00);    // Green for read status (✓✓)
-  m_readHighlightColor =
-      wxColour(0x00, 0xFF, 0x44); // Bright green for recently read
+  // Detect dark mode by checking the system window background color
+  wxColour bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+  int brightness = (bgColor.Red() + bgColor.Green() + bgColor.Blue()) / 3;
+  bool darkMode = brightness < 128;
 
-  // User colors for sender names - need distinct colors for different users
-  m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
-  m_userColors[1] = wxColour(0x00, 0x73, 0x00);  // Dark green
-  m_userColors[2] = wxColour(0xAA, 0x00, 0x00);  // Dark red
-  m_userColors[3] = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
-  m_userColors[4] = wxColour(0x55, 0x00, 0x55);  // Purple
-  m_userColors[5] = wxColour(0x00, 0x73, 0x73);  // Teal
-  m_userColors[6] = wxColour(0x73, 0x00, 0x73);  // Magenta
-  m_userColors[7] = wxColour(0x00, 0x55, 0xAA);  // Steel blue
-  m_userColors[8] = wxColour(0x55, 0x55, 0x00);  // Olive
-  m_userColors[9] = wxColour(0x73, 0x3D, 0x00);  // Sienna
-  m_userColors[10] = wxColour(0x00, 0x55, 0x55); // Dark cyan
-  m_userColors[11] = wxColour(0x55, 0x00, 0xAA); // Indigo
-  m_userColors[12] = wxColour(0xAA, 0x00, 0x55); // Deep pink
-  m_userColors[13] = wxColour(0x3D, 0x73, 0x00); // Dark lime
-  m_userColors[14] = wxColour(0x00, 0x3D, 0x73); // Navy
-  m_userColors[15] = wxColour(0x73, 0x00, 0x3D); // Maroon
+  if (darkMode) {
+    // Dark mode colors - brighter for visibility on dark background
+    m_errorColor = wxColour(0xFF, 0x66, 0x66);   // Light red for errors
+    m_successColor = wxColour(0x66, 0xDD, 0x66); // Light green for success
+    m_readColor = wxColour(0x55, 0xDD, 0x55);    // Light green for read status (✓✓)
+    m_readHighlightColor =
+        wxColour(0x77, 0xFF, 0x77); // Bright green for recently read
+
+    // User colors for sender names - brighter for dark backgrounds
+    m_userColors[0] = wxColour(0x55, 0x99, 0xFF);  // Light blue
+    m_userColors[1] = wxColour(0x55, 0xDD, 0x55);  // Light green
+    m_userColors[2] = wxColour(0xFF, 0x77, 0x77);  // Light red
+    m_userColors[3] = wxColour(0xFF, 0xAA, 0x55);  // Light orange
+    m_userColors[4] = wxColour(0xDD, 0x77, 0xDD);  // Light purple
+    m_userColors[5] = wxColour(0x55, 0xDD, 0xDD);  // Light teal
+    m_userColors[6] = wxColour(0xFF, 0x77, 0xFF);  // Light magenta
+    m_userColors[7] = wxColour(0x77, 0xBB, 0xFF);  // Light steel blue
+    m_userColors[8] = wxColour(0xDD, 0xDD, 0x55);  // Light olive
+    m_userColors[9] = wxColour(0xFF, 0x99, 0x55);  // Light sienna
+    m_userColors[10] = wxColour(0x55, 0xDD, 0xDD); // Light cyan
+    m_userColors[11] = wxColour(0xAA, 0x77, 0xFF); // Light indigo
+    m_userColors[12] = wxColour(0xFF, 0x77, 0xAA); // Light pink
+    m_userColors[13] = wxColour(0x99, 0xDD, 0x55); // Light lime
+    m_userColors[14] = wxColour(0x55, 0x99, 0xDD); // Light navy
+    m_userColors[15] = wxColour(0xDD, 0x77, 0x99); // Light maroon
+  } else {
+    // Light mode colors - darker for visibility on light background
+    m_errorColor = wxColour(0xCC, 0x00, 0x00);   // Red for errors
+    m_successColor = wxColour(0x00, 0x80, 0x00); // Green for success
+    m_readColor = wxColour(0x00, 0xAA, 0x00);    // Green for read status (✓✓)
+    m_readHighlightColor =
+        wxColour(0x00, 0xFF, 0x44); // Bright green for recently read
+
+    // User colors for sender names - need distinct colors for different users
+    m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
+    m_userColors[1] = wxColour(0x00, 0x73, 0x00);  // Dark green
+    m_userColors[2] = wxColour(0xAA, 0x00, 0x00);  // Dark red
+    m_userColors[3] = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
+    m_userColors[4] = wxColour(0x55, 0x00, 0x55);  // Purple
+    m_userColors[5] = wxColour(0x00, 0x73, 0x73);  // Teal
+    m_userColors[6] = wxColour(0x73, 0x00, 0x73);  // Magenta
+    m_userColors[7] = wxColour(0x00, 0x55, 0xAA);  // Steel blue
+    m_userColors[8] = wxColour(0x55, 0x55, 0x00);  // Olive
+    m_userColors[9] = wxColour(0x73, 0x3D, 0x00);  // Sienna
+    m_userColors[10] = wxColour(0x00, 0x55, 0x55); // Dark cyan
+    m_userColors[11] = wxColour(0x55, 0x00, 0xAA); // Indigo
+    m_userColors[12] = wxColour(0xAA, 0x00, 0x55); // Deep pink
+    m_userColors[13] = wxColour(0x3D, 0x73, 0x00); // Dark lime
+    m_userColors[14] = wxColour(0x00, 0x3D, 0x73); // Navy
+    m_userColors[15] = wxColour(0x73, 0x00, 0x3D); // Maroon
+  }
 }
 
 void ChatArea::CreateUI() {

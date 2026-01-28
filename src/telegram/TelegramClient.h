@@ -102,6 +102,9 @@ public:
   bool IsConnected() const {
     return m_connectionState == ConnectionState::Ready;
   }
+  
+  // Sync state - true during initial sync when many updates arrive rapidly
+  bool IsSyncing() const { return m_isSyncing.load(); }
 
   // Lazy loading for chat list
   void LoadChats(int limit = 30); // Initial/incremental load
@@ -241,6 +244,14 @@ private:
   // Lazy loading state for chat list
   std::atomic<bool> m_allChatsLoaded{false};
   std::atomic<bool> m_isLoadingChats{false};
+  
+  // Sync state - tracks when initial sync is happening (rapid updates)
+  std::atomic<bool> m_isSyncing{false};
+  int64_t m_syncStartTime = 0;
+  int m_syncUpdateCount = 0;
+  static constexpr int SYNC_UPDATES_THRESHOLD = 50;      // Consider syncing if >50 updates in window
+  static constexpr int SYNC_WINDOW_MS = 2000;            // 2 second window for counting updates
+  static constexpr int SYNC_IDLE_TIMEOUT_MS = 3000;      // End sync after 3s of low activity
 
   // Lazy loading state for messages
   std::atomic<bool> m_isLoadingMessages{false};

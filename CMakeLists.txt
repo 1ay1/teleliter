@@ -490,6 +490,7 @@ if(WIN32)
         Bcrypt
         Mswsock
         Userenv
+        Dwmapi
     )
     # Set Windows subsystem to avoid console window
     set_target_properties(teleliter PROPERTIES WIN32_EXECUTABLE TRUE)

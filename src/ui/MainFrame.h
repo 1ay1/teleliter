@@ -1,6 +1,7 @@
 #ifndef MAINFRAME_H
 #define MAINFRAME_H
 
+#include <atomic>
 #include <map>
 #include <set>
 #include <vector>
@@ -68,6 +69,14 @@ public:
   // Reactive MVC - called when TelegramClient has dirty flags
   void ReactiveRefresh();
   void UpdateMemberList(int64_t chatId);
+  
+  // Debounced chat list refresh - schedules a refresh after a delay
+  void ScheduleChatListRefresh();
+  void DoChatListRefresh();
+  
+  // Sync state management
+  bool IsSyncing() const { return m_isSyncing; }
+  void SetSyncing(bool syncing);
 
   // Unread message tracking
   void MarkMessageAsRead(int64_t chatId, int64_t messageId);
@@ -91,6 +100,9 @@ private:
   // UI Setup
   void CreateMenuBar();
   void CreateMainLayout();
+  
+  // Dark mode detection
+  static bool IsSystemDarkMode();
   void CreateChatPanel(wxWindow *parent);
   void CreateMemberList(wxWindow *parent);
   void SetupColors();
@@ -206,9 +218,24 @@ private:
   wxString m_currentChatTitle;
   TelegramChatType m_currentChatType;
 
+  // Sync state - reduces UI update frequency during initial sync
+  std::atomic<bool> m_isSyncing{false};
+  int64_t m_syncStartTime = 0;
+  int m_syncUpdateCount = 0;
+  static constexpr int SYNC_THROTTLE_INTERVAL_MS = 500; // Max refresh rate during sync
+  static constexpr int SYNC_COMPLETE_THRESHOLD = 3000;  // Consider sync done after 3s of no updates
+  
+  // Debounced chat list refresh
+  wxTimer *m_chatListRefreshTimer = nullptr;
+  bool m_chatListRefreshPending = false;
+  int64_t m_lastChatListRefresh = 0;
+  static constexpr int CHAT_LIST_REFRESH_DELAY_MS = 100;     // Normal delay
+  static constexpr int CHAT_LIST_REFRESH_DELAY_SYNC_MS = 500; // Delay during sync
+
   // Timer IDs
   static const int ID_REFRESH_TIMER = wxID_HIGHEST + 200;
   static const int ID_STATUS_TIMER = wxID_HIGHEST + 201;
+  static const int ID_CHATLIST_REFRESH_TIMER = wxID_HIGHEST + 202;
 
   wxDECLARE_EVENT_TABLE();
 };

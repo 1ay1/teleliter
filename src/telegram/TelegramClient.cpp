@@ -276,9 +276,23 @@ void TelegramClient::OnConnectionStateUpdate(
     } else if constexpr (std::is_same_v<T, td_api::connectionStateUpdating>) {
       m_connectionState = ConnectionState::Updating;
       TDLOG("Connection state: Updating");
+      // Enter sync mode - many updates will arrive rapidly
+      if (!m_isSyncing.exchange(true)) {
+        m_syncStartTime = wxGetUTCTimeMillis().GetValue();
+        m_syncUpdateCount = 0;
+        TDLOG("Entering sync mode");
+      }
     } else if constexpr (std::is_same_v<T, td_api::connectionStateReady>) {
       m_connectionState = ConnectionState::Ready;
       TDLOG("Connection state: Ready");
+
+      // Exit sync mode after a short delay to allow final updates to settle
+      // We don't immediately clear it since updates may still be arriving
+      if (m_isSyncing.load()) {
+        // Schedule sync end check - will be handled by update counting
+        m_syncStartTime = wxGetUTCTimeMillis().GetValue();
+        TDLOG("Connection ready, will exit sync mode after updates settle");
+      }
 
       // If we have a pending chat load, fetch messages now
       if (m_pendingChatLoad != 0) {
@@ -839,12 +853,16 @@ void TelegramClient::LoadChats(int limit) {
 
   TDLOG("LoadChats: Requesting %d chats", limit);
 
+  // Track chat count before loading to detect when we're done
+  size_t prevChatCount = GetLoadedChatCount();
+
   auto request = td_api::make_object<td_api::loadChats>();
   request->chat_list_ = td_api::make_object<td_api::chatListMain>();
   request->limit_ = limit;
 
-  Send(std::move(request), [this,
-                            limit](td_api::object_ptr<td_api::Object> result) {
+  // loadChats triggers updateNewChat events for each chat - no need to call getChat individually
+  // This is much more efficient as TDLib batches the updates internally
+  Send(std::move(request), [this, limit, prevChatCount](td_api::object_ptr<td_api::Object> result) {
     if (result->get_id() == td_api::error::ID) {
       auto error = td_api::move_object_as<td_api::error>(result);
       TDLOG("LoadChats: Error or no more chats: %d - %s", error->code_,
@@ -860,47 +878,22 @@ void TelegramClient::LoadChats(int limit) {
       return;
     }
 
-    // Get the current chat count before fetching
-    size_t prevChatCount = GetLoadedChatCount();
+    // loadChats succeeded - chats will arrive via updateNewChat events
+    // Check current count to see if we got new chats
+    size_t newChatCount = GetLoadedChatCount();
+    size_t addedChats = newChatCount - prevChatCount;
+    
+    TDLOG("LoadChats: loadChats succeeded, added %zu chats (prev=%zu, new=%zu)", 
+          addedChats, prevChatCount, newChatCount);
 
-    // Get the chat list - request more than we loaded to see what's available
-    Send(td_api::make_object<td_api::getChats>(
-             td_api::make_object<td_api::chatListMain>(), 500),
-         [this, limit,
-          prevChatCount](td_api::object_ptr<td_api::Object> result) {
-           if (result->get_id() == td_api::chats::ID) {
-             auto chats = td_api::move_object_as<td_api::chats>(result);
-             size_t chatCount = chats->chat_ids_.size();
+    // If we got fewer chats than requested, we've loaded all
+    if (addedChats < (size_t)limit) {
+      m_allChatsLoaded = true;
+      TDLOG("LoadChats: All chats loaded (got %zu, requested %d)", addedChats, limit);
+    }
 
-             TDLOG("LoadChats: Got %zu chat IDs from getChats", chatCount);
-
-             for (auto chatId : chats->chat_ids_) {
-               // Get full chat info
-               Send(td_api::make_object<td_api::getChat>(chatId),
-                    [this](td_api::object_ptr<td_api::Object> result) {
-                      if (result->get_id() == td_api::chat::ID) {
-                        auto chat =
-                            td_api::move_object_as<td_api::chat>(result);
-                        OnChatUpdate(chat);
-                      }
-                    });
-             }
-
-             // Check if we got fewer new chats than requested - means we've
-             // loaded all
-             size_t newChatCount = GetLoadedChatCount();
-             size_t addedChats = newChatCount - prevChatCount;
-             if (addedChats < (size_t)limit || chatCount == newChatCount) {
-               m_allChatsLoaded = true;
-               TDLOG("LoadChats: All chats loaded (got %zu new, requested %d)",
-                     addedChats, limit);
-             }
-
-             // REACTIVE MVC: Set dirty flag instead of posting callback
-             SetDirty(DirtyFlag::ChatList);
-           }
-           m_isLoadingChats = false;
-         });
+    m_isLoadingChats = false;
+    SetDirty(DirtyFlag::ChatList);
   });
 }
 
@@ -2196,6 +2189,26 @@ void TelegramClient::OnMessageEdited(
 void TelegramClient::OnChatUpdate(td_api::object_ptr<td_api::chat> &chat) {
   if (!chat)
     return;
+
+  // Track sync activity - if many updates arrive rapidly, we're syncing
+  if (m_isSyncing.load()) {
+    m_syncUpdateCount++;
+    int64_t now = wxGetUTCTimeMillis().GetValue();
+    int64_t elapsed = now - m_syncStartTime;
+    
+    // Check if sync should end (connection is ready and updates have slowed down)
+    if (m_connectionState == ConnectionState::Ready && elapsed > SYNC_IDLE_TIMEOUT_MS) {
+      // Reset and check update rate
+      if (m_syncUpdateCount < 10) {
+        // Updates have slowed down significantly, exit sync mode
+        m_isSyncing.store(false);
+        TDLOG("Exiting sync mode after %lld ms, %d updates", elapsed, m_syncUpdateCount);
+      }
+      // Reset counters for next check
+      m_syncStartTime = now;
+      m_syncUpdateCount = 0;
+    }
+  }
 
   ChatInfo info;
   info.id = chat->id_;

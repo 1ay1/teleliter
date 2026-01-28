@@ -1,4 +1,8 @@
 #include "MainFrame.h"
+
+#ifdef __WXMSW__
+#include <windows.h>
+#endif
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
 #include "ChatListWidget.h"
@@ -229,6 +233,16 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
   m_statusTimer = new wxTimer(this, ID_STATUS_TIMER);
   m_statusTimer->Start(1000);
 
+  // Create debounced chat list refresh timer
+  m_chatListRefreshTimer = new wxTimer(this, ID_CHATLIST_REFRESH_TIMER);
+  Bind(wxEVT_TIMER, [this](wxTimerEvent& event) {
+    if (event.GetId() == ID_CHATLIST_REFRESH_TIMER) {
+      DoChatListRefresh();
+    } else {
+      event.Skip();
+    }
+  }, ID_CHATLIST_REFRESH_TIMER);
+
   // Ensure welcome chat is visible on startup
   if (m_welcomeChat && m_chatPanel) {
     wxSizer *sizer = m_chatPanel->GetSizer();
@@ -244,6 +258,11 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
 }
 
 MainFrame::~MainFrame() {
+  if (m_chatListRefreshTimer) {
+    m_chatListRefreshTimer->Stop();
+    delete m_chatListRefreshTimer;
+    m_chatListRefreshTimer = nullptr;
+  }
   if (m_serviceLog) {
     m_serviceLog->Stop();
     delete m_serviceLog;
@@ -269,37 +288,119 @@ MainFrame::~MainFrame() {
   }
 }
 
+// Check if system is using dark mode
+bool MainFrame::IsSystemDarkMode() {
+#ifdef __WXMSW__
+  // Check the Windows registry for dark mode setting
+  HKEY hKey;
+  DWORD value = 1; // Default to light mode
+  DWORD size = sizeof(value);
+  
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, 
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+    RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, 
+        reinterpret_cast<LPBYTE>(&value), &size);
+    RegCloseKey(hKey);
+  }
+  
+  return value == 0;
+#else
+  // On Linux/macOS, check if the system appearance is dark
+  // wxWidgets 3.2+ has wxSystemSettings::GetAppearance() but we use a simple heuristic
+  wxColour bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+  // If window background is dark, assume dark mode
+  int brightness = (bgColor.Red() + bgColor.Green() + bgColor.Blue()) / 3;
+  return brightness < 128;
+#endif
+}
+
 void MainFrame::SetupColors() {
-  // Only set user colors for sender names - everything else uses native
-  // defaults These are IRC-style colors that are readable on any background
-  m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
-  m_userColors[1] = wxColour(0x00, 0x73, 0x00);  // Dark green
-  m_userColors[2] = wxColour(0xAA, 0x00, 0x00);  // Dark red
-  m_userColors[3] = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
-  m_userColors[4] = wxColour(0x55, 0x00, 0x55);  // Purple
-  m_userColors[5] = wxColour(0x00, 0x73, 0x73);  // Teal
-  m_userColors[6] = wxColour(0x73, 0x00, 0x73);  // Magenta
-  m_userColors[7] = wxColour(0x00, 0x55, 0xAA);  // Steel blue
-  m_userColors[8] = wxColour(0x55, 0x55, 0x00);  // Olive
-  m_userColors[9] = wxColour(0x73, 0x3D, 0x00);  // Sienna
-  m_userColors[10] = wxColour(0x00, 0x55, 0x55); // Dark cyan
-  m_userColors[11] = wxColour(0x55, 0x00, 0xAA); // Indigo
-  m_userColors[12] = wxColour(0xAA, 0x00, 0x55); // Deep pink
-  m_userColors[13] = wxColour(0x3D, 0x73, 0x00); // Dark lime
-  m_userColors[14] = wxColour(0x00, 0x3D, 0x73); // Navy
-  m_userColors[15] = wxColour(0x73, 0x00, 0x3D); // Maroon
+  bool darkMode = IsSystemDarkMode();
+  
+  if (darkMode) {
+    // Dark mode - use brighter colors for visibility on dark background
+    m_userColors[0] = wxColour(0x55, 0x99, 0xFF);  // Light blue
+    m_userColors[1] = wxColour(0x55, 0xDD, 0x55);  // Light green
+    m_userColors[2] = wxColour(0xFF, 0x77, 0x77);  // Light red
+    m_userColors[3] = wxColour(0xFF, 0xAA, 0x55);  // Light orange
+    m_userColors[4] = wxColour(0xDD, 0x77, 0xDD);  // Light purple
+    m_userColors[5] = wxColour(0x55, 0xDD, 0xDD);  // Light teal
+    m_userColors[6] = wxColour(0xFF, 0x77, 0xFF);  // Light magenta
+    m_userColors[7] = wxColour(0x77, 0xBB, 0xFF);  // Light steel blue
+    m_userColors[8] = wxColour(0xDD, 0xDD, 0x55);  // Light olive
+    m_userColors[9] = wxColour(0xFF, 0x99, 0x55);  // Light sienna
+    m_userColors[10] = wxColour(0x55, 0xDD, 0xDD); // Light cyan
+    m_userColors[11] = wxColour(0xAA, 0x77, 0xFF); // Light indigo
+    m_userColors[12] = wxColour(0xFF, 0x77, 0xAA); // Light pink
+    m_userColors[13] = wxColour(0x99, 0xDD, 0x55); // Light lime
+    m_userColors[14] = wxColour(0x55, 0x99, 0xDD); // Light navy
+    m_userColors[15] = wxColour(0xDD, 0x77, 0x99); // Light maroon
+  } else {
+    // Light mode - use darker colors for visibility on light background
+    // These are IRC-style colors that are readable on any background
+    m_userColors[0] = wxColour(0x00, 0x00, 0xAA);  // Dark blue
+    m_userColors[1] = wxColour(0x00, 0x73, 0x00);  // Dark green
+    m_userColors[2] = wxColour(0xAA, 0x00, 0x00);  // Dark red
+    m_userColors[3] = wxColour(0xAA, 0x55, 0x00);  // Brown/orange
+    m_userColors[4] = wxColour(0x55, 0x00, 0x55);  // Purple
+    m_userColors[5] = wxColour(0x00, 0x73, 0x73);  // Teal
+    m_userColors[6] = wxColour(0x73, 0x00, 0x73);  // Magenta
+    m_userColors[7] = wxColour(0x00, 0x55, 0xAA);  // Steel blue
+    m_userColors[8] = wxColour(0x55, 0x55, 0x00);  // Olive
+    m_userColors[9] = wxColour(0x73, 0x3D, 0x00);  // Sienna
+    m_userColors[10] = wxColour(0x00, 0x55, 0x55); // Dark cyan
+    m_userColors[11] = wxColour(0x55, 0x00, 0xAA); // Indigo
+    m_userColors[12] = wxColour(0xAA, 0x00, 0x55); // Deep pink
+    m_userColors[13] = wxColour(0x3D, 0x73, 0x00); // Dark lime
+    m_userColors[14] = wxColour(0x00, 0x3D, 0x73); // Navy
+    m_userColors[15] = wxColour(0x73, 0x00, 0x3D); // Maroon
+  }
 }
 
 void MainFrame::SetupFonts() {
   // Default fonts - native system fonts for UI, explicit monospace for chat
   wxFont defaultUIFont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-  // Always default to a monospace font for chat (Teletype family)
+  
+#ifdef __WXMSW__
+  // On Windows, use Consolas or Cascadia Mono for better Unicode/emoji support
+  // These fonts have excellent glyph coverage and render well on Windows
+  wxFont defaultChatFont;
+  
+  // Try Cascadia Mono first (Windows Terminal font, best emoji support)
+  defaultChatFont = wxFont(11, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL,
+                           wxFONTWEIGHT_NORMAL, false, "Cascadia Mono");
+  if (!defaultChatFont.IsOk() || defaultChatFont.GetFaceName() != "Cascadia Mono") {
+    // Fall back to Consolas (available on all modern Windows)
+    defaultChatFont = wxFont(11, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL,
+                             wxFONTWEIGHT_NORMAL, false, "Consolas");
+  }
+  if (!defaultChatFont.IsOk()) {
+    // Last resort: generic monospace
+    defaultChatFont = wxFont(11, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
+                             wxFONTWEIGHT_NORMAL);
+  }
+  
+  // For UI font on Windows, prefer Segoe UI which has good Unicode coverage
+  if (defaultUIFont.GetFaceName() != "Segoe UI") {
+    wxFont segoeUI(defaultUIFont.GetPointSize(), wxFONTFAMILY_SWISS, 
+                   wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, "Segoe UI");
+    if (segoeUI.IsOk()) {
+      defaultUIFont = segoeUI;
+    }
+  }
+#else
+  // On Linux/macOS, use Teletype family which picks system monospace
   wxFont defaultChatFont(12, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL,
                          wxFONTWEIGHT_NORMAL);
+#endif
 
   // Ensure default fonts have reasonable sizes
   if (defaultUIFont.GetPointSize() <= 0) {
     defaultUIFont.SetPointSize(12);
+  }
+  if (defaultChatFont.GetPointSize() <= 0) {
+    defaultChatFont.SetPointSize(11);
   }
 
   // Load saved fonts from config, or use defaults
@@ -2011,6 +2112,61 @@ void MainFrame::OnLoggedOut() {
   }
 }
 
+void MainFrame::SetSyncing(bool syncing) {
+  bool wasSync = m_isSyncing.exchange(syncing);
+  if (syncing && !wasSync) {
+    m_syncStartTime = wxGetUTCTimeMillis().GetValue();
+    m_syncUpdateCount = 0;
+    if (m_serviceLog) {
+      m_serviceLog->LogConnectionState("Syncing chats...");
+    }
+  } else if (!syncing && wasSync) {
+    if (m_serviceLog) {
+      m_serviceLog->LogConnectionState("Sync complete");
+    }
+    // Do one final refresh after sync completes
+    ScheduleChatListRefresh();
+  }
+}
+
+void MainFrame::ScheduleChatListRefresh() {
+  if (!m_chatListRefreshTimer)
+    return;
+    
+  // If a refresh is already pending, don't reschedule
+  if (m_chatListRefreshPending && m_chatListRefreshTimer->IsRunning())
+    return;
+    
+  m_chatListRefreshPending = true;
+  
+  // Use longer delay during sync to reduce UI overhead
+  int delay = m_isSyncing ? CHAT_LIST_REFRESH_DELAY_SYNC_MS : CHAT_LIST_REFRESH_DELAY_MS;
+  
+  // Check if we refreshed recently - throttle updates
+  int64_t now = wxGetUTCTimeMillis().GetValue();
+  int64_t timeSinceLastRefresh = now - m_lastChatListRefresh;
+  
+  if (m_isSyncing && timeSinceLastRefresh < SYNC_THROTTLE_INTERVAL_MS) {
+    // During sync, ensure minimum interval between refreshes
+    delay = SYNC_THROTTLE_INTERVAL_MS - static_cast<int>(timeSinceLastRefresh);
+    if (delay < 50) delay = 50;
+  }
+  
+  m_chatListRefreshTimer->StartOnce(delay);
+}
+
+void MainFrame::DoChatListRefresh() {
+  m_chatListRefreshPending = false;
+  m_lastChatListRefresh = wxGetUTCTimeMillis().GetValue();
+  
+  // Track sync progress
+  if (m_isSyncing) {
+    m_syncUpdateCount++;
+  }
+  
+  RefreshChatList();
+}
+
 void MainFrame::RefreshChatList() {
   if (!m_telegramClient || !m_chatListWidget)
     return;
@@ -2738,6 +2894,12 @@ void MainFrame::ReactiveRefresh() {
   if (!m_telegramClient)
     return;
 
+  // Sync our sync state with TelegramClient's
+  bool clientSyncing = m_telegramClient->IsSyncing();
+  if (clientSyncing != m_isSyncing.load()) {
+    SetSyncing(clientSyncing);
+  }
+
   DirtyFlag flags = m_telegramClient->GetAndClearDirtyFlags();
   if (flags == DirtyFlag::None)
     return;
@@ -2799,9 +2961,9 @@ void MainFrame::ReactiveRefresh() {
     }
   }
 
-  // Handle chat list updates
+  // Handle chat list updates - use debounced refresh to prevent UI freeze during sync
   if ((flags & DirtyFlag::ChatList) != DirtyFlag::None) {
-    RefreshChatList();
+    ScheduleChatListRefresh();
   }
 
   // Handle message updates for current chat
