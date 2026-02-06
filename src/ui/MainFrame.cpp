@@ -1,7 +1,12 @@
 #include "MainFrame.h"
+#include "Theme.h"
+#include "ChatArea.h"
+#include "ChatViewWidget.h"
+#include "WelcomeChat.h"
 
 #ifdef __WXMSW__
 #include <windows.h>
+#include <dwmapi.h>
 #endif
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
@@ -101,6 +106,9 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
                                                         ID_DOCUMENTATION,
                                                         MainFrame::
                                                             OnDocumentation)
+    EVT_MENU(ID_THEME_LIGHT, MainFrame::OnThemeLight)
+    EVT_MENU(ID_THEME_DARK, MainFrame::OnThemeDark)
+    EVT_MENU(ID_THEME_SYSTEM, MainFrame::OnThemeSystem)
     // Tree events are bound dynamically in CreateMainLayout() since tree is in
     // ChatListWidget
     EVT_LIST_ITEM_ACTIVATED(ID_MEMBER_LIST,
@@ -120,11 +128,18 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
       m_chatPanel(nullptr), m_welcomeChat(nullptr), m_chatViewWidget(nullptr),
       m_inputBoxWidget(nullptr), m_rightPanel(nullptr), m_memberList(nullptr),
       m_memberCountLabel(nullptr), m_statusBar(nullptr), m_serviceLog(nullptr),
+      m_menuBarPanel(nullptr), m_mainSizer(nullptr), m_menuFile(nullptr),
+      m_menuTelegram(nullptr), m_menuEdit(nullptr), m_menuView(nullptr),
+      m_menuWindow(nullptr), m_menuHelp(nullptr),
+      m_isMenuOpen(false), m_currentMenuId(0), m_pendingMenuId(0),
 
       m_showChatList(true), m_showMembers(true), m_showChatInfo(true),
       m_showUnreadFirst(true), m_isLoggedIn(false), m_currentUser(""),
       m_currentChatId(0), m_currentChatTitle(""),
       m_currentChatType(TelegramChatType::Private) {
+  // Load saved theme preference before creating UI
+  ThemeManager::Get().LoadThemePreference();
+  
   SetupColors();
   SetupFonts();
   CreateMenuBar();
@@ -132,6 +147,9 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame) EVT_MENU(
 
   // Apply saved fonts to widgets (must be after CreateMainLayout)
   ApplySavedFonts();
+  
+  // Apply theme to all UI elements (must be after CreateMainLayout)
+  ApplyThemeToUI();
 
   // Setup status bar manager
   m_statusBar = new StatusBarManager(this);
@@ -476,79 +494,138 @@ void MainFrame::ApplySavedFonts() {
 }
 
 void MainFrame::CreateMenuBar() {
-  wxMenuBar *menuBar = new wxMenuBar;
-
-  // Teleliter menu
-  wxMenu *menuApp = new wxMenu;
-  menuApp->Append(ID_LOGIN, "Login...\tCtrl+L");
-  menuApp->Append(ID_LOGOUT, "Logout");
-  menuApp->AppendSeparator();
-  menuApp->Append(ID_RAW_LOG, "TDLib Log...");
-  menuApp->AppendSeparator();
-  menuApp->Append(wxID_EXIT, "Quit\tCtrl+Q");
-  menuBar->Append(menuApp, "&Teleliter");
+  // Custom Menu Bar Implementation
+  // We don't use wxMenuBar/SetMenuBar because it doesn't support dark mode well
+  
+  // Teleliter menu (m_menuFile)
+  m_menuFile = new wxMenu;
+  m_menuFile->Append(ID_LOGIN, "Login...\tCtrl+L");
+  m_menuFile->Append(ID_LOGOUT, "Logout");
+  m_menuFile->AppendSeparator();
+  m_menuFile->Append(ID_RAW_LOG, "TDLib Log...");
+  m_menuFile->AppendSeparator();
+  m_menuFile->Append(wxID_EXIT, "Quit\tCtrl+Q");
+  // menuBar->Append(m_menuFile, "&Teleliter");
 
   // Telegram menu
-  wxMenu *menuTelegram = new wxMenu;
-  menuTelegram->Append(ID_NEW_CHAT, "New Private Chat...\tCtrl+N");
-  menuTelegram->Append(ID_NEW_GROUP, "New Group...\tCtrl+G");
-  menuTelegram->Append(ID_NEW_CHANNEL, "New Channel...");
-  menuTelegram->AppendSeparator();
-  menuTelegram->Append(ID_CONTACTS, "Contacts...\tCtrl+Shift+C");
-  menuTelegram->Append(ID_SEARCH, "Search...\tCtrl+F");
-  menuTelegram->AppendSeparator();
-  menuTelegram->Append(ID_SAVED_MESSAGES, "Saved Messages");
-  menuTelegram->AppendSeparator();
-  menuTelegram->Append(ID_UPLOAD_FILE, "Upload File...\tCtrl+U");
-  menuBar->Append(menuTelegram, "&Telegram");
+  m_menuTelegram = new wxMenu;
+  m_menuTelegram->Append(ID_NEW_CHAT, "New Private Chat...\tCtrl+N");
+  m_menuTelegram->Append(ID_NEW_GROUP, "New Group...\tCtrl+G");
+  m_menuTelegram->Append(ID_NEW_CHANNEL, "New Channel...");
+  m_menuTelegram->AppendSeparator();
+  m_menuTelegram->Append(ID_CONTACTS, "Contacts...\tCtrl+Shift+C");
+  m_menuTelegram->Append(ID_SEARCH, "Search...\tCtrl+F");
+  m_menuTelegram->AppendSeparator();
+  m_menuTelegram->Append(ID_SAVED_MESSAGES, "Saved Messages");
+  m_menuTelegram->AppendSeparator();
+  m_menuTelegram->Append(ID_UPLOAD_FILE, "Upload File...\tCtrl+U");
+  // menuBar->Append(m_menuTelegram, "&Telegram");
 
   // Edit menu
-  wxMenu *menuEdit = new wxMenu;
-  menuEdit->Append(wxID_CUT, "Cut\tCtrl+X");
-  menuEdit->Append(wxID_COPY, "Copy\tCtrl+C");
-  menuEdit->Append(wxID_PASTE, "Paste\tCtrl+V");
-  menuEdit->AppendSeparator();
-  menuEdit->Append(ID_CLEAR_WINDOW, "Clear Chat Window\tCtrl+Shift+L");
-  menuEdit->AppendSeparator();
-  menuEdit->Append(ID_PREFERENCES, "Preferences\tCtrl+E");
-  menuBar->Append(menuEdit, "&Edit");
+  m_menuEdit = new wxMenu;
+  m_menuEdit->Append(wxID_CUT, "Cut\tCtrl+X");
+  m_menuEdit->Append(wxID_COPY, "Copy\tCtrl+C");
+  m_menuEdit->Append(wxID_PASTE, "Paste\tCtrl+V");
+  m_menuEdit->AppendSeparator();
+  m_menuEdit->Append(ID_CLEAR_WINDOW, "Clear Chat Window\tCtrl+Shift+L");
+  m_menuEdit->AppendSeparator();
+  m_menuEdit->Append(ID_PREFERENCES, "Preferences\tCtrl+E");
+  // menuBar->Append(m_menuEdit, "&Edit");
 
   // View menu
-  wxMenu *menuView = new wxMenu;
-  menuView->AppendCheckItem(ID_SHOW_CHAT_LIST, "Chat List\tF9");
-  menuView->Check(ID_SHOW_CHAT_LIST, true);
-  menuView->AppendCheckItem(ID_SHOW_MEMBERS, "Members List\tF7");
-  menuView->Check(ID_SHOW_MEMBERS, true);
-  menuView->AppendCheckItem(ID_SHOW_CHAT_INFO, "Chat Info Bar");
-  menuView->Check(ID_SHOW_CHAT_INFO, true);
-  menuView->AppendSeparator();
-  menuView->AppendCheckItem(ID_UNREAD_FIRST, "Unread Chats First");
-  menuView->Check(ID_UNREAD_FIRST, true);
-  menuView->AppendSeparator();
-  menuView->Append(ID_FULLSCREEN, "Fullscreen\tF11");
-  menuBar->Append(menuView, "&View");
+  m_menuView = new wxMenu;
+  m_menuView->AppendCheckItem(ID_SHOW_CHAT_LIST, "Chat List\tF9");
+  m_menuView->Check(ID_SHOW_CHAT_LIST, true);
+  m_menuView->AppendCheckItem(ID_SHOW_MEMBERS, "Members List\tF7");
+  m_menuView->Check(ID_SHOW_MEMBERS, true);
+  m_menuView->AppendCheckItem(ID_SHOW_CHAT_INFO, "Chat Info Bar");
+  m_menuView->Check(ID_SHOW_CHAT_INFO, true);
+  m_menuView->AppendSeparator();
+  m_menuView->AppendCheckItem(ID_UNREAD_FIRST, "Unread Chats First");
+  m_menuView->Check(ID_UNREAD_FIRST, true);
+  m_menuView->AppendSeparator();
+  
+  // Theme submenu
+  wxMenu *menuTheme = new wxMenu;
+  menuTheme->AppendRadioItem(ID_THEME_LIGHT, "Light");
+  menuTheme->AppendRadioItem(ID_THEME_DARK, "Dark");
+  menuTheme->AppendRadioItem(ID_THEME_SYSTEM, "System Default");
+  // Check the current theme
+  ThemeType currentTheme = ThemeManager::Get().GetThemeType();
+  if (currentTheme == ThemeType::Light) {
+    menuTheme->Check(ID_THEME_LIGHT, true);
+  } else if (currentTheme == ThemeType::Dark) {
+    menuTheme->Check(ID_THEME_DARK, true);
+  } else {
+    menuTheme->Check(ID_THEME_SYSTEM, true);
+  }
+  m_menuView->AppendSubMenu(menuTheme, "Theme");
+  
+  m_menuView->AppendSeparator();
+  m_menuView->Append(ID_FULLSCREEN, "Fullscreen\tF11");
+  // menuBar->Append(m_menuView, "&View");
 
   // Window menu
-  wxMenu *menuWindow = new wxMenu;
-  menuWindow->Append(ID_PREV_CHAT, "Previous Chat\tCtrl+PgUp");
-  menuWindow->Append(ID_NEXT_CHAT, "Next Chat\tCtrl+PgDn");
-  menuWindow->AppendSeparator();
-  menuWindow->Append(ID_CLOSE_CHAT, "Close Chat\tCtrl+W");
-  menuBar->Append(menuWindow, "&Window");
+  m_menuWindow = new wxMenu;
+  m_menuWindow->Append(ID_PREV_CHAT, "Previous Chat\tCtrl+PgUp");
+  m_menuWindow->Append(ID_NEXT_CHAT, "Next Chat\tCtrl+PgDn");
+  m_menuWindow->AppendSeparator();
+  m_menuWindow->Append(ID_CLOSE_CHAT, "Close Chat\tCtrl+W");
+  // menuBar->Append(m_menuWindow, "&Window");
 
   // Help menu
-  wxMenu *menuHelp = new wxMenu;
-  menuHelp->Append(ID_DOCUMENTATION, "Documentation\tF1");
-  menuHelp->AppendSeparator();
-  menuHelp->Append(wxID_ABOUT, "About");
-  menuBar->Append(menuHelp, "&Help");
+  m_menuHelp = new wxMenu;
+  m_menuHelp->Append(ID_DOCUMENTATION, "Documentation\tF1");
+  m_menuHelp->AppendSeparator();
+  m_menuHelp->Append(wxID_ABOUT, "About");
+  // menuBar->Append(m_menuHelp, "&Help");
 
-  SetMenuBar(menuBar);
+  // Note: We do NOT define SetMenuBar(menuBar) here anymore.
+  // The actual UI bar will be created in CreateMainLayout
 }
 
 void MainFrame::CreateMainLayout() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
+  // Create Custom Menu Bar Panel
+  m_menuBarPanel = new wxPanel(this);
+  m_menuBarPanel->SetBackgroundColour(colors.windowBg);
+  
+  // Setup menu timer for hover tracking
+  m_menuTimer = new wxTimer(this);
+  Bind(wxEVT_TIMER, &MainFrame::OnMenuTimer, this, m_menuTimer->GetId());
+  
+  wxBoxSizer* menuSizer = new wxBoxSizer(wxHORIZONTAL);
+  m_menuBarPanel->SetSizer(menuSizer);
+  
+  // Helper to add menu buttons
+  auto addMenuBtn = [&](int id, const wxString& label) {
+      wxButton* btn = new wxButton(m_menuBarPanel, id, label, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+      btn->SetBackgroundColour(colors.windowBg);
+      btn->SetForegroundColour(colors.windowFg);
+      
+      // Calculate compact size based on text
+      wxClientDC dc(btn);
+      dc.SetFont(btn->GetFont());
+      wxSize textSize = dc.GetTextExtent(label);
+      // Add small padding: 10px horizontal total (5px each side), 6px vertical
+      btn->SetMinSize(wxSize(textSize.x + 10, textSize.y + 6));
+      
+      btn->Bind(wxEVT_BUTTON, &MainFrame::OnMenuButtonClick, this);
+      // Add with 0 margin for tight spacing
+      menuSizer->Add(btn, 0, wxALIGN_CENTER_VERTICAL);
+  };
+  
+  // Add buttons with aligned IDs
+  addMenuBtn(10001, "Teleliter"); // Teleliter menu
+  addMenuBtn(10002, "Telegram");
+  addMenuBtn(10003, "Edit");
+  addMenuBtn(10004, "View");
+  addMenuBtn(10005, "Window");
+  addMenuBtn(10006, "Help");
+  
   wxPanel *mainPanel = new wxPanel(this);
-  // Let panels use native background colors
+  mainPanel->SetBackgroundColour(colors.windowBg);
 
   // Main horizontal splitter (chat list | rest)
   m_mainSplitter =
@@ -556,12 +633,13 @@ void MainFrame::CreateMainLayout() {
                            wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3DSASH);
   m_mainSplitter->SetSashGravity(0.0);
   m_mainSplitter->SetMinimumPaneSize(120);
+  m_mainSplitter->SetBackgroundColour(colors.windowBg);
 
   // Left panel - Chat list widget
   m_leftPanel = new wxPanel(m_mainSplitter);
-  // Use native background
+  m_leftPanel->SetBackgroundColour(colors.panelBg);
 
-  // Create chat list widget - uses native styling
+  // Create chat list widget - uses theme styling
   m_chatListWidget = new ChatListWidget(m_leftPanel);
 
   // Bind tree events directly to the tree control (since it's in a child
@@ -584,15 +662,16 @@ void MainFrame::CreateMainLayout() {
                            wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3DSASH);
   m_rightSplitter->SetSashGravity(1.0);
   m_rightSplitter->SetMinimumPaneSize(100);
+  m_rightSplitter->SetBackgroundColour(colors.windowBg);
 
   // Center panel - Chat
   m_chatPanel = new wxPanel(m_rightSplitter);
-  // Use native background
+  m_chatPanel->SetBackgroundColour(colors.windowBg);
   CreateChatPanel(m_chatPanel);
 
   // Right panel - Member list
   m_rightPanel = new wxPanel(m_rightSplitter);
-  // Use native background
+  m_rightPanel->SetBackgroundColour(colors.panelBg);
   CreateMemberList(m_rightPanel);
 
   // Split the right splitter (chat | members)
@@ -608,6 +687,9 @@ void MainFrame::CreateMainLayout() {
 
   // Frame sizer
   wxBoxSizer *frameSizer = new wxBoxSizer(wxVERTICAL);
+  if (m_menuBarPanel) {
+      frameSizer->Add(m_menuBarPanel, 0, wxEXPAND);
+  }
   frameSizer->Add(mainPanel, 1, wxEXPAND);
   SetSizer(frameSizer);
 }
@@ -641,21 +723,25 @@ void MainFrame::CreateChatPanel(wxWindow *parent) {
 }
 
 void MainFrame::CreateMemberList(wxWindow *parent) {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
   wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
 
-  // Member list - let macOS handle native dark mode colors
+  // Member list with theme colors
   m_memberList =
       new wxListCtrl(parent, ID_MEMBER_LIST, wxDefaultPosition, wxDefaultSize,
                      wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_NO_HEADER);
+  m_memberList->SetBackgroundColour(colors.listBg);
+  m_memberList->SetForegroundColour(colors.listFg);
 
   // Single column for usernames
   m_memberList->InsertColumn(0, "Members", wxLIST_FORMAT_LEFT, 120);
 
   sizer->Add(m_memberList, 1, wxEXPAND);
 
-  // Member count at bottom - use native styling
+  // Member count at bottom with theme colors
   m_memberCountLabel = new wxStaticText(parent, wxID_ANY, "0 members");
-  // Let label use native font - no need to override
+  m_memberCountLabel->SetForegroundColour(colors.mutedText);
   sizer->Add(m_memberCountLabel, 0, wxALL, 3);
 
   parent->SetSizer(sizer);
@@ -1449,6 +1535,134 @@ void MainFrame::OnFullscreen(wxCommandEvent &event) {
   ShowFullScreen(!IsFullScreen(),
                  wxFULLSCREEN_NOTOOLBAR | wxFULLSCREEN_NOSTATUSBAR |
                      wxFULLSCREEN_NOBORDER | wxFULLSCREEN_NOCAPTION);
+}
+
+void MainFrame::OnThemeLight(wxCommandEvent &event) {
+  ThemeManager::Get().SetTheme(ThemeType::Light);
+  ApplyThemeToUI();
+}
+
+void MainFrame::OnThemeDark(wxCommandEvent &event) {
+  ThemeManager::Get().SetTheme(ThemeType::Dark);
+  ApplyThemeToUI();
+}
+
+void MainFrame::OnThemeSystem(wxCommandEvent &event) {
+  ThemeManager::Get().SetTheme(ThemeType::System);
+  ApplyThemeToUI();
+}
+
+void MainFrame::ApplyThemeToUI() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  bool isDark = ThemeManager::Get().IsDarkTheme();
+  
+#ifdef __WXMSW__
+  // Update Windows title bar dark mode
+  HWND hwnd = GetHWND();
+  if (hwnd) {
+    BOOL darkMode = isDark ? TRUE : FALSE;
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 20H1+)
+    if (FAILED(DwmSetWindowAttribute(hwnd, 20, &darkMode, sizeof(darkMode)))) {
+      // Fall back to undocumented attribute for older Windows 10
+      DwmSetWindowAttribute(hwnd, 19, &darkMode, sizeof(darkMode));
+    }
+    // Force title bar redraw
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, 
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+  }
+#endif
+  
+  // Apply to main frame
+  SetBackgroundColour(colors.windowBg);
+  SetForegroundColour(colors.windowFg);
+  
+  // Apply to all panels recursively
+  std::function<void(wxWindow*)> applyToWindow = [&](wxWindow* window) {
+    if (!window) return;
+    
+    // Set colors based on window type
+    wxString className = window->GetClassInfo()->GetClassName();
+    
+    if (className == "wxPanel" || className == "wxSplitterWindow") {
+      window->SetBackgroundColour(colors.panelBg);
+      window->SetForegroundColour(colors.windowFg);
+    } else if (className == "wxTreeCtrl") {
+      window->SetBackgroundColour(colors.listBg);
+      window->SetForegroundColour(colors.listFg);
+    } else if (className == "wxListCtrl") {
+      window->SetBackgroundColour(colors.listBg);
+      window->SetForegroundColour(colors.listFg);
+    } else if (className == "wxTextCtrl") {
+      window->SetBackgroundColour(colors.controlBg);
+      window->SetForegroundColour(colors.controlFg);
+    } else if (className == "wxRichTextCtrl") {
+      window->SetBackgroundColour(colors.chatBg);
+      window->SetForegroundColour(colors.chatFg);
+    } else if (className == "wxStaticText") {
+      window->SetForegroundColour(colors.windowFg);
+    } else if (className == "wxSearchCtrl") {
+      window->SetBackgroundColour(colors.controlBg);
+      window->SetForegroundColour(colors.controlFg);
+    } else {
+      window->SetBackgroundColour(colors.panelBg);
+      window->SetForegroundColour(colors.windowFg);
+    }
+    
+    // Apply to children
+    wxWindowList& children = window->GetChildren();
+    for (wxWindow* child : children) {
+      applyToWindow(child);
+    }
+  };
+  
+  applyToWindow(this);
+  
+  // Update status bar colors via StatusBarManager
+  if (m_statusBar) {
+    m_statusBar->RefreshTheme();
+  }
+  
+  // Refresh ChatViewWidget (includes ChatArea, topic bars, etc.)
+  if (m_chatViewWidget) {
+    m_chatViewWidget->RefreshTheme();
+  }
+  
+  // Refresh WelcomeChat
+  if (m_welcomeChat) {
+    ChatArea* chatArea = m_welcomeChat->GetChatArea();
+    if (chatArea) {
+      chatArea->RefreshTheme();
+    }
+  }
+  
+  // Apply theme to InputBoxWidget (wxStyledTextCtrl needs special handling)
+  if (m_inputBoxWidget) {
+    m_inputBoxWidget->SetColors(colors.controlBg, colors.controlFg);
+  }
+  
+  // Apply theme to ChatListWidget
+  if (m_chatListWidget) {
+    m_chatListWidget->SetTreeColors(colors.listBg, colors.listFg, colors.listSelectionBg);
+  }
+  
+  // Apply theme to member list (right panel)
+  if (m_rightPanel) {
+    m_rightPanel->SetBackgroundColour(colors.panelBg);
+  }
+  if (m_memberList) {
+    m_memberList->SetBackgroundColour(colors.listBg);
+    m_memberList->SetForegroundColour(colors.listFg);
+  }
+  if (m_memberCountLabel) {
+    m_memberCountLabel->SetForegroundColour(colors.mutedText);
+  }
+  
+  // Update custom menu bar
+  UpdateCustomMenuBar();
+  
+  // Force refresh
+  Refresh();
+  Update();
 }
 
 void MainFrame::OnRawLog(wxCommandEvent &event) {
@@ -3305,4 +3519,135 @@ int64_t MainFrame::GetLastReadMessageId(int64_t chatId) const {
   }
 
   return 0;
+}
+
+void MainFrame::UpdateCustomMenuBar() {
+  if (!m_menuBarPanel) return;
+
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
+  // Update panel background
+  m_menuBarPanel->SetBackgroundColour(colors.windowBg);
+  
+  // Update all children (buttons)
+  wxWindowList& children = m_menuBarPanel->GetChildren();
+  for (wxWindowList::iterator it = children.begin(); it != children.end(); ++it) {
+      wxWindow* child = *it;
+      child->SetBackgroundColour(colors.windowBg);
+      child->SetForegroundColour(colors.windowFg);
+      // For flat buttons to update immediately
+      child->Refresh();
+  }
+  
+  m_menuBarPanel->Refresh();
+}
+
+void MainFrame::OnMenuButtonClick(wxCommandEvent& event) {
+    wxButton* btn = wxDynamicCast(event.GetEventObject(), wxButton);
+    if (!btn) return;
+
+    // Position menu below button
+    wxPoint pos = btn->GetPosition();
+    pos.y += btn->GetSize().GetHeight();
+    
+    // Choose menu based on ID
+    int id = event.GetId();
+    wxMenu* menu = nullptr;
+    
+    // We use arbitrary IDs 10001-10006 for the buttons
+    // Teleliter=10001, Telegram=10002, Edit=10003, View=10004, Window=10005, Help=10006
+    switch(id) {
+        case 10001: menu = m_menuFile; break;
+        case 10002: menu = m_menuTelegram; break;
+        case 10003: menu = m_menuEdit; break;
+        case 10004: menu = m_menuView; break;
+        case 10005: menu = m_menuWindow; break;
+        case 10006: menu = m_menuHelp; break;
+    }
+    
+    if (menu) {
+        // Visual feedback: Highlight the button while menu is open
+        const ThemeColors& colors = ThemeManager::Get().GetColors();
+        wxColour originalBg = btn->GetBackgroundColour();
+        
+        // Use list selection background or a lighter shade of window bg
+        btn->SetBackgroundColour(colors.listSelectionBg);
+        btn->Refresh();
+        btn->Update(); // Force immediate repaint
+        
+        // Start tracking
+        m_isMenuOpen = true;
+        m_currentMenuId = id;
+        m_pendingMenuId = 0; // Reset pending
+        if (m_menuTimer) {
+             m_menuTimer->Start(50); // Check every 50ms
+        }
+        
+        // Show popup menu at button position relative to panel
+        // This is a blocking call on Windows
+        m_menuBarPanel->PopupMenu(menu, pos);
+        
+        // Stop tracking
+        m_isMenuOpen = false;
+        if (m_menuTimer) m_menuTimer->Stop();
+        
+        // Restore original color after menu closes
+        btn->SetBackgroundColour(originalBg);
+        btn->Refresh();
+        btn->Update();
+        
+        // Check if we need to open another menu (because of hover)
+        // This executes AFTER PopupMenu returns, ensuring clean state
+        if (m_pendingMenuId != 0 && m_pendingMenuId != id) {
+             // Find the pending button
+             wxWindow* pendingBtn = m_menuBarPanel->FindWindow(m_pendingMenuId);
+             if (pendingBtn) {
+                 // Open the next menu immediately
+                 // We must signal the BUTTON to process the event, because the Bind() is on the button
+                 wxCommandEvent newEvent(wxEVT_BUTTON, m_pendingMenuId);
+                 newEvent.SetEventObject(pendingBtn);
+                 pendingBtn->GetEventHandler()->ProcessEvent(newEvent); 
+             }
+             m_pendingMenuId = 0;
+        }
+    }
+}
+
+void MainFrame::OnMenuTimer(wxTimerEvent& event) {
+    if (!m_isMenuOpen || !m_menuBarPanel) return;
+    
+    // Get mouse position
+    wxPoint globalMouse = ::wxGetMousePosition();
+    wxPoint clientMouse = m_menuBarPanel->ScreenToClient(globalMouse);
+    
+    // Iterate over menu buttons to see if we hovered another one
+    wxWindowList& children = m_menuBarPanel->GetChildren();
+    for (wxWindowList::iterator it = children.begin(); it != children.end(); ++it) {
+        wxWindow* btn = *it;
+        // Skip current active button
+        if (btn->GetId() == m_currentMenuId) continue; 
+        
+        // Check if mouse is over this button
+        if (btn->GetRect().Contains(clientMouse)) {
+            // Mouse has moved to another button!
+            
+            // Set pending ID so main loop knows what to open next
+            m_pendingMenuId = btn->GetId();
+            
+            #ifdef __WXMSW__
+            // Simulate ESC key to close the menu reliably
+            // This works because the menu loop consumes keyboard input
+            HWND hwnd = GetHWND();
+            if (hwnd) {
+                ::PostMessage(hwnd, WM_KEYDOWN, VK_ESCAPE, 0);
+                ::PostMessage(hwnd, WM_KEYUP, VK_ESCAPE, 0);
+            }
+            #endif
+            
+            // Stop this timer instance
+            m_isMenuOpen = false; 
+            if (m_menuTimer) m_menuTimer->Stop();
+            break;
+        }
+    }
 }

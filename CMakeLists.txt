@@ -142,7 +142,16 @@ find_package(ZLIB REQUIRED)
 
 # Find libwebp for WebP image support (Telegram stickers)
 find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
+
+if(WIN32)
+    # Windows - use find_library for vcpkg compatibility
+    find_path(WEBP_INCLUDE_DIRS webp/decode.h)
+    find_library(WEBP_LIBRARY NAMES webp libwebp)
+    if(WEBP_INCLUDE_DIRS AND WEBP_LIBRARY)
+        set(WEBP_FOUND TRUE)
+        set(WEBP_LIBRARIES ${WEBP_LIBRARY})
+    endif()
+elseif(PkgConfig_FOUND)
     pkg_check_modules(WEBP libwebp)
 endif()
 
@@ -324,7 +333,16 @@ endif()
 # Find rlottie for TGS (Lottie) sticker animation support
 set(RLOTTIE_FOUND FALSE)
 
-if(PkgConfig_FOUND)
+if(WIN32)
+    # Windows - use find_library for vcpkg compatibility
+    find_path(RLOTTIE_INCLUDE_DIRS rlottie.h PATH_SUFFIXES rlottie)
+    find_library(RLOTTIE_LIBRARY NAMES rlottie)
+    if(RLOTTIE_INCLUDE_DIRS AND RLOTTIE_LIBRARY)
+        set(RLOTTIE_FOUND TRUE)
+        set(RLOTTIE_LIBRARIES ${RLOTTIE_LIBRARY})
+        message(STATUS "Found rlottie on Windows: includes=${RLOTTIE_INCLUDE_DIRS} libs=${RLOTTIE_LIBRARIES}")
+    endif()
+elseif(PkgConfig_FOUND)
     if(STATIC_LINK AND UNIX AND NOT APPLE)
         pkg_check_modules(RLOTTIE STATIC rlottie)
     else()

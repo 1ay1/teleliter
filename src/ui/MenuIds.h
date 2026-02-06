@@ -31,6 +31,11 @@ enum {
     ID_UNREAD_FIRST,
     ID_TOGGLE_READ_RECEIPTS,
     
+    // Theme menu
+    ID_THEME_LIGHT,
+    ID_THEME_DARK,
+    ID_THEME_SYSTEM,
+    
     // Window menu
     ID_PREV_CHAT,
     ID_NEXT_CHAT,

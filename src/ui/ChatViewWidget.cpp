@@ -4,6 +4,7 @@
 #include "MainFrame.h"
 #include "MediaPopup.h"
 #include "MessageFormatter.h"
+#include "Theme.h"
 #include <algorithm>
 #include <iostream>
 #include <unordered_map>
@@ -119,15 +120,21 @@ ChatViewWidget::~ChatViewWidget() {
 }
 
 void ChatViewWidget::CreateLayout() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
+  // Set main panel background
+  SetBackgroundColour(colors.windowBg);
+  
   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
 
   // Topic bar at top (HexChat style) - for groups/channels
   m_topicBar = new wxPanel(this, wxID_ANY);
+  m_topicBar->SetBackgroundColour(colors.panelBg);
 
   wxBoxSizer *topicSizer = new wxBoxSizer(wxHORIZONTAL);
 
   m_topicText = new wxStaticText(m_topicBar, wxID_ANY, "");
-  // Let text use native colors and font
+  m_topicText->SetForegroundColour(colors.windowFg);
 
   topicSizer->Add(m_topicText, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT,
                   8);
@@ -143,11 +150,11 @@ void ChatViewWidget::CreateLayout() {
 
   // Loading indicator for older messages (shown when scrolling up)
   m_loadingOlderPanel = new wxPanel(this, wxID_ANY);
+  m_loadingOlderPanel->SetBackgroundColour(colors.windowBg);
   wxBoxSizer *loadingOlderSizer = new wxBoxSizer(wxHORIZONTAL);
   m_loadingOlderText = new wxStaticText(m_loadingOlderPanel, wxID_ANY,
                                         "Loading older messages...");
-  m_loadingOlderText->SetForegroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  m_loadingOlderText->SetForegroundColour(colors.mutedText);
   loadingOlderSizer->AddStretchSpacer();
   loadingOlderSizer->Add(m_loadingOlderText, 0, wxALIGN_CENTER_VERTICAL | wxALL,
                          4);
@@ -172,9 +179,10 @@ void ChatViewWidget::CreateLayout() {
 }
 
 void ChatViewWidget::CreateUserDetailsBar() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
   m_userDetailsBar = new wxPanel(this, wxID_ANY);
-  m_userDetailsBar->SetBackgroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+  m_userDetailsBar->SetBackgroundColour(colors.panelBg);
 
   wxBoxSizer *mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -191,6 +199,7 @@ void ChatViewWidget::CreateUserDetailsBar() {
   // Name row with status
   wxBoxSizer *nameRow = new wxBoxSizer(wxHORIZONTAL);
   m_userName = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
+  m_userName->SetForegroundColour(colors.windowFg);
   wxFont nameFont = m_userName->GetFont();
   nameFont.SetWeight(wxFONTWEIGHT_BOLD);
   nameFont.SetPointSize(nameFont.GetPointSize() + 1);
@@ -198,7 +207,7 @@ void ChatViewWidget::CreateUserDetailsBar() {
   nameRow->Add(m_userName, 0, wxALIGN_CENTER_VERTICAL);
 
   m_userStatus = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
-  m_userStatus->SetForegroundColour(wxColour(76, 175, 80)); // Green for online
+  m_userStatus->SetForegroundColour(colors.accentSuccess); // Green for online
   nameRow->Add(m_userStatus, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 10);
 
   infoSizer->Add(nameRow, 0, wxEXPAND);
@@ -206,13 +215,11 @@ void ChatViewWidget::CreateUserDetailsBar() {
   // Username and phone row
   wxBoxSizer *detailsRow = new wxBoxSizer(wxHORIZONTAL);
   m_userUsername = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
-  m_userUsername->SetForegroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  m_userUsername->SetForegroundColour(colors.mutedText);
   detailsRow->Add(m_userUsername, 0, wxALIGN_CENTER_VERTICAL);
 
   m_userPhone = new wxStaticText(m_userDetailsBar, wxID_ANY, "");
-  m_userPhone->SetForegroundColour(
-      wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+  m_userPhone->SetForegroundColour(colors.mutedText);
   detailsRow->Add(m_userPhone, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 15);
 
   infoSizer->Add(detailsRow, 0, wxEXPAND | wxTOP, 2);
@@ -522,6 +529,57 @@ void ChatViewWidget::ClearTopicText() {
   }
   m_currentUserId = 0;
   Layout();
+}
+
+void ChatViewWidget::RefreshTheme() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
+  // Theme the main panel
+  SetBackgroundColour(colors.windowBg);
+  
+  // Theme the topic bar
+  if (m_topicBar) {
+    m_topicBar->SetBackgroundColour(colors.panelBg);
+    if (m_topicText) {
+      m_topicText->SetForegroundColour(colors.windowFg);
+    }
+  }
+  
+  // Theme the user details bar (private chat header)
+  if (m_userDetailsBar) {
+    m_userDetailsBar->SetBackgroundColour(colors.panelBg);
+    if (m_userName) {
+      m_userName->SetForegroundColour(colors.windowFg);
+    }
+    if (m_userUsername) {
+      m_userUsername->SetForegroundColour(colors.mutedText);
+    }
+    if (m_userPhone) {
+      m_userPhone->SetForegroundColour(colors.mutedText);
+    }
+    // Note: m_userStatus color is set dynamically based on online status
+  }
+  
+  // Theme the loading older messages panel
+  if (m_loadingOlderPanel) {
+    m_loadingOlderPanel->SetBackgroundColour(colors.windowBg);
+    if (m_loadingOlderText) {
+      m_loadingOlderText->SetForegroundColour(colors.mutedText);
+    }
+  }
+  
+  // Theme the new message button
+  if (m_newMessageButton) {
+    m_newMessageButton->SetBackgroundColour(colors.accentPrimary);
+    m_newMessageButton->SetForegroundColour(wxColour(255, 255, 255));
+  }
+  
+  // Refresh the ChatArea
+  if (m_chatArea) {
+    m_chatArea->RefreshTheme();
+  }
+  
+  Refresh();
 }
 
 void ChatViewWidget::CreateNewMessageButton() {

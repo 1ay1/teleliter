@@ -95,6 +95,9 @@ public:
   void SetTopicUserInfo(const UserInfo &user);  // Enhanced topic bar for private chats
   void ClearTopicText();
   
+  // Theme support
+  void RefreshTheme();
+  
   // Set Telegram client for user lookups
   void SetTelegramClient(TelegramClient *client) { m_telegramClient = client; }
 

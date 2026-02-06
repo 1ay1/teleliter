@@ -1,6 +1,7 @@
 #ifndef CHATAREA_H
 #define CHATAREA_H
 
+#include "Theme.h"
 #include <wx/richtext/richtextctrl.h>
 #include <wx/settings.h>
 #include <wx/timer.h>
@@ -118,40 +119,40 @@ public:
   void AppendLeave(const wxString &user);
   void AppendLeave(const wxString &timestamp, const wxString &user);
 
-  // ===== Color accessors - return system colors on-demand =====
+  // ===== Color accessors - return theme colors =====
   wxColour GetBgColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+    return ThemeManager::Get().GetColors().chatBg;
   }
   wxColour GetFgColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    return ThemeManager::Get().GetColors().chatFg;
   }
   wxColour GetTimestampColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    return ThemeManager::Get().GetColors().timestampColor;
   }
   wxColour GetInfoColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    return ThemeManager::Get().GetColors().accentInfo;
   }
   const wxColour &GetErrorColor() const { return m_errorColor; }
   const wxColour &GetSuccessColor() const { return m_successColor; }
   wxColour GetPromptColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    return ThemeManager::Get().GetColors().accentPrimary;
   }
   wxColour GetServiceColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    return ThemeManager::Get().GetColors().mutedText;
   }
   wxColour GetActionColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    return ThemeManager::Get().GetColors().accentPrimary;
   }
   wxColour GetLinkColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+    return ThemeManager::Get().GetColors().linkColor;
   }
   wxColour GetSelfColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    return ThemeManager::Get().GetColors().mutedText;
   }
 
   // Status marker colors
   wxColour GetSentColor() const {
-    return wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    return ThemeManager::Get().GetColors().mutedText;
   }
   const wxColour &GetReadColor() const { return m_readColor; }
   const wxColour &GetReadHighlightColor() const { return m_readHighlightColor; }
@@ -172,6 +173,9 @@ public:
   // Font control
   void SetChatFont(const wxFont &font);
   wxFont GetChatFont() const { return m_chatFont; }
+  
+  // Theme refresh - call when theme changes
+  void RefreshTheme();
 
   // Cursor control - allows parent widgets to set cursor for clickable elements
   void SetCurrentCursor(wxStockCursor cursor) { m_currentCursor = cursor; }

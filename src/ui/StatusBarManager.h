@@ -79,6 +79,9 @@ public:
 
   // Font control
   void SetFont(const wxFont &font);
+  
+  // Theme support
+  void RefreshTheme();
 
 private:
   wxFrame *m_parent;
@@ -93,8 +96,10 @@ private:
   int m_typingAnimFrame;
   wxTimer m_typingAnimTimer;
 
-  // Status bar widgets (connection label for colored status)
-  wxStaticText *m_connectionLabel;
+  // Status bar widgets - custom labels for proper color control
+  wxStaticText *m_mainLabel;      // Field 0: chat info / transfers
+  wxStaticText *m_sessionLabel;   // Field 1: session time
+  wxStaticText *m_connectionLabel; // Field 2: connection status
   
   // Typing indicator label (in field 0, colored for visibility)
   wxStaticText *m_typingLabel;

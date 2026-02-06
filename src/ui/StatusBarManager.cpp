@@ -1,12 +1,14 @@
 #include "StatusBarManager.h"
 #include "../telegram/TelegramClient.h"
 #include "../telegram/Types.h"
+#include "Theme.h"
 #include <wx/settings.h>
 
 StatusBarManager::StatusBarManager(wxFrame *parent)
     : wxEvtHandler(), m_parent(parent), m_statusBar(nullptr),
       m_isTypingIndicator(false), m_typingAnimFrame(0),
-      m_typingAnimTimer(this, wxID_ANY), m_connectionLabel(nullptr),
+      m_typingAnimTimer(this, wxID_ANY), m_mainLabel(nullptr),
+      m_sessionLabel(nullptr), m_connectionLabel(nullptr),
       m_typingLabel(nullptr), m_progressGauge(nullptr),
       m_progressLabel(nullptr), m_transferAnimFrame(0),
       m_lastTransferredBytes(0), m_currentSpeed(0.0),
@@ -15,13 +17,11 @@ StatusBarManager::StatusBarManager(wxFrame *parent)
       m_totalChats(0), m_unreadChats(0),
       m_bgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)),
       m_fgColor(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT)),
-      m_onlineColor(0x00, 0x80,
-                    0x00), // Green (semantic - no system equivalent)
+      m_onlineColor(0x00, 0x80, 0x00),
       m_connectingColor(wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT)),
-      m_offlineColor(0xCC, 0x00, 0x00), // Red (semantic - no system equivalent)
-      m_successColor(0x00, 0x80,
-                     0x00),           // Green (semantic - no system equivalent)
-      m_errorColor(0xCC, 0x00, 0x00), // Red (semantic - no system equivalent)
+      m_offlineColor(0xCC, 0x00, 0x00),
+      m_successColor(0x00, 0x80, 0x00),
+      m_errorColor(0xCC, 0x00, 0x00),
       m_telegramClient(nullptr) {
   m_transferTimer.Start();
   m_sessionTimer.Start();
@@ -37,68 +37,88 @@ void StatusBarManager::Setup() {
   if (!m_parent)
     return;
 
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+
   // Create status bar with 3 fields:
   // [chat info / transfer progress] [session time] [connection status]
   m_statusBar = m_parent->CreateStatusBar(3);
-  // Font will be set from MainFrame via SetFont()
+  m_statusBar->SetBackgroundColour(colors.statusBarBg);
+  
+  // Note: wxStatusBar::SetForegroundColour doesn't work for native text on Windows
+  // We use custom wxStaticText labels for all fields to ensure proper colors
 
-  // Field widths: main area (flexible), session time (fixed), connection
-  // (fixed)
+  // Field widths: main area (flexible), session time (fixed), connection (fixed)
   int widths[] = {-1, 130, 120};
   m_statusBar->SetStatusWidths(3, widths);
 
   // Bind size event to reposition widgets when status bar resizes
   m_statusBar->Bind(wxEVT_SIZE, &StatusBarManager::OnStatusBarResize, this);
 
-  // Create connection status label (in field 2) with color support
-  m_connectionLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
-  // Font will be set from MainFrame via SetFont()
+  // Update status bar colors from theme
+  m_bgColor = colors.statusBarBg;
+  m_fgColor = colors.statusBarFg;
+  m_onlineColor = colors.accentSuccess;
+  m_connectingColor = colors.accentWarning;
+  m_offlineColor = colors.accentError;
+  m_successColor = colors.accentSuccess;
+  m_errorColor = colors.accentError;
 
-  wxRect connRect;
-  m_statusBar->GetFieldRect(2, connRect);
-  m_connectionLabel->SetPosition(wxPoint(connRect.x + 4, connRect.y + 2));
-  m_connectionLabel->SetSize(connRect.width - 8, connRect.height - 4);
+  // Create main status label (field 0) - chat info / transfers
+  m_mainLabel = new wxStaticText(m_statusBar, wxID_ANY, "Not logged in");
+  m_mainLabel->SetBackgroundColour(colors.statusBarBg);
+  m_mainLabel->SetForegroundColour(colors.statusBarFg);
+  
+  // Create session time label (field 1)
+  m_sessionLabel = new wxStaticText(m_statusBar, wxID_ANY, "Uptime: 00:00:00");
+  m_sessionLabel->SetBackgroundColour(colors.statusBarBg);
+  m_sessionLabel->SetForegroundColour(colors.statusBarFg);
+
+  // Create connection status label (field 2) with color support
+  m_connectionLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
+  m_connectionLabel->SetBackgroundColour(colors.statusBarBg);
+  m_connectionLabel->SetForegroundColour(m_onlineColor);
 
   // Create typing indicator label (in field 0) with colored text for visibility
   m_typingLabel = new wxStaticText(m_statusBar, wxID_ANY, "");
+  m_typingLabel->SetBackgroundColour(colors.statusBarBg);
+  m_typingLabel->SetForegroundColour(colors.accentInfo);
   m_typingLabel->Hide(); // Initially hidden
-  // Font will be set from MainFrame via SetFont()
 
-  // No separate progress label/gauge - we use the main status text field
+  // Position all labels
+  RepositionWidgets();
+
+  // No separate progress label/gauge - we use the main label
   m_progressLabel = nullptr;
   m_progressGauge = nullptr;
-
-  // Initial status
-  m_parent->SetStatusText("Not logged in", 0);
-  m_parent->SetStatusText("00:00:00", 1);
 }
 
 void StatusBarManager::RepositionWidgets() {
   if (!m_statusBar)
     return;
 
-  // Reposition connection label
-  if (m_connectionLabel) {
-    wxRect connRect;
-    m_statusBar->GetFieldRect(2, connRect);
-    m_connectionLabel->SetPosition(wxPoint(connRect.x + 4, connRect.y + 2));
-    m_connectionLabel->SetSize(connRect.width - 8, connRect.height - 4);
-  }
+  // Helper to position label within a field
+  auto positionLabel = [this](wxStaticText* label, int field) {
+    if (!label) return;
+    wxRect rect;
+    m_statusBar->GetFieldRect(field, rect);
+    wxSize labelSize = label->GetBestSize();
+    int yOffset = (rect.height - labelSize.GetHeight()) / 2;
+    if (yOffset < 0) yOffset = 0;
+    label->SetPosition(wxPoint(rect.x + 4, rect.y + yOffset));
+    label->SetSize(rect.width - 8, labelSize.GetHeight());
+  };
 
-  // Reposition typing label - calculate proper vertical centering
-  if (m_typingLabel) {
-    wxRect mainRect;
-    m_statusBar->GetFieldRect(0, mainRect);
-
-    // Center the label vertically within the field
-    wxSize labelSize = m_typingLabel->GetBestSize();
-    int yOffset = (mainRect.height - labelSize.GetHeight()) / 2;
-    if (yOffset < 0)
-      yOffset = 0;
-
-    m_typingLabel->SetPosition(wxPoint(mainRect.x + 4, mainRect.y + yOffset));
-    m_typingLabel->SetSize(mainRect.width - 8, labelSize.GetHeight());
-  }
+  // Reposition main label (field 0)
+  positionLabel(m_mainLabel, 0);
+  
+  // Reposition session label (field 1)
+  positionLabel(m_sessionLabel, 1);
+  
+  // Reposition connection label (field 2)
+  positionLabel(m_connectionLabel, 2);
+  
+  // Reposition typing label (field 0, overlays main label when visible)
+  positionLabel(m_typingLabel, 0);
 }
 
 void StatusBarManager::OnStatusBarResize(wxSizeEvent &event) {
@@ -109,6 +129,12 @@ void StatusBarManager::OnStatusBarResize(wxSizeEvent &event) {
 void StatusBarManager::SetFont(const wxFont &font) {
   if (m_statusBar && font.IsOk()) {
     m_statusBar->SetFont(font);
+  }
+  if (m_mainLabel && font.IsOk()) {
+    m_mainLabel->SetFont(font);
+  }
+  if (m_sessionLabel && font.IsOk()) {
+    m_sessionLabel->SetFont(font);
   }
   if (m_connectionLabel && font.IsOk()) {
     m_connectionLabel->SetFont(font);
@@ -123,7 +149,6 @@ void StatusBarManager::UpdateStatusBar() {
     return;
 
   // Field 0: Chat info (only update if no active transfer)
-  // Handle typing indicator - use native SetStatusText for proper alignment
   if (m_isTypingIndicator && !m_overrideStatusText.IsEmpty()) {
     // Show typing indicator with animated dots
     static const wxString dotPatterns[] = {"", ".", "..", "..."};
@@ -132,13 +157,22 @@ void StatusBarManager::UpdateStatusBar() {
     // U+270F PENCIL
     wxString typingText = wxString::FromUTF8("\xE2\x9C\x8F ") + m_overrideStatusText + dots;
 
-    // Use native SetStatusText for proper vertical alignment
-    m_parent->SetStatusText(typingText, 0);
+    // Use typing label for visibility
+    if (m_typingLabel) {
+      m_typingLabel->SetLabel(typingText);
+      m_typingLabel->Show();
+    }
+    if (m_mainLabel) {
+      m_mainLabel->Hide();
+    }
   } else if (!m_overrideStatusText.IsEmpty()) {
     if (m_typingLabel) {
       m_typingLabel->Hide();
     }
-    m_parent->SetStatusText(m_overrideStatusText, 0);
+    if (m_mainLabel) {
+      m_mainLabel->SetLabel(m_overrideStatusText);
+      m_mainLabel->Show();
+    }
   } else if (!m_hasActiveTransfers) {
     if (m_typingLabel) {
       m_typingLabel->Hide();
@@ -161,7 +195,10 @@ void StatusBarManager::UpdateStatusBar() {
     } else {
       chatInfo = "Not logged in";
     }
-    m_parent->SetStatusText(chatInfo, 0);
+    if (m_mainLabel) {
+      m_mainLabel->SetLabel(chatInfo);
+      m_mainLabel->Show();
+    }
   } else {
     // Active transfer - hide typing label
     if (m_typingLabel) {
@@ -176,11 +213,11 @@ void StatusBarManager::UpdateStatusBar() {
   int seconds = elapsed % 60;
   wxString sessionTime =
       wxString::Format("Uptime: %02d:%02d:%02d", hours, minutes, seconds);
-  m_parent->SetStatusText(sessionTime, 1);
+  if (m_sessionLabel) {
+    m_sessionLabel->SetLabel(sessionTime);
+  }
 
   // Field 2: Connection status with colors
-  // Use ASCII-compatible characters for cross-platform support (Linux fonts may
-  // not have Unicode bullets)
   if (m_connectionLabel) {
     wxString connStatus;
     wxColour connColor;
@@ -301,8 +338,14 @@ void StatusBarManager::UpdateTransferProgress(const TransferInfo &info) {
     label += wxString::Format(" (+%d more)", m_activeTransferCount - 1);
   }
 
-  // Update the main status field with transfer progress
-  m_parent->SetStatusText(label, 0);
+  // Update the main status label with transfer progress
+  if (m_mainLabel) {
+    m_mainLabel->SetLabel(label);
+    m_mainLabel->Show();
+  }
+  if (m_typingLabel) {
+    m_typingLabel->Hide();
+  }
 }
 
 void StatusBarManager::OnTransferComplete(const TransferInfo &info) {
@@ -320,7 +363,9 @@ void StatusBarManager::OnTransferComplete(const TransferInfo &info) {
   // Show completion with checkmark
   wxString label =
       "[OK] " + dirSymbol + " " + info.fileName + " [==========] Done!";
-  m_parent->SetStatusText(label, 0);
+  if (m_mainLabel) {
+    m_mainLabel->SetLabel(label);
+  }
 }
 
 void StatusBarManager::OnTransferError(const TransferInfo &info) {
@@ -337,7 +382,9 @@ void StatusBarManager::OnTransferError(const TransferInfo &info) {
   // Show error with X mark
   wxString label =
       "[FAIL] " + dirSymbol + " " + info.fileName + " Failed: " + info.error;
-  m_parent->SetStatusText(label, 0);
+  if (m_mainLabel) {
+    m_mainLabel->SetLabel(label);
+  }
 }
 
 void StatusBarManager::HideTransferProgress() {
@@ -449,5 +496,45 @@ void StatusBarManager::OnTypingAnimTimer(wxTimerEvent &event) {
   }
 
   m_typingAnimFrame++;
+  UpdateStatusBar();
+}
+
+void StatusBarManager::RefreshTheme() {
+  const ThemeColors& colors = ThemeManager::Get().GetColors();
+  
+  // Update stored colors
+  m_bgColor = colors.statusBarBg;
+  m_fgColor = colors.statusBarFg;
+  m_onlineColor = colors.accentSuccess;
+  m_connectingColor = colors.accentWarning;
+  m_offlineColor = colors.accentError;
+  m_successColor = colors.accentSuccess;
+  m_errorColor = colors.accentError;
+  
+  // Apply to status bar
+  if (m_statusBar) {
+    m_statusBar->SetBackgroundColour(colors.statusBarBg);
+    m_statusBar->Refresh();
+  }
+  
+  // Apply to all labels
+  if (m_mainLabel) {
+    m_mainLabel->SetBackgroundColour(colors.statusBarBg);
+    m_mainLabel->SetForegroundColour(colors.statusBarFg);
+  }
+  if (m_sessionLabel) {
+    m_sessionLabel->SetBackgroundColour(colors.statusBarBg);
+    m_sessionLabel->SetForegroundColour(colors.statusBarFg);
+  }
+  if (m_connectionLabel) {
+    m_connectionLabel->SetBackgroundColour(colors.statusBarBg);
+    // Connection label color is set dynamically based on connection state
+  }
+  if (m_typingLabel) {
+    m_typingLabel->SetBackgroundColour(colors.statusBarBg);
+    m_typingLabel->SetForegroundColour(colors.accentInfo);
+  }
+  
+  // Update display
   UpdateStatusBar();
 }

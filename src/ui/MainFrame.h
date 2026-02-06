@@ -99,7 +99,28 @@ public:
 private:
   // UI Setup
   void CreateMenuBar();
+  void UpdateCustomMenuBar(); // Updates colors of custom menu bar
   void CreateMainLayout();
+  
+  // Custom Menu Bar Members
+  wxPanel* m_menuBarPanel;
+  wxBoxSizer* m_mainSizer;
+  wxMenu* m_menuFile;
+  wxMenu* m_menuTelegram;
+  wxMenu* m_menuEdit;
+  wxMenu* m_menuView;
+  wxMenu* m_menuWindow;
+  wxMenu* m_menuHelp;
+  
+  // Event handler for custom menu buttons
+  void OnMenuButtonClick(wxCommandEvent& event);
+  
+  // Menu tracking for hover behavior
+  bool m_isMenuOpen;
+  int m_currentMenuId;
+  int m_pendingMenuId;
+  wxTimer* m_menuTimer;
+  void OnMenuTimer(wxTimerEvent& event);
   
   // Dark mode detection
   static bool IsSystemDarkMode();
@@ -140,6 +161,10 @@ private:
   void OnToggleUnreadFirst(wxCommandEvent &event);
   void OnToggleReadReceipts(wxCommandEvent &event);
   void OnRawLog(wxCommandEvent &event);
+  void OnThemeLight(wxCommandEvent &event);
+  void OnThemeDark(wxCommandEvent &event);
+  void OnThemeSystem(wxCommandEvent &event);
+  void ApplyThemeToUI();
   void OnPrevChat(wxCommandEvent &event);
   void OnNextChat(wxCommandEvent &event);
   void OnCloseChat(wxCommandEvent &event);

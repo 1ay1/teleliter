@@ -304,9 +304,9 @@ void InputBoxWidget::SetInsertionPointEnd() {
 }
 
 void InputBoxWidget::SetColors(const wxColour &bg, const wxColour &fg) {
-  // Use system colors instead of custom ones
-  m_bgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
-  m_fgColor = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+  // Use the passed theme colors
+  m_bgColor = bg;
+  m_fgColor = fg;
 
   if (m_inputBox) {
     m_inputBox->StyleSetBackground(wxSTC_STYLE_DEFAULT, m_bgColor);
