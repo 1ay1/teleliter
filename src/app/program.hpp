@@ -1,0 +1,739 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <maya/maya.hpp>
+
+#include "model/ids.hpp"
+#include "model/view_models.hpp"
+#include "msg/msg.hpp"
+
+#include "app/mouse.hpp"
+#include "app/run_command.hpp"
+#include "app/text_edit.hpp"
+
+#include "views/shell.hpp"
+
+namespace tl::app {
+
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
+
+[[nodiscard]] inline model::FocusedPane cycle_focus(model::FocusedPane f) noexcept
+{
+    // Two-state cycle: typing always targets either the search (when
+    // ChatList is focused) or the message composer. Up/Down keys still
+    // scroll messages when in Composer focus, so Messages doesn't need
+    // its own focus slot.
+    switch (f) {
+        case model::FocusedPane::ChatList: return model::FocusedPane::Composer;
+        case model::FocusedPane::Composer: return model::FocusedPane::ChatList;
+        case model::FocusedPane::Messages: return model::FocusedPane::ChatList;
+    }
+    return model::FocusedPane::ChatList;
+}
+
+namespace seed {
+
+[[nodiscard]] inline std::vector<model::ChatListItemVM> chats()
+{
+    using model::ChatId;
+    using model::ChatKind;
+    using model::Presence;
+    return {
+        {ChatId{ 1}, "Saved Messages",  "SM", "your scratchpad",            "you: useful link",              "10:02",  0, false, true,  false, ChatKind::System,  Presence::Offline, false, "assets/avatars/p1.jpg"},
+        {ChatId{ 2}, "maya devs",       "MD", "C++26 TUI framework",        "ship the C++26 branch",         "09:58", 12, false, true,  true,  ChatKind::Group,   Presence::Offline, true,  "assets/avatars/p2.jpg"},
+        {ChatId{ 3}, "tui club",        "TC", "terminal UI nerds",          "anyone tried TDLib?",           "08:14",  3, false, false, true,  ChatKind::Channel, Presence::Offline, false, "assets/avatars/p3.jpg"},
+        {ChatId{ 4}, "Ana",             "AN", "",                           "see you at 6",                  "Yest",   0, false, false, false, ChatKind::Direct,  Presence::Active,  false, "assets/avatars/p4.jpg"},
+        {ChatId{ 5}, "release-bots",    "RB", "ci heartbeat",               "build #2103 passed",            "Yest",   1, true,  false, false, ChatKind::Channel, Presence::Offline, false, "assets/avatars/p5.jpg"},
+        {ChatId{ 6}, "rust vs cpp",     "RC", "amicable debate",            "fearless concurrency? lol",     "Mon",    0, false, false, false, ChatKind::Group,   Presence::Offline, false, "assets/avatars/p6.jpg"},
+        {ChatId{ 7}, "ops",             "OP", "infra red-team",             "rotating creds at 4pm",         "Sun",    0, false, false, false, ChatKind::Group,   Presence::Offline, false, "assets/avatars/p7.jpg"},
+        {ChatId{ 8}, "Mom",             "MO", "",                           "call me when you can",          "Apr 5",  2, false, false, false, ChatKind::Direct,  Presence::Away,    false, "assets/avatars/p8.jpg"},
+    };
+}
+
+[[nodiscard]] inline std::vector<model::MessageVM> messages_for(const model::ChatListItemVM& c)
+{
+    using model::MessageId;
+    using model::ReadState;
+    using model::UserId;
+    std::vector<model::MessageVM> out;
+    out.push_back({MessageId{1}, UserId{0},  "system",        "S",
+        c.title + " — chat opened",      "—",     "now",
+        false, false, true,  false, false, false, "", ReadState::Sent, {}, {}});
+    out.push_back({MessageId{2}, UserId{10}, c.title,         c.initials,
+        "hey — are you around?",          "10:21", "12m",
+        false, false, false, false, false, false, "", ReadState::Sent, {},
+        c.avatar_path});
+    out.push_back({MessageId{3}, UserId{1},  "you",           "YO",
+        "yeah, just finished a build",    "10:22", "11m",
+        true,  false, false, false, false, false, "", ReadState::Read, {},
+        "assets/avatars/p8.jpg"});
+    out.push_back({MessageId{4}, UserId{10}, c.title,         c.initials,
+        "cool — pushing the patch in a sec","10:23","10m",
+        false, false, false, false, true,  false, "", ReadState::Sent,
+        { {"👍", 2, true}, {"🚀", 1, false} },
+        c.avatar_path});
+    if (c.unread_count > 0) {
+        out.push_back({MessageId{5}, UserId{10}, c.title,     c.initials,
+            "@you let me know if it breaks anything", "10:24", "9m",
+            false, true,  false, false, false, true,  "1m later", ReadState::Sent, {},
+            c.avatar_path});
+    }
+    return out;
+}
+
+[[nodiscard]] inline std::vector<model::MemberVM> members_for(const model::ChatListItemVM& c)
+{
+    if (c.kind != model::ChatKind::Group && c.kind != model::ChatKind::Channel) return {};
+    using model::Presence;
+    using model::UserId;
+    using model::UserVM;
+    return {
+        {UserVM{UserId{1},  "you",   "YO", Presence::Active, true,  "assets/avatars/p8.jpg"},  "active now"},
+        {UserVM{UserId{10}, c.title, c.initials, Presence::Active, false, c.avatar_path},        "active now"},
+        {UserVM{UserId{11}, "ana",   "AN", Presence::Away,    false, "assets/avatars/p4.jpg"},  "away · 5m"},
+        {UserVM{UserId{12}, "lina",  "LI", Presence::Dnd,     false, "assets/avatars/p7.jpg"},  "do not disturb"},
+        {UserVM{UserId{13}, "kai",   "KA", Presence::Offline, false, "assets/avatars/p3.jpg"},  "last seen yesterday"},
+    };
+}
+
+[[nodiscard]] inline std::vector<model::UserVM> typers_for(const model::ChatListItemVM& c)
+{
+    if (c.unread_count == 0) return {};
+    using model::Presence;
+    using model::UserId;
+    using model::UserVM;
+    return { UserVM{UserId{11}, "ana", "AN", Presence::Active, false, "assets/avatars/p4.jpg"} };
+}
+
+}  // namespace seed
+
+// ─── Composer mutators (pure) ─────────────────────────────────────────────────
+
+namespace composer_ops {
+
+inline void insert(model::ComposerVM& c, std::string_view utf8)
+{
+    if (static_cast<int>(c.text.size() + utf8.size()) > c.char_limit) return;
+    c.text.insert(std::min(c.cursor_bytes, c.text.size()), utf8);
+    c.cursor_bytes = std::min(c.cursor_bytes + utf8.size(), c.text.size());
+}
+
+inline void backspace(model::ComposerVM& c)
+{
+    if (c.cursor_bytes == 0) return;
+    const auto prev = text_edit::utf8_prev(c.text, c.cursor_bytes);
+    c.text.erase(prev, c.cursor_bytes - prev);
+    c.cursor_bytes = prev;
+}
+
+inline void delete_word(model::ComposerVM& c)
+{
+    const auto pw = text_edit::prev_word(c.text, c.cursor_bytes);
+    c.text.erase(pw, c.cursor_bytes - pw);
+    c.cursor_bytes = pw;
+}
+
+inline void delete_to_start(model::ComposerVM& c)
+{
+    c.text.erase(0, c.cursor_bytes);
+    c.cursor_bytes = 0;
+}
+
+inline void delete_to_end(model::ComposerVM& c)
+{
+    c.text.erase(c.cursor_bytes);
+}
+
+inline void cursor_left(model::ComposerVM& c)
+{
+    c.cursor_bytes = text_edit::utf8_prev(c.text, c.cursor_bytes);
+}
+
+inline void cursor_right(model::ComposerVM& c)
+{
+    c.cursor_bytes = text_edit::utf8_next(c.text, c.cursor_bytes);
+}
+
+inline void cursor_home(model::ComposerVM& c) { c.cursor_bytes = 0; }
+inline void cursor_end(model::ComposerVM& c)  { c.cursor_bytes = c.text.size(); }
+
+}  // namespace composer_ops
+
+// ─── Jumper helpers ───────────────────────────────────────────────────────────
+
+[[nodiscard]] inline std::vector<std::size_t>
+jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> chats)
+{
+    std::vector<std::size_t> out;
+    for (std::size_t i = 0; i < chats.size(); ++i) {
+        if (filter.empty() || chats[i].title.find(filter) != std::string::npos) {
+            out.push_back(i);
+        }
+    }
+    return out;
+}
+
+// ─── Program ──────────────────────────────────────────────────────────────────
+
+struct TeleliterProgram {
+    using Model = model::AppModel;
+    using Msg   = msg::Msg;
+
+    [[nodiscard]] static Model init()
+    {
+        Model m;
+        m.chats               = seed::chats();
+        m.selected_chat_index = 1;
+        m.messages            = seed::messages_for(m.chats[1]);
+        m.members             = seed::members_for(m.chats[1]);
+        m.typers              = seed::typers_for(m.chats[1]);
+        // Start focused on the composer if a chat is already open at
+        // launch — matches Telegram-web's "click into the app and start
+        // typing" behaviour.
+        m.focus               = m.selected_chat_index
+                                ? model::FocusedPane::Composer
+                                : model::FocusedPane::ChatList;
+        m.self_name           = "ayush";
+        m.self_presence       = model::Presence::Active;
+        m.right_panel_open    = true;
+        m.composer.char_limit = 4096;
+        // Sensible defaults so the first frame (before the first Resize
+        // event fires) doesn't lay out for a 0×0 viewport.
+        m.term_w              = 120;
+        m.term_h              = 40;
+
+        // Leave auto_dispatch=true (maya's default). Wheel routing now
+        // checks viewport_bounds.contains(cursor) so each event scrolls
+        // exactly one pane. Drag/track-click are handled by maya too.
+        // tabs_scroll stays opt-out so a stray ← / → in the chats panel
+        // doesn't scroll the right-panel's tab strip.
+        m.tabs_scroll.auto_dispatch = false;
+
+        // Wheel scroll amount per event. Default of 1 row feels glacial
+        // for chat / message scrolling; 3 rows tracks roughly with what
+        // browsers do per wheel notch.
+        for (auto* s : {&m.msg_scroll, &m.chats_scroll, &m.members_scroll,
+                        &m.help_scroll}) {
+            s->step_y = 3;
+        }
+        return m;
+    }
+
+    [[nodiscard]] static auto update(Model m, Msg ev)
+        -> std::pair<Model, maya::Cmd<Msg>>
+    {
+        using maya::overload;
+        return std::visit(overload{
+            // ── App control ──
+            [&](msg::Quit) {
+                return std::pair{std::move(m), maya::Cmd<Msg>::quit()};
+            },
+            [&](msg::Tick) {
+                m.tick++;
+                if ((m.tick & 0x3) == 0) m.clock_seconds += 1;
+                // Blink the caret every ~500ms (Tick fires every 250ms,
+                // toggle every other tick). The visible flag is read by
+                // both composer_input and search_input atoms.
+                m.composer.caret_visible = (m.tick & 0x1) == 0;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::Resize r) {
+                m.term_w = r.w; m.term_h = r.h;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::CycleFocus) {
+                m.focus = cycle_focus(m.focus);
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
+            // ── Chat list nav ──
+            [&](msg::SelectChatUp) {
+                if (m.chats.empty()) return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                const auto idx = m.selected_chat_index.value_or(0);
+                m.selected_chat_index = (idx == 0) ? 0 : idx - 1;
+                // Auto-open the new selection so the header and message
+                // pane always reflect the cursor (Telegram-style).
+                if (*m.selected_chat_index < m.chats.size()) {
+                    const auto& c = m.chats[*m.selected_chat_index];
+                    m.messages = seed::messages_for(c);
+                    m.members  = seed::members_for(c);
+                    m.typers   = seed::typers_for(c);
+                    // Force the next layout pass to scroll to the new
+                    // bottom: scroll_to_bottom() uses the OLD max_y
+                    // (pre-content-change), so the latest message lands
+                    // off-screen. Setting y to a deliberately-large
+                    // value lets the renderer's clamp() bring it to the
+                    // newly-written max_y after this frame's layout.
+                    m.msg_scroll.y = 1'000'000;
+                    m.members_scroll.scroll_to_origin();
+                    m.tabs_scroll.scroll_to_origin();
+                    mouse::ensure_chat_visible(m);
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::SelectChatDown) {
+                if (m.chats.empty()) return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                const auto idx  = m.selected_chat_index.value_or(0);
+                const auto last = m.chats.size() - 1;
+                m.selected_chat_index = (idx >= last) ? last : idx + 1;
+                if (*m.selected_chat_index < m.chats.size()) {
+                    const auto& c = m.chats[*m.selected_chat_index];
+                    m.messages = seed::messages_for(c);
+                    m.members  = seed::members_for(c);
+                    m.typers   = seed::typers_for(c);
+                    // Force the next layout pass to scroll to the new
+                    // bottom: scroll_to_bottom() uses the OLD max_y
+                    // (pre-content-change), so the latest message lands
+                    // off-screen. Setting y to a deliberately-large
+                    // value lets the renderer's clamp() bring it to the
+                    // newly-written max_y after this frame's layout.
+                    m.msg_scroll.y = 1'000'000;
+                    m.members_scroll.scroll_to_origin();
+                    m.tabs_scroll.scroll_to_origin();
+                    mouse::ensure_chat_visible(m);
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::OpenSelectedChat) {
+                if (m.selected_chat_index && *m.selected_chat_index < m.chats.size()) {
+                    const auto& c = m.chats[*m.selected_chat_index];
+                    m.messages = seed::messages_for(c);
+                    m.members  = seed::members_for(c);
+                    m.typers   = seed::typers_for(c);
+                    // Enter opens the chat AND moves focus to the
+                    // composer so the user can immediately reply
+                    // (Telegram-web pattern).
+                    m.focus    = model::FocusedPane::Composer;
+                    // Force the next layout pass to scroll to the new
+                    // bottom: scroll_to_bottom() uses the OLD max_y
+                    // (pre-content-change), so the latest message lands
+                    // off-screen. Setting y to a deliberately-large
+                    // value lets the renderer's clamp() bring it to the
+                    // newly-written max_y after this frame's layout.
+                    m.msg_scroll.y = 1'000'000;
+                    m.members_scroll.scroll_to_origin();
+                    m.tabs_scroll.scroll_to_origin();
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
+            // ── Search ──
+            [&](msg::SearchInput s) {
+                m.search_query += text_edit::encode_utf8(s.cp);
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::SearchBack) {
+                if (!m.search_query.empty()) {
+                    const auto p = text_edit::utf8_prev(m.search_query, m.search_query.size());
+                    m.search_query.erase(p);
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::SearchClear) {
+                m.search_query.clear();
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
+            // ── Composer text edit ──
+            [&](msg::CharIn ci) {
+                composer_ops::insert(m.composer, text_edit::encode_utf8(ci.cp));
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::Backspace)      { composer_ops::backspace(m.composer);      return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::DeleteWord)     { composer_ops::delete_word(m.composer);    return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::DeleteToStart)  { composer_ops::delete_to_start(m.composer);return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::DeleteToEnd)    { composer_ops::delete_to_end(m.composer);  return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::CursorLeft)     { composer_ops::cursor_left(m.composer);    return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::CursorRight)    { composer_ops::cursor_right(m.composer);   return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::CursorHome)     { composer_ops::cursor_home(m.composer);    return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::CursorEnd)      { composer_ops::cursor_end(m.composer);     return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::SendComposer) {
+                auto body = m.composer.text;
+                m.composer.text.clear();
+                m.composer.cursor_bytes = 0;
+                if (body.empty()) {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (run_command(m, body)) {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                model::MessageVM out{};
+                out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                out.author_id   = model::UserId{1};
+                out.author_name = m.self_name;
+                out.body        = std::move(body);
+                out.timestamp   = "now";
+                out.age_label   = "now";
+                out.from_me     = true;
+                out.read_state  = model::ReadState::Sending;
+                m.messages.push_back(std::move(out));
+                // scroll_to_bottom() clamps against the OLD max_y (before
+                // this push grew the content), so the new bubble lands
+                // half-clipped behind the composer. Setting y to a huge
+                // value lets the renderer's clamp pull it down to the
+                // freshly-written max_y after this frame's layout.
+                m.msg_scroll.y = 1'000'000;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
+            // ── Scroll ──
+            [&](msg::ScrollUp)        { m.msg_scroll.scroll_by(0, -1);          return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ScrollDown)      { m.msg_scroll.scroll_by(0,  1);          return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ScrollPageUp)    { m.msg_scroll.scroll_by(0, -10);         return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ScrollPageDown)  { m.msg_scroll.scroll_by(0,  10);         return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ScrollLatest)    { m.msg_scroll.scroll_to_bottom();         return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ScrollOldest)    { m.msg_scroll.scroll_to_origin();         return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ClearChannel)    { m.messages.clear();                      return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+
+            // ── Overlays ──
+            [&](msg::ToggleRightPanel){ m.right_panel_open = !m.right_panel_open; return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+            [&](msg::ToggleHelp) {
+                m.help_open = !m.help_open;
+                if (m.help_open) m.jumper_open = false;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleJumper) {
+                m.jumper_open = !m.jumper_open;
+                if (m.jumper_open) { m.help_open = false; m.jumper_filter.clear(); m.jumper_index = 0; }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::HelpScroll hs)   { m.help_scroll.scroll_by(0, hs.dy);        return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+
+            // ── Jumper ──
+            [&](msg::JumperChar jc) {
+                m.jumper_filter += text_edit::encode_utf8(jc.cp);
+                m.jumper_index = 0;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::JumperBack) {
+                if (!m.jumper_filter.empty()) {
+                    const auto p = text_edit::utf8_prev(m.jumper_filter, m.jumper_filter.size());
+                    m.jumper_filter.erase(p);
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::JumperUp) {
+                if (m.jumper_index > 0) --m.jumper_index;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::JumperDown) {
+                const auto matches = jumper_matches(m.jumper_filter,
+                    std::span<const model::ChatListItemVM>{m.chats});
+                if (m.jumper_index + 1 < matches.size()) ++m.jumper_index;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::Refresh) {
+                // No state change — exists purely to drive a re-render
+                // when something external (e.g., auto_dispatch's drag)
+                // mutated the model.
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::MouseClick c) {
+                const auto layout = mouse::compute_layout(m);
+
+                // Modal overlays own clicks while open — for now, any
+                // click closes them. (Future: hit-test individual rows.)
+                if (m.jumper_open) { m.jumper_open = false; m.jumper_filter.clear(); m.jumper_index = 0;
+                                     return std::pair{std::move(m), maya::Cmd<Msg>{}}; }
+                if (m.help_open)   { m.help_open = false;
+                                     return std::pair{std::move(m), maya::Cmd<Msg>{}}; }
+
+                // Scrollbar clicks (jump-to + drag-start) are owned by
+                // maya's auto-dispatch path — no need to re-handle here.
+                // panel_at_x() already returns None for scrollbar columns,
+                // so the hit-tests below naturally skip those clicks.
+
+                if (mouse::is_close_button(layout, c.x, c.y)) {
+                    m.right_panel_open = false;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (mouse::is_chat_header(layout, c.x, c.y)) {
+                    m.right_panel_open = !m.right_panel_open;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                // Click-to-focus inputs — checked BEFORE the broader
+                // panel hit-tests so they win over chat-list "click a row"
+                // or composer "click to send".
+                // The clear (✕) inside the search box is checked even
+                // earlier than is_search_input so a click on the X wipes
+                // the query instead of just focusing the field.
+                if (mouse::is_search_clear(layout, c.x, c.y,
+                        static_cast<int>(m.chats_scroll.y))
+                    && !m.search_query.empty())
+                {
+                    m.search_query.clear();
+                    m.focus = model::FocusedPane::ChatList;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (mouse::is_composer_input(layout, c.x, c.y)) {
+                    m.focus = model::FocusedPane::Composer;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (mouse::is_search_input(layout, c.x, c.y,
+                        static_cast<int>(m.chats_scroll.y))) {
+                    m.focus = model::FocusedPane::ChatList;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (mouse::is_composer_send(layout, c.x, c.y)) {
+                    // Re-emit as SendComposer via the existing branch.
+                    auto body = m.composer.text;
+                    m.composer.text.clear();
+                    m.composer.cursor_bytes = 0;
+                    if (!body.empty() && !run_command(m, body)) {
+                        model::MessageVM out{};
+                        out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                        out.author_id   = model::UserId{1};
+                        out.author_name = m.self_name;
+                        out.body        = std::move(body);
+                        out.timestamp   = "now";
+                        out.age_label   = "now";
+                        out.from_me     = true;
+                        out.read_state  = model::ReadState::Sending;
+                        m.messages.push_back(std::move(out));
+                        // Force the next layout pass to scroll to the new
+                    // bottom: scroll_to_bottom() uses the OLD max_y
+                    // (pre-content-change), so the latest message lands
+                    // off-screen. Setting y to a deliberately-large
+                    // value lets the renderer's clamp() bring it to the
+                    // newly-written max_y after this frame's layout.
+                    m.msg_scroll.y = 1'000'000;
+                    m.members_scroll.scroll_to_origin();
+                    m.tabs_scroll.scroll_to_origin();
+                    }
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+
+                const auto p = mouse::panel_at_x(layout, c.x);
+                if (p == mouse::Panel::Chats) {
+                    const int y_in_content = c.y + m.chats_scroll.y;
+                    if (auto idx = mouse::chat_at_content_y(m, y_in_content)) {
+                        m.selected_chat_index = *idx;
+                        const auto& ch = m.chats[*idx];
+                        m.messages = seed::messages_for(ch);
+                        m.members  = seed::members_for(ch);
+                        m.typers   = seed::typers_for(ch);
+                        // Force the next layout pass to scroll to the new
+                    // bottom: scroll_to_bottom() uses the OLD max_y
+                    // (pre-content-change), so the latest message lands
+                    // off-screen. Setting y to a deliberately-large
+                    // value lets the renderer's clamp() bring it to the
+                    // newly-written max_y after this frame's layout.
+                    m.msg_scroll.y = 1'000'000;
+                    m.members_scroll.scroll_to_origin();
+                    m.tabs_scroll.scroll_to_origin();
+                    }
+                }
+                // Click anywhere else in the middle column's Messages
+                // region (between header and composer) → focus composer,
+                // the way Telegram-web treats the conversation surface
+                // as "click to start typing".
+                else if (p == mouse::Panel::Middle
+                      && mouse::middle_region_at_y(layout, c.y)
+                            == mouse::MiddleRegion::Messages) {
+                    m.focus = model::FocusedPane::Composer;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::JumperPick) {
+                const auto matches = jumper_matches(m.jumper_filter,
+                    std::span<const model::ChatListItemVM>{m.chats});
+                if (m.jumper_index < matches.size()) {
+                    m.selected_chat_index = matches[m.jumper_index];
+                    if (*m.selected_chat_index < m.chats.size()) {
+                        const auto& c = m.chats[*m.selected_chat_index];
+                        m.messages = seed::messages_for(c);
+                        m.members  = seed::members_for(c);
+                        m.typers   = seed::typers_for(c);
+                        m.msg_scroll.y = 1'000'000;
+                        mouse::ensure_chat_visible(m);
+                    }
+                }
+                m.jumper_open = false;
+                m.jumper_filter.clear();
+                m.jumper_index = 0;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+        }, ev);
+    }
+
+    [[nodiscard]] static maya::Element view(const Model& m)
+    {
+        return views::render_shell(m);
+    }
+
+    [[nodiscard]] static auto subscribe(const Model& m) -> maya::Sub<Msg>
+    {
+        using namespace maya;
+        const bool jumper = m.jumper_open;
+        const bool help   = m.help_open;
+        const bool typing = (m.focus == model::FocusedPane::Composer);
+
+        auto keys = Sub<Msg>::on_key([=](const KeyEvent& k) -> std::optional<Msg> {
+            // Helpers
+            auto as_char = [&]() -> std::optional<char32_t> {
+                const auto* ck = std::get_if<CharKey>(&k.key);
+                return ck ? std::optional{ck->codepoint} : std::nullopt;
+            };
+            const bool is_special = std::holds_alternative<SpecialKey>(k.key);
+            const auto special = is_special ? *std::get_if<SpecialKey>(&k.key) : SpecialKey::F12;
+
+            // ── Jumper overlay swallows everything ──
+            if (jumper) {
+                if (is_special) {
+                    switch (special) {
+                        case SpecialKey::Escape:    return msg::ToggleJumper{};
+                        case SpecialKey::Up:        return msg::JumperUp{};
+                        case SpecialKey::Down:      return msg::JumperDown{};
+                        case SpecialKey::Enter:     return msg::JumperPick{};
+                        case SpecialKey::Backspace: return msg::JumperBack{};
+                        default: break;
+                    }
+                } else if (auto c = as_char()) {
+                    return msg::JumperChar{*c};
+                }
+                return std::nullopt;
+            }
+
+            // ── Help overlay: any key closes ──
+            if (help) {
+                if (is_special) {
+                    if (special == SpecialKey::Escape || special == SpecialKey::Enter) {
+                        return msg::ToggleHelp{};
+                    }
+                    if (special == SpecialKey::Up)   return msg::HelpScroll{-1};
+                    if (special == SpecialKey::Down) return msg::HelpScroll{+1};
+                } else if (auto c = as_char()) {
+                    if (*c == U'q' || *c == U'?') return msg::ToggleHelp{};
+                }
+                return std::nullopt;
+            }
+
+            // ── Composer focused: route printable chars as text input ──
+            if (typing) {
+                if (is_special) {
+                    switch (special) {
+                        case SpecialKey::Backspace: return msg::Backspace{};
+                        case SpecialKey::Delete:    return msg::DeleteToEnd{};
+                        case SpecialKey::Left:      return msg::CursorLeft{};
+                        case SpecialKey::Right:     return msg::CursorRight{};
+                        case SpecialKey::Home:      return msg::CursorHome{};
+                        case SpecialKey::End:       return msg::CursorEnd{};
+                        case SpecialKey::Enter:     return msg::SendComposer{};
+                        case SpecialKey::Escape:    return msg::CycleFocus{};
+                        case SpecialKey::Tab:       return msg::CycleFocus{};
+                        case SpecialKey::Up:        return msg::ScrollUp{};
+                        case SpecialKey::Down:      return msg::ScrollDown{};
+                        case SpecialKey::PageUp:    return msg::ScrollPageUp{};
+                        case SpecialKey::PageDown:  return msg::ScrollPageDown{};
+                        default: break;
+                    }
+                } else if (auto c = as_char()) {
+                    if (k.mods.ctrl && !k.mods.alt) {
+                        switch (*c) {
+                            case U'a': return msg::CursorHome{};
+                            case U'e': return msg::CursorEnd{};
+                            case U'w': return msg::DeleteWord{};
+                            case U'u': return msg::DeleteToStart{};
+                            case U'k': return msg::DeleteToEnd{};
+                            case U'c': return msg::Quit{};
+                            default: break;
+                        }
+                    }
+                    if (k.mods.none() && *c >= U' ') {
+                        return msg::CharIn{*c};
+                    }
+                }
+                return std::nullopt;
+            }
+
+            // ── Chat list focus: navigation shortcuts ──
+            // Composer focus is handled higher up in this lambda; this
+            // branch only runs when we're in chat-list nav mode, so
+            // arrows always move the selection (never scroll messages).
+            if (is_special) {
+                switch (special) {
+                    case SpecialKey::Tab:       return msg::CycleFocus{};
+                    case SpecialKey::Up:        return msg::SelectChatUp{};
+                    case SpecialKey::Down:      return msg::SelectChatDown{};
+                    case SpecialKey::PageUp:    return msg::ScrollPageUp{};
+                    case SpecialKey::PageDown:  return msg::ScrollPageDown{};
+                    case SpecialKey::Enter:     return msg::OpenSelectedChat{};
+                    case SpecialKey::Home:      return msg::ScrollOldest{};
+                    case SpecialKey::End:       return msg::ScrollLatest{};
+                    case SpecialKey::Escape:    return msg::Quit{};
+                    case SpecialKey::Backspace: return msg::SearchBack{};
+                    default: break;
+                }
+            } else if (auto c = as_char()) {
+                if (k.mods.none()) {
+                    switch (*c) {
+                        case U'q': return msg::Quit{};
+                        case U'j': return msg::SelectChatDown{};
+                        case U'k': return msg::SelectChatUp{};
+                        case U'i': return msg::ToggleRightPanel{};
+                        case U'?': return msg::ToggleHelp{};
+                        case U'/': return msg::ToggleJumper{};
+                        case U'G': return msg::ScrollLatest{};
+                        default: break;
+                    }
+                    // Letters → search query (only when focused on chat list)
+                    if (m.focus == model::FocusedPane::ChatList
+                     && ((*c >= U'a' && *c <= U'z') || (*c >= U'A' && *c <= U'Z')
+                      || (*c >= U'0' && *c <= U'9') || *c == U' ')) {
+                        return msg::SearchInput{*c};
+                    }
+                }
+                if (k.mods.ctrl) {
+                    switch (*c) {
+                        case U'c': return msg::Quit{};
+                        case U'l': return msg::ClearChannel{};
+                        case U'p': return msg::ToggleRightPanel{};
+                        case U'g': return msg::ToggleJumper{};
+                        case U'h': return msg::ToggleHelp{};
+                        default: break;
+                    }
+                }
+            }
+            return std::nullopt;
+        });
+
+        auto ticks = Sub<Msg>::every(std::chrono::milliseconds{250}, msg::Tick{});
+        auto resize = Sub<Msg>::on_resize([](Size s) -> Msg {
+            return msg::Resize{static_cast<int>(s.width),
+                               static_cast<int>(s.height)};
+        });
+
+        // Mouse routing.
+        //   Wheel, scrollbar drag, and track-click are all handled by
+        //   maya's ScrollState auto-dispatch (patched to gate by
+        //   viewport_bounds). auto-dispatch mutates the scroll state
+        //   silently, so we need a Msg dispatch on every mouse event
+        //   to drive the Program re-render — otherwise scrolling looks
+        //   laggy because repaints wait for the next Tick (≤250 ms).
+        auto mouse_sub = Sub<Msg>::on_mouse([](const MouseEvent& ev) -> std::optional<Msg> {
+            const int x = static_cast<int>(ev.x) - 1;
+            const int y = static_cast<int>(ev.y) - 1;
+            if (ev.kind == MouseEventKind::Press
+             && ev.button == MouseButton::Left) {
+                return msg::MouseClick{x, y};
+            }
+            // Every other mouse event — wheel up/down/left/right,
+            // mouse Move (drag), Release — triggers a Refresh so the
+            // screen repaints to reflect the just-mutated scroll state.
+            return msg::Refresh{};
+        });
+
+        return Sub<Msg>::batch(keys, ticks, resize, mouse_sub);
+    }
+};
+
+static_assert(maya::Program<TeleliterProgram>);
+
+}  // namespace tl::app
