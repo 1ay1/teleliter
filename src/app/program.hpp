@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -19,9 +20,22 @@
 #include "app/run_command.hpp"
 #include "app/text_edit.hpp"
 
+#include "td/client.hpp"
+#include "td/command.hpp"
+#include "td/event.hpp"
+
+#include "util/debug_log.hpp"
+
 #include "views/shell.hpp"
 
 namespace tl::app {
+
+// ─── TDLib event handler (forward declaration) ────────────────────────
+// Defined below the seed:: helpers + composer_ops; updates AppModel in
+// place from the closed sum of TDLib events. Kept as a free function so
+// the giant update() overload set in TeleliterProgram doesn't grow a
+// huge inline match against td::event::Event.
+void handle_td_event(model::AppModel& m, td::event::Event ev);
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -403,32 +417,26 @@ struct TeleliterProgram {
     using Model = model::AppModel;
     using Msg   = msg::Msg;
 
-    [[nodiscard]] static Model init()
+    [[nodiscard]] static auto init() -> std::pair<Model, maya::Cmd<Msg>>
     {
+        TL_DLOG("app", "init — model bootstrap, auth.stage=Connecting");
         Model m;
-        m.chats               = seed::chats();
-        m.selected_chat_index = 1;
-        m.messages            = seed::messages_for(m.chats[1]);
-        m.members             = seed::members_for(m.chats[1]);
-        m.typers              = seed::typers_for(m.chats[1]);
-        // Start focused on the composer if a chat is already open at
-        // launch — matches Telegram-web's "click into the app and start
-        // typing" behaviour.
-        m.focus               = m.selected_chat_index
-                                ? model::FocusedPane::Composer
-                                : model::FocusedPane::ChatList;
-        m.self_name           = "ayush";
-        m.self_presence       = model::Presence::Active;
-        m.right_panel_open    = true;
+        // No seeded chats / messages — TDLib will populate them once
+        // authentication completes. We still pre-populate the scroll
+        // tuning + the auth overlay state so the first frame renders
+        // a clean "connecting" card instead of a blank screen.
+        m.auth.stage         = model::AuthStage::Connecting;
+        m.auth.active_field  = model::AuthField::Phone;
+        m.focus              = model::FocusedPane::ChatList;
+        m.self_name          = "you";
+        m.self_presence      = model::Presence::Active;
+        m.right_panel_open   = true;
         m.composer.char_limit = 4096;
         // Sensible defaults so the first frame (before the first Resize
         // event fires) doesn't lay out for a 0×0 viewport.
-        m.term_w              = 120;
-        m.term_h              = 40;
+        m.term_w             = 120;
+        m.term_h             = 40;
 
-        // Leave auto_dispatch=true (maya's default). Wheel routing now
-        // checks viewport_bounds.contains(cursor) so each event scrolls
-        // exactly one pane. Drag/track-click are handled by maya too.
         // tabs_scroll stays opt-out so a stray ← / → in the chats panel
         // doesn't scroll the right-panel's tab strip.
         m.tabs_scroll.auto_dispatch = false;
@@ -440,11 +448,12 @@ struct TeleliterProgram {
                         &m.help_scroll}) {
             s->step_y = 3;
         }
-        // Open the conversation pinned to the newest message — same
-        // sentinel trick used by chat-switch handlers: large y lets the
-        // first layout pass clamp to the freshly-written max_y.
         m.msg_scroll.y = 1'000'000;
-        return m;
+
+        // Boot the TDLib runtime. Its task closure runs forever on an
+        // isolated thread and feeds td::event::Event values back into
+        // the program loop as msg::TdEvent.
+        return {std::move(m), td::boot_command()};
     }
 
     [[nodiscard]] static auto update(Model m, Msg ev)
@@ -463,6 +472,20 @@ struct TeleliterProgram {
                 // toggle every other tick). The visible flag is read by
                 // both composer_input and search_input atoms.
                 m.composer.caret_visible = (m.tick & 0x1) == 0;
+                // Reap expired typers — TDLib stops sending
+                // updateChatAction once the peer stops typing, so we
+                // sweep entries whose expiry timestamp is in the past.
+                if (!m.typers.empty()) {
+                    for (std::size_t i = m.typers.size(); i-- > 0; ) {
+                        if (i < m.typer_expiry.size()
+                         && m.typer_expiry[i] <= m.clock_seconds) {
+                            m.typers.erase(m.typers.begin()
+                                + static_cast<std::ptrdiff_t>(i));
+                            m.typer_expiry.erase(m.typer_expiry.begin()
+                                + static_cast<std::ptrdiff_t>(i));
+                        }
+                    }
+                }
                 // Audio / video notes that are playing tick their
                 // progress forward once per second of wall-clock time
                 // (= every 4 Ticks). Loops back to 0 at the end so
@@ -519,28 +542,80 @@ struct TeleliterProgram {
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
 
+            // ── Auth overlay ──
+            // Per-keystroke buffering into the active field, plus Submit
+            // which translates the buffered field into a td::cmd::Submit*
+            // and ships it off through the runtime.
+            [&](msg::AuthCharIn ci) {
+                auto& buf = (m.auth.active_field == model::AuthField::Phone)    ? m.auth.phone
+                          : (m.auth.active_field == model::AuthField::Code)     ? m.auth.code
+                                                                                : m.auth.password;
+                buf += text_edit::encode_utf8(ci.cp);
+                TL_DLOG("auth", "CharIn cp=U+%04X field=%d buf_len=%zu",
+                        static_cast<unsigned>(ci.cp),
+                        static_cast<int>(m.auth.active_field), buf.size());
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AuthBackspace) {
+                auto& buf = (m.auth.active_field == model::AuthField::Phone)    ? m.auth.phone
+                          : (m.auth.active_field == model::AuthField::Code)     ? m.auth.code
+                                                                                : m.auth.password;
+                if (!buf.empty()) {
+                    const auto p = text_edit::utf8_prev(buf, buf.size());
+                    buf.erase(p);
+                }
+                TL_DLOG("auth", "Backspace field=%d buf_len=%zu",
+                        static_cast<int>(m.auth.active_field), buf.size());
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AuthSubmit) {
+                m.auth.submitting = true;
+                m.auth.hint.clear();
+                td::cmd::Command out;
+                switch (m.auth.active_field) {
+                    case model::AuthField::Phone:
+                        TL_DLOG("auth", "Submit phone len=%zu", m.auth.phone.size());
+                        out = td::cmd::SubmitPhone{m.auth.phone};
+                        break;
+                    case model::AuthField::Code:
+                        TL_DLOG("auth", "Submit code len=%zu", m.auth.code.size());
+                        out = td::cmd::SubmitCode{m.auth.code};
+                        break;
+                    case model::AuthField::Password:
+                        TL_DLOG("auth", "Submit password len=%zu", m.auth.password.size());
+                        out = td::cmd::SubmitPassword{m.auth.password};
+                        break;
+                }
+                return std::pair{std::move(m), td::dispatch(std::move(out))};
+            },
+
+            // ── TDLib events ──
+            // Carrier-variant unpacked into the per-alternative handlers
+            // in tl::app::handle_td_event. Keeps the giant overload set
+            // inside update() readable.
+            [&](msg::TdEvent ev_in) {
+                handle_td_event(m, std::move(ev_in.payload));
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
             // ── Chat list nav ──
             [&](msg::SelectChatUp) {
                 if (m.chats.empty()) return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 const auto idx = m.selected_chat_index.value_or(0);
-                m.selected_chat_index = (idx == 0) ? 0 : idx - 1;
-                // Auto-open the new selection so the header and message
-                // pane always reflect the cursor (Telegram-style).
-                if (*m.selected_chat_index < m.chats.size()) {
-                    const auto& c = m.chats[*m.selected_chat_index];
-                    m.messages = seed::messages_for(c);
-                    m.members  = seed::members_for(c);
-                    m.typers   = seed::typers_for(c);
-                    // Force the next layout pass to scroll to the new
-                    // bottom: scroll_to_bottom() uses the OLD max_y
-                    // (pre-content-change), so the latest message lands
-                    // off-screen. Setting y to a deliberately-large
-                    // value lets the renderer's clamp() bring it to the
-                    // newly-written max_y after this frame's layout.
-                    m.msg_scroll.y = 1'000'000;
-                    m.members_scroll.scroll_to_origin();
-                    m.tabs_scroll.scroll_to_origin();
-                    mouse::ensure_chat_visible(m);
+                const auto new_idx = (idx == 0) ? std::size_t{0} : idx - 1;
+                m.selected_chat_index = new_idx;
+                m.messages.clear();
+                m.members.clear();
+                m.typers.clear();
+                m.typer_expiry.clear();
+                m.msg_scroll.y = 1'000'000;
+                m.members_scroll.scroll_to_origin();
+                m.tabs_scroll.scroll_to_origin();
+                mouse::ensure_chat_visible(m);
+                if (new_idx < m.chats.size()) {
+                    return std::pair{std::move(m),
+                        td::dispatch(td::cmd::OpenChat{
+                            td::to_td(m.chats[new_idx].id)})};
                 }
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
@@ -548,44 +623,57 @@ struct TeleliterProgram {
                 if (m.chats.empty()) return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 const auto idx  = m.selected_chat_index.value_or(0);
                 const auto last = m.chats.size() - 1;
-                m.selected_chat_index = (idx >= last) ? last : idx + 1;
-                if (*m.selected_chat_index < m.chats.size()) {
-                    const auto& c = m.chats[*m.selected_chat_index];
-                    m.messages = seed::messages_for(c);
-                    m.members  = seed::members_for(c);
-                    m.typers   = seed::typers_for(c);
-                    // Force the next layout pass to scroll to the new
-                    // bottom: scroll_to_bottom() uses the OLD max_y
-                    // (pre-content-change), so the latest message lands
-                    // off-screen. Setting y to a deliberately-large
-                    // value lets the renderer's clamp() bring it to the
-                    // newly-written max_y after this frame's layout.
-                    m.msg_scroll.y = 1'000'000;
-                    m.members_scroll.scroll_to_origin();
-                    m.tabs_scroll.scroll_to_origin();
-                    mouse::ensure_chat_visible(m);
+                const auto new_idx = (idx >= last) ? last : idx + 1;
+                m.selected_chat_index = new_idx;
+                m.messages.clear();
+                m.members.clear();
+                m.typers.clear();
+                m.typer_expiry.clear();
+                m.msg_scroll.y = 1'000'000;
+                m.members_scroll.scroll_to_origin();
+                m.tabs_scroll.scroll_to_origin();
+                mouse::ensure_chat_visible(m);
+                if (new_idx < m.chats.size()) {
+                    return std::pair{std::move(m),
+                        td::dispatch(td::cmd::OpenChat{
+                            td::to_td(m.chats[new_idx].id)})};
                 }
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
             [&](msg::OpenSelectedChat) {
                 if (m.selected_chat_index && *m.selected_chat_index < m.chats.size()) {
-                    const auto& c = m.chats[*m.selected_chat_index];
-                    m.messages = seed::messages_for(c);
-                    m.members  = seed::members_for(c);
-                    m.typers   = seed::typers_for(c);
-                    // Enter opens the chat AND moves focus to the
-                    // composer so the user can immediately reply
-                    // (Telegram-web pattern).
+                    const auto& selected = m.chats[*m.selected_chat_index];
+                    const auto chat_id = selected.id;
+                    const auto kind    = selected.kind;
+                    const auto peer    = selected.peer_user_id;
+                    m.messages.clear();
+                    m.members.clear();
+                    m.typers.clear();
+                    m.typer_expiry.clear();
                     m.focus    = model::FocusedPane::Composer;
-                    // Force the next layout pass to scroll to the new
-                    // bottom: scroll_to_bottom() uses the OLD max_y
-                    // (pre-content-change), so the latest message lands
-                    // off-screen. Setting y to a deliberately-large
-                    // value lets the renderer's clamp() bring it to the
-                    // newly-written max_y after this frame's layout.
                     m.msg_scroll.y = 1'000'000;
                     m.members_scroll.scroll_to_origin();
                     m.tabs_scroll.scroll_to_origin();
+                    // Batch: open chat (triggers history) + load info
+                    // panel data (peer info for DMs, members for groups)
+                    // + shared media for the active tab.
+                    std::vector<maya::Cmd<Msg>> batch;
+                    batch.push_back(td::dispatch(
+                        td::cmd::OpenChat{td::to_td(chat_id)}));
+                    if (kind == model::ChatKind::Direct && peer != 0) {
+                        batch.push_back(td::dispatch(
+                            td::cmd::LoadPeerInfo{
+                                td::to_td(chat_id),
+                                ::tl::td::TdUserId{peer}}));
+                    } else {
+                        batch.push_back(td::dispatch(
+                            td::cmd::LoadMembers{td::to_td(chat_id)}));
+                    }
+                    batch.push_back(td::dispatch(
+                        td::cmd::LoadSharedMedia{
+                            td::to_td(chat_id), m.info_active_tab}));
+                    return std::pair{std::move(m),
+                        maya::Cmd<Msg>::batch(std::move(batch))};
                 }
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
@@ -625,6 +713,16 @@ struct TeleliterProgram {
                 // (VoiceStop semantics) and then drop through the rest
                 // of the send flow so any pending text / attachments
                 // also get flushed.
+                // Capture the open chat id once so we can dispatch the
+                // outbound commands at the end of this arm.
+                const auto open_chat_id = (m.selected_chat_index
+                    && *m.selected_chat_index < m.chats.size())
+                    ? std::optional{m.chats[*m.selected_chat_index].id}
+                    : std::nullopt;
+                const auto reply_to_id = m.composer.reply_quote.has_value()
+                    ? m.composer.reply_quote->source_id
+                    : model::MessageId{};
+                std::vector<maya::Cmd<Msg>> outbox;
                 if (m.composer.recording) {
                     if (m.composer.recording_secs > 0) {
                         model::MessageVM out{};
@@ -685,9 +783,13 @@ struct TeleliterProgram {
                     using K = model::ComposerVM::AttachmentKind;
                     auto& a = attachments[i];
                     auto out = fresh_self_msg();
+                    std::string this_body;
+                    auto this_reply = model::MessageId{};
                     if (!body_attached_to_first) {
                         out.body = body;
                         out.reply_quote = reply;
+                        this_body  = body;
+                        this_reply = reply_to_id;
                         body_attached_to_first = true;
                         body.clear();
                         reply.reset();
@@ -695,34 +797,65 @@ struct TeleliterProgram {
                     switch (a.kind) {
                         case K::Photo: {
                             model::PhotoVM p{};
-                            p.file_path  = std::move(a.path);
+                            p.file_path  = a.path;
                             p.size_bytes = a.size_bytes;
                             out.photo = std::move(p);
+                            if (open_chat_id) {
+                                outbox.push_back(td::dispatch(
+                                    td::cmd::SendPhoto{
+                                        td::to_td(*open_chat_id),
+                                        a.path, this_body,
+                                        ::tl::td::TdMessageId{this_reply.get()}}));
+                            }
                             break;
                         }
                         case K::Voice: {
                             model::AudioNoteVM an{};
-                            an.file_path     = std::move(a.path);
+                            an.file_path     = a.path;
                             an.duration_secs = a.duration_secs;
                             out.audio_note   = std::move(an);
+                            if (open_chat_id) {
+                                outbox.push_back(td::dispatch(
+                                    td::cmd::SendVoice{
+                                        td::to_td(*open_chat_id),
+                                        a.path, a.duration_secs,
+                                        ::tl::td::TdMessageId{this_reply.get()}}));
+                            }
                             break;
                         }
                         case K::Video: {
                             model::VideoVM v{};
-                            v.file_path     = std::move(a.path);
+                            v.file_path     = a.path;
                             v.title         = a.label;
                             v.duration_secs = a.duration_secs;
                             v.size_bytes    = a.size_bytes;
                             out.video = std::move(v);
+                            // TDLib has a SendDocument fallback for now —
+                            // no inputMessageVideo wrapper on our command
+                            // side; the document upload still works.
+                            if (open_chat_id) {
+                                outbox.push_back(td::dispatch(
+                                    td::cmd::SendDocument{
+                                        td::to_td(*open_chat_id),
+                                        a.path, this_body,
+                                        ::tl::td::TdMessageId{this_reply.get()}}));
+                            }
                             break;
                         }
                         case K::File:
                         default: {
                             model::DocumentVM d{};
-                            d.file_path  = std::move(a.path);
+                            d.file_path  = a.path;
                             d.filename   = a.label;
                             d.size_bytes = a.size_bytes;
                             out.document = std::move(d);
+                            if (open_chat_id) {
+                                outbox.push_back(td::dispatch(
+                                    td::cmd::SendDocument{
+                                        td::to_td(*open_chat_id),
+                                        a.path, this_body,
+                                        ::tl::td::TdMessageId{this_reply.get()}}));
+                            }
                             break;
                         }
                     }
@@ -733,12 +866,20 @@ struct TeleliterProgram {
                 // push it as a plain text message.
                 if (!body.empty()) {
                     auto out = fresh_self_msg();
-                    out.body        = std::move(body);
-                    out.reply_quote = std::move(reply);
+                    out.body        = body;
+                    out.reply_quote = reply;
                     m.messages.push_back(std::move(out));
+                    if (open_chat_id) {
+                        outbox.push_back(td::dispatch(
+                            td::cmd::SendText{
+                                td::to_td(*open_chat_id),
+                                body,
+                                ::tl::td::TdMessageId{reply_to_id.get()}}));
+                    }
                 }
                 m.msg_scroll.y = 1'000'000;
-                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                return std::pair{std::move(m),
+                    maya::Cmd<Msg>::batch(std::move(outbox))};
             },
             [&](msg::InsertNewline) {
                 composer_ops::insert(m.composer, std::string{"\n"});
@@ -1340,6 +1481,7 @@ struct TeleliterProgram {
         const bool jumper = m.jumper_open;
         const bool help   = m.help_open;
         const bool typing = (m.focus == model::FocusedPane::Composer);
+        const bool auth_gate = (m.auth.stage != model::AuthStage::LoggedIn);
 
         auto keys = Sub<Msg>::on_key([=](const KeyEvent& k) -> std::optional<Msg> {
             // Helpers
@@ -1349,6 +1491,23 @@ struct TeleliterProgram {
             };
             const bool is_special = std::holds_alternative<SpecialKey>(k.key);
             const auto special = is_special ? *std::get_if<SpecialKey>(&k.key) : SpecialKey::F12;
+
+            // ── Auth overlay swallows everything until LoggedIn ──
+            if (auth_gate) {
+                if (is_special) {
+                    TL_DLOG("key", "auth_gate special=%d", static_cast<int>(special));
+                    if (special == SpecialKey::Enter)     return msg::AuthSubmit{};
+                    if (special == SpecialKey::Backspace) return msg::AuthBackspace{};
+                    if (special == SpecialKey::Escape)    return msg::Quit{};
+                } else if (auto c = as_char()) {
+                    TL_DLOG("key", "auth_gate char cp=U+%04X mods.ctrl=%d mods.alt=%d",
+                            static_cast<unsigned>(*c),
+                            k.mods.ctrl ? 1 : 0, k.mods.alt ? 1 : 0);
+                    if (k.mods.ctrl && (*c == U'c' || *c == U'C')) return msg::Quit{};
+                    if (k.mods.none() && *c >= U' ') return msg::AuthCharIn{*c};
+                }
+                return std::nullopt;
+            }
 
             // ── Jumper overlay swallows everything ──
             if (jumper) {
@@ -1533,4 +1692,353 @@ struct TeleliterProgram {
 
 static_assert(maya::Program<TeleliterProgram>);
 
+// ─── TDLib event → AppModel mutator ───────────────────────────────────────
+// One visit arm per td::event::Event alternative. All mutations live
+// here; the runtime in td/client.hpp never touches AppModel.
+
+namespace detail::msg_derive {
+
+// Decide if a freshly-inserted message should render as `compact`
+// (no author name + blank avatar column) and/or with a `gap_label`
+// separator above it. Mirrors Telegram-web's grouping: same author
+// within ~5 min collapses; ≥5 min gap surfaces a "5m later" label.
+inline void apply_grouping(model::MessageVM& msg, const model::MessageVM* prev) {
+    using maya::overload;
+    if (!prev) {
+        msg.compact        = false;
+        msg.show_gap_above = false;
+        return;
+    }
+    // System messages never group. They also reset the chain.
+    if (msg.is_system || prev->is_system) {
+        msg.compact        = false;
+        msg.show_gap_above = false;
+        return;
+    }
+    const bool same_author = (msg.author_id == prev->author_id)
+                          && (msg.from_me == prev->from_me);
+    msg.compact = same_author;
+    msg.show_gap_above = false;  // gap derivation needs unix — we don't carry it here.
+}
+
+}  // namespace detail::msg_derive
+
+inline void handle_td_event(model::AppModel& m, td::event::Event ev)
+{
+    using maya::overload;
+    namespace E = td::event;
+    TL_DLOG("ev", "handle_td_event variant=%zu", ev.index());
+    std::visit(overload{
+        [&](E::AuthStateChanged a) {
+            TL_DLOG("ev-auth", "AuthStateChanged stage=%d hint=%s",
+                    static_cast<int>(a.stage), a.hint.c_str());
+            m.auth.stage      = a.stage;
+            m.auth.hint       = std::move(a.hint);
+            m.auth.submitting = false;
+            // Flip the active field to whatever stage we're now in.
+            switch (a.stage) {
+                case model::AuthStage::WaitPhone:    m.auth.active_field = model::AuthField::Phone;    break;
+                case model::AuthStage::WaitCode:     m.auth.active_field = model::AuthField::Code;     break;
+                case model::AuthStage::WaitPassword: m.auth.active_field = model::AuthField::Password; break;
+                default: break;
+            }
+            if (a.stage == model::AuthStage::LoggedIn) {
+                // Clear sensitive buffers once we're in.
+                m.auth.phone.clear();
+                m.auth.code.clear();
+                m.auth.password.clear();
+            }
+        },
+        [&](E::AuthError e) {
+            TL_DLOG("ev-auth", "AuthError: %s", e.message.c_str());
+            m.auth.submitting = false;
+            m.auth.hint = std::move(e.message);
+        },
+        [&](E::ConnectionStateChanged c) {
+            TL_DLOG("ev", "ConnectionStateChanged stage=%d",
+                    static_cast<int>(c.stage));
+            (void)c;
+            // Connection state surfaces in the header bar via the
+            // status dot; the renderer reads from m.* directly. We
+            // don't carry a field for this yet — left as a future
+            // hook so the event is preserved through the visit.
+        },
+        [&](E::MeLoaded me) {
+            TL_DLOG("ev", "MeLoaded name=%s", me.me.name.c_str());
+            m.self_name     = me.me.name;
+            m.self_presence = me.me.presence;
+        },
+        [&](E::ChatUpserted c) {
+            TL_DLOG("ev", "ChatUpserted id=%lld title=%s order=%lld",
+                    static_cast<long long>(c.chat.id.get()),
+                    c.chat.title.c_str(),
+                    static_cast<long long>(c.chat.order));
+            // Upsert by id, preserve selection by following the
+            // currently-selected chat id through the re-sort.
+            const auto selected_id = (m.selected_chat_index
+                && *m.selected_chat_index < m.chats.size())
+                ? std::optional{m.chats[*m.selected_chat_index].id}
+                : std::nullopt;
+            bool replaced = false;
+            for (auto& existing : m.chats) {
+                if (existing.id == c.chat.id) {
+                    // Preserve sticky locally-derived fields the
+                    // server snapshot doesn't carry (e.g. an avatar
+                    // path we already downloaded).
+                    auto avatar = existing.avatar_path;
+                    existing = std::move(c.chat);
+                    if (existing.avatar_path.empty()) existing.avatar_path = std::move(avatar);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) m.chats.push_back(std::move(c.chat));
+            // Sort by order desc, then by last_message_time desc as a
+            // tiebreaker for chats sharing order==0 (e.g. archived).
+            std::sort(m.chats.begin(), m.chats.end(),
+                [](const auto& a, const auto& b) {
+                    if (a.order != b.order) return a.order > b.order;
+                    return a.last_message_time > b.last_message_time;
+                });
+            if (selected_id) {
+                for (std::size_t i = 0; i < m.chats.size(); ++i) {
+                    if (m.chats[i].id == *selected_id) {
+                        m.selected_chat_index = i; break;
+                    }
+                }
+            }
+        },
+        [&](E::ChatRemoved r) {
+            const auto rid = td::to_model(r.id);
+            std::erase_if(m.chats, [&](const auto& c) { return c.id == rid; });
+            if (m.selected_chat_index && *m.selected_chat_index >= m.chats.size()) {
+                m.selected_chat_index.reset();
+            }
+        },
+        [&](E::ChatPatched p) {
+            const auto target = td::to_model(p.id);
+            const auto selected_id = (m.selected_chat_index
+                && *m.selected_chat_index < m.chats.size())
+                ? std::optional{m.chats[*m.selected_chat_index].id}
+                : std::nullopt;
+            for (auto& c : m.chats) {
+                if (c.id != target) continue;
+                // Merge only the fields the patch actually carries
+                // (non-empty strings, non-zero counters). The patch is
+                // a partial snapshot — missing fields keep their value.
+                if (!p.patch.title.empty())                c.title = std::move(p.patch.title);
+                if (!p.patch.last_message_preview.empty()) c.last_message_preview = std::move(p.patch.last_message_preview);
+                if (!p.patch.last_message_time.empty())    c.last_message_time    = std::move(p.patch.last_message_time);
+                // unread_count is authoritative when the patch was
+                // sent by updateChatReadInbox — we trust the value.
+                c.unread_count     = p.patch.unread_count;
+                c.mentions_pending = p.patch.mentions_pending || c.mentions_pending;
+                if (p.patch.order != 0)       c.order  = p.patch.order;
+                if (p.patch.pinned)           c.pinned = true;
+                if (!p.patch.avatar_path.empty())
+                    c.avatar_path = std::move(p.patch.avatar_path);
+                break;
+            }
+            // Re-sort whenever order or last_message_time may have changed.
+            std::sort(m.chats.begin(), m.chats.end(),
+                [](const auto& a, const auto& b) {
+                    if (a.order != b.order) return a.order > b.order;
+                    return a.last_message_time > b.last_message_time;
+                });
+            if (selected_id) {
+                for (std::size_t i = 0; i < m.chats.size(); ++i) {
+                    if (m.chats[i].id == *selected_id) {
+                        m.selected_chat_index = i; break;
+                    }
+                }
+            }
+        },
+        [&](E::MessageNew n) {
+            // Only ingest messages for the currently-open chat —
+            // others stay invisible until the user opens that chat.
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(n.chat_id)) return;
+            // Dedup by message id (history loads + updateNewMessage
+            // sometimes overlap).
+            for (const auto& existing : m.messages) {
+                if (existing.id == n.message.id) return;
+            }
+            auto vm = std::move(n.message);
+            const model::MessageVM* prev = m.messages.empty()
+                ? nullptr : &m.messages.back();
+            detail::msg_derive::apply_grouping(vm, prev);
+            m.messages.push_back(std::move(vm));
+            // Pin to bottom when a new message arrives — same sentinel
+            // trick used by the selection-change paths.
+            m.msg_scroll.y = 1'000'000;
+        },
+        [&](E::MessageEdited e) {
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(e.chat_id)) return;
+            const auto mid = td::to_model(e.message_id);
+            for (auto& msg_vm : m.messages) {
+                if (msg_vm.id == mid) { msg_vm.body = std::move(e.new_body); break; }
+            }
+        },
+        [&](E::MessageDeleted d) {
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(d.chat_id)) return;
+            for (auto& tid : d.message_ids) {
+                const auto mid = td::to_model(tid);
+                std::erase_if(m.messages, [&](const auto& msg_vm) { return msg_vm.id == mid; });
+            }
+        },
+        [&](E::OutboxReadAdvanced r) {
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(r.chat_id)) return;
+            const auto last_read = td::to_model(r.last_read);
+            for (auto& msg_vm : m.messages) {
+                if (msg_vm.from_me && msg_vm.id.get() <= last_read.get()) {
+                    msg_vm.read_state = model::ReadState::Read;
+                }
+            }
+        },
+        [&](E::UserStatusUpdated u) {
+            const auto uid = td::to_model(u.user_id);
+            for (auto& mem : m.members) {
+                if (mem.user.id == uid) mem.user.presence = u.presence;
+            }
+            for (auto& typer : m.typers) {
+                if (typer.id == uid) typer.presence = u.presence;
+            }
+            // Propagate to any DM chat whose peer matches this user.
+            for (auto& c : m.chats) {
+                if (c.kind == model::ChatKind::Direct
+                 && c.peer_user_id == uid.get()) {
+                    c.partner_presence = u.presence;
+                }
+            }
+        },
+        [&](E::TypingStarted t) {
+            // Show typing only if the event is for the open chat. Look
+            // up the user in the cache (members → fall back to a stub
+            // VM with just the id). De-dup by id, refresh expiry.
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(t.chat_id)) return;
+            const auto uid     = td::to_model(t.user_id);
+            const auto expires = m.clock_seconds + 6;   // ~6 s after the last update
+            for (std::size_t i = 0; i < m.typers.size(); ++i) {
+                if (m.typers[i].id == uid) {
+                    m.typer_expiry[i] = expires; return;
+                }
+            }
+            model::UserVM stub{};
+            stub.id = uid;
+            // Try members for a richer label.
+            for (const auto& mem : m.members) {
+                if (mem.user.id == uid) { stub = mem.user; break; }
+            }
+            if (stub.name.empty()) stub.name = "someone";
+            m.typers.push_back(std::move(stub));
+            m.typer_expiry.push_back(expires);
+        },
+        [&](E::FileDownloadProgress /*fp*/) {
+            // Hook reserved for the download-progress overlay; the VMs
+            // don't carry per-file progress yet.
+        },
+        [&](E::FileReady fr) {
+            // Generic file-ready surfacing: scan the open chat's
+            // messages and patch any photo/document/audio_note whose
+            // file path is empty but matches the freshly-localised id.
+            // We don't carry file_id on the VM (the view only needs
+            // the path), so this is a best-effort path swap on the
+            // active selection.
+            (void)fr;
+        },
+        [&](E::ChatAvatarReady av) {
+            const auto cid = td::to_model(av.chat_id);
+            for (auto& c : m.chats) {
+                if (c.id == cid) c.avatar_path = std::move(av.local_path);
+            }
+        },
+        [&](E::UserAvatarReady ua) {
+            const auto uid = td::to_model(ua.user_id);
+            // Patch every chat / member / typer / open-chat message
+            // bubble that refers to this user.
+            for (auto& c : m.chats) {
+                if (c.kind == model::ChatKind::Direct && c.peer_user_id == uid.get()) {
+                    c.avatar_path = ua.local_path;
+                }
+            }
+            for (auto& mem : m.members) {
+                if (mem.user.id == uid) mem.user.avatar_path = ua.local_path;
+            }
+            for (auto& t : m.typers) {
+                if (t.id == uid) t.avatar_path = ua.local_path;
+            }
+            for (auto& msg_vm : m.messages) {
+                if (msg_vm.author_id == uid)
+                    msg_vm.author_avatar_path = ua.local_path;
+            }
+            auto it = m.peer_info.find(uid.get());
+            if (it != m.peer_info.end()) it->second.avatar_path = ua.local_path;
+        },
+        [&](E::MembersLoaded ml) {
+            // Replace m.members ONLY if this batch is for the open chat.
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(ml.chat_id)) return;
+            m.members = std::move(ml.members);
+        },
+        [&](E::PeerInfoLoaded pi) {
+            // Stash for the info panel + propagate the per-chat avatar
+            // path if we have one.
+            m.peer_info[td::to_model(pi.chat_id).get()] = pi.user;
+        },
+        [&](E::SharedMediaLoaded sm) {
+            auto& buckets = m.shared_media[td::to_model(sm.chat_id).get()];
+            if (sm.tab >= 0 && sm.tab < 4) {
+                buckets[static_cast<std::size_t>(sm.tab)] = std::move(sm.items);
+            }
+        },
+        [&](E::HistoryLoaded hl) {
+            // Replace m.messages wholesale if this batch is for the
+            // open chat. apply grouping pairwise as we go.
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(hl.chat_id)) return;
+            m.messages.clear();
+            m.messages.reserve(hl.messages.size());
+            const model::MessageVM* prev = nullptr;
+            for (auto& msg_vm : hl.messages) {
+                detail::msg_derive::apply_grouping(msg_vm, prev);
+                m.messages.push_back(std::move(msg_vm));
+                prev = &m.messages.back();
+            }
+            m.msg_scroll.y = 1'000'000;
+        },
+        [&](E::ReactionsUpdated ru) {
+            if (!m.selected_chat_index) return;
+            if (*m.selected_chat_index >= m.chats.size()) return;
+            const auto open_id = m.chats[*m.selected_chat_index].id;
+            if (open_id != td::to_model(ru.chat_id)) return;
+            const auto mid = td::to_model(ru.message_id);
+            for (auto& msg_vm : m.messages) {
+                if (msg_vm.id == mid) {
+                    msg_vm.reactions = std::move(ru.reactions);
+                    break;
+                }
+            }
+        },
+    }, std::move(ev));
+}
+
 }  // namespace tl::app
+

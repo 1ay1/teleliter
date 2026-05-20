@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 #include <maya/maya.hpp>
@@ -8,45 +9,47 @@
 
 // ─── teleliter wordmark ──────────────────────────────────────────────────────
 //
-// Borderless single-row brand strip. Text-only — no box, no padding
-// frame — keeps the sidebar dense and lets the search input below sit
-// flush near the top.
+// 3-row box-drawing wordmark, center-aligned in the chat panel.
 //
-//   Compact panel_w ≥ 22   →  `❯_ teleliter`
-//   Minimal panel_w < 22   →  `❯ tl_`
+//     ╶┬╴┌─╴╷  ┌─╴╷  ╷╶┬╴┌─╴┌─┐
+//      │ ├╴ │  ├╴ │  │ │ ├╴ ├┬┘
+//      ╵ └─╴└─╴└─╴└─╴╵ ╵ └─╴╵└╴
 //
-// Visual language:
-//   ▸ accent-colored prompt `❯` + blinking `_` caret (same clock the
-//     composer + search caret use, so every pulsing thing on screen is
-//     in phase)
-//   ▸ brand-color bold wordmark (cyan)
+// Bold cyan, no border, no padding frame. On narrow panels the wordmark
+// is suppressed in favour of a 1-row `tl` chip so the search box still
+// has room.
 
 namespace tl::views {
 
 [[nodiscard]] inline maya::Element render_brand_logo(
-    int panel_w, bool caret_visible)
+    int panel_w, bool /*caret_visible*/)
 {
     using namespace maya;
     using namespace maya::dsl;
 
-    const auto accent_st = Style{}.with_fg(palette::accent()).with_bold();
-    const auto brand_st  = Style{}.with_fg(palette::brand()).with_bold();
+    const auto brand_st = Style{}.with_fg(palette::brand()).with_bold();
 
-    // ─── Minimal — bare `❯ tl_` chip. ──────────────────────
-    if (panel_w < 22) {
-        return hstack().gap(0)(
-            text(std::string{"\u276F "}, accent_st),
-            text(std::string{"tl"},      brand_st),
-            text(caret_visible ? std::string{"_"} : std::string{" "},
-                 accent_st)
+    // Wordmark is 26 cells wide. Need a bit of breathing room on each
+    // side, so require panel_w ≥ 28 for the full art; otherwise drop to
+    // a compact one-row chip.
+    if (panel_w < 28) {
+        return hstack().grow(1)(
+            spacer(),
+            text(std::string{"\xe1\xb4\x9b\xca\x9f"}, brand_st),   // ᴛʟ
+            spacer()
         );
     }
 
-    return hstack().gap(0).align_items(Align::Center)(
-        text(std::string{"\u276F"}, accent_st),                  // ❯
-        text(caret_visible ? std::string{"_"} : std::string{" "},
-             accent_st),
-        text(std::string{" teleliter"}, brand_st)
+    static const std::array<std::string, 3> rows = {
+        std::string{"\u2576\u252c\u2574\u250c\u2500\u2574\u2577  \u250c\u2500\u2574\u2577  \u2577\u2576\u252c\u2574\u250c\u2500\u2574\u250c\u2500\u2510"},
+        std::string{" \u2502 \u251c\u2574 \u2502  \u251c\u2574 \u2502  \u2502 \u2502 \u251c\u2574 \u251c\u252c\u2518"},
+        std::string{" \u2575 \u2514\u2500\u2574\u2514\u2500\u2574\u2514\u2500\u2574\u2514\u2500\u2574\u2575 \u2575 \u2514\u2500\u2574\u2575\u2514\u2574"},
+    };
+
+    return vstack().gap(0)(
+        hstack().grow(1)(spacer(), text(rows[0], brand_st), spacer()),
+        hstack().grow(1)(spacer(), text(rows[1], brand_st), spacer()),
+        hstack().grow(1)(spacer(), text(rows[2], brand_st), spacer())
     );
 }
 

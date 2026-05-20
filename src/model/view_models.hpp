@@ -1,14 +1,17 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <maya/core/scroll_state.hpp>
 
 #include "model/ids.hpp"
 #include "model/result.hpp"
+#include "td/auth_stage.hpp"   // for td::event::AuthStage — promoted into the model
 
 namespace tl::model {
 
@@ -234,6 +237,10 @@ struct UserVM {
     // Optional path to a JPG/PNG portrait. When set and loadable, the
     // big_avatar_block / member rows render it; otherwise initials.
     std::string  avatar_path;
+    // DM info-panel fields. Populated lazily from userFullInfo.
+    std::string  phone;          // E.164 without leading '+'
+    std::string  username;       // without '@'
+    std::string  bio;
 };
 
 struct MessageVM {
@@ -295,6 +302,11 @@ struct ChatListItemVM {
     // back to the tinted-initials block. Empty by default so the seed
     // continues to render text avatars.
     std::string   avatar_path;
+    // TDLib ordering. Larger = higher in list. 0 when unset.
+    std::int64_t  order = 0;
+    // Peer user_id when kind == Direct. Used to look up presence /
+    // userFullInfo bio/phone/username for the info panel.
+    std::int64_t  peer_user_id = 0;
 };
 
 struct MemberVM {
@@ -394,6 +406,32 @@ struct HeaderInfoVM {
 
 // ─── Aggregate Model ──────────────────────────────────────────────────────────
 
+// Auth overlay state. AuthStage is re-exported from td::event so the
+// view layer doesn't need to include the td headers — the names line up
+// 1:1 with TDLib's authorizationState* sum.
+using AuthStage = ::tl::td::event::AuthStage;
+
+enum class AuthField : unsigned char {
+    Phone, Code, Password,
+};
+
+struct AuthVM {
+    AuthStage   stage         = AuthStage::Connecting;
+    AuthField   active_field  = AuthField::Phone;
+    // Buffered user input for each field. Separate strings so we don't
+    // lose what was typed when TDLib bumps us into the next stage and
+    // the active_field flips.
+    std::string phone;
+    std::string code;
+    std::string password;
+    // Optional human-readable status line under the input ("code sent to
+    // +1***", "invalid code", connection state, etc.).
+    std::string hint;
+    // Set while we're waiting for TDLib to react to the last Submit;
+    // the overlay greys out the prompt and shows a spinner glyph.
+    bool        submitting    = false;
+};
+
 struct AppModel {
     std::vector<ChatListItemVM> chats;
     Option<std::size_t>         selected_chat_index{};
@@ -401,6 +439,16 @@ struct AppModel {
     std::vector<MessageVM>      messages;          // for the open chat
     std::vector<MemberVM>       members;           // for the open chat
     std::vector<UserVM>         typers;            // active typers in open chat
+    // Per-typer expiry timestamp (clock_seconds). Index-parallel with `typers`.
+    std::vector<std::int64_t>   typer_expiry;
+
+    // Per-chat info-panel data, lazily populated by userFullInfo /
+    // searchChatMessages. Keyed by ChatId.get(). Maps don't need to
+    // be in the model for visibility — the views read them by lookup.
+    std::unordered_map<std::int64_t, UserVM> peer_info;
+    // Shared-content per chat. 4 buckets: Media/Files/Links/Voice.
+    std::unordered_map<std::int64_t,
+        std::array<std::vector<MediaItemVM>, 4>> shared_media;
 
     ComposerVM                  composer;
     FocusedPane                 focus = FocusedPane::ChatList;
@@ -417,6 +465,10 @@ struct AppModel {
     bool                        right_panel_open = true;
     bool                        help_open    = false;
     bool                        jumper_open  = false;
+
+    // Auth state. When stage != LoggedIn the shell renders the auth
+    // overlay instead of the three-column body; see views/shell.hpp.
+    AuthVM                      auth{};
 
     // Info-pane state. `info_active_tab` indexes the Media/Files/Links/Voice
     // strip; the shared-content list under the tabs filters its rows by

@@ -1,7 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <variant>
+
+#include "td/event.hpp"
 
 namespace tl::msg {
 
@@ -10,6 +13,20 @@ struct Quit {};
 struct Tick {};
 struct Resize  { int w; int h; };
 struct CycleFocus {};
+
+// ─── Auth (login overlay) ────────────────────────────────────────────────────
+// Per-keystroke input into the auth overlay's active field, plus a
+// Submit that flushes the field down to the TDLib runtime as a Submit*
+// command. Backspace edits whatever field is currently active.
+struct AuthCharIn   { char32_t cp; };
+struct AuthBackspace {};
+struct AuthSubmit {};
+
+// ─── TDLib events (single carrier for the entire inbound stream) ─────────────
+// Wrapped so the giant variant in this file doesn't have to enumerate
+// every TDLib event alternative — those live in td::event::Event and
+// dispatch happens via a nested std::visit in program.hpp.
+struct TdEvent { td::event::Event payload; };
 
 // ─── Chat list navigation ─────────────────────────────────────────────────────
 struct SelectChatUp {};
@@ -101,6 +118,7 @@ struct Refresh {};
 
 using Msg = std::variant<
     Quit, Tick, Resize, CycleFocus,
+    AuthCharIn, AuthBackspace, AuthSubmit, TdEvent,
     SelectChatUp, SelectChatDown, OpenSelectedChat,
     SearchInput, SearchBack, SearchClear,
     CharIn, Backspace, DeleteWord, DeleteToStart, DeleteToEnd,

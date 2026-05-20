@@ -185,7 +185,8 @@ namespace detail::dm_info {
     int                      active_tab,
     bool                     notifications_on,
     int                      panel_inner_w,
-    bool                     focused = false)
+    bool                     focused = false,
+    std::span<const model::MediaItemVM> shared_media = {})
 {
     using namespace maya;
     using namespace maya::dsl;
@@ -199,13 +200,20 @@ namespace detail::dm_info {
     rows.push_back(detail::dm_info::render_hero(partner));
     rows.push_back(text(std::string{}));
 
-    rows.push_back(render_info_row("\xE2\x98\x8E", "Phone", "+1 555 0100"));   // ☎
-    rows.push_back(text(std::string{}));
-    rows.push_back(render_info_row("@", "Username", "@" + partner.name));
-    rows.push_back(text(std::string{}));
-    rows.push_back(render_info_row("\xE2\x93\x98", "Bio",                       // ⓘ
-        "engineer \xC2\xB7 gardener \xC2\xB7 runner"));
-    rows.push_back(text(std::string{}));
+    if (!partner.phone.empty()) {
+        std::string phone = partner.phone;
+        if (!phone.empty() && phone[0] != '+') phone.insert(phone.begin(), '+');
+        rows.push_back(render_info_row("\xE2\x98\x8E", "Phone", phone));   // ☎
+        rows.push_back(text(std::string{}));
+    }
+    if (!partner.username.empty()) {
+        rows.push_back(render_info_row("@", "Username", "@" + partner.username));
+        rows.push_back(text(std::string{}));
+    }
+    if (!partner.bio.empty()) {
+        rows.push_back(render_info_row("\xE2\x93\x98", "Bio", partner.bio));   // ⓘ
+        rows.push_back(text(std::string{}));
+    }
     rows.push_back(render_toggle_row(
         {"\xE2\x9A\x91", "Notifications", notifications_on, "on", "off"}));    // ⚑
     rows.push_back(text(std::string{}));
@@ -213,46 +221,10 @@ namespace detail::dm_info {
     rows.push_back(detail::dm_info::render_tabs(active_tab, panel_inner_w));
     rows.push_back(text(std::string{}));
 
-    // Full seeded media set — same items as before, just tagged by glyph
-    // so we can filter per tab. Tab-active filter lives in detail.
-    static const std::array<model::MediaItemVM, 8> all_media = {
-        // Media (📷)
-        model::MediaItemVM{"hike-sunset.jpg", "\xF0\x9F\x93\xB7",
-            "1.2 MB \xC2\xB7 from Ana",     "assets/media/hike-sunset.jpg",
-            "xdg-open \xE2\x86\x97"},
-        model::MediaItemVM{"selfie-cafe.png", "\xF0\x9F\x93\xB7",
-            "640 KB \xC2\xB7 from Ana",     "assets/media/selfie-cafe.png",
-            "xdg-open \xE2\x86\x97"},
-        // Files (📄 / 📎)
-        model::MediaItemVM{"plan.pdf",        "\xF0\x9F\x93\x84",
-            "2.1 MB \xC2\xB7 8 pages",       "assets/media/plan.pdf",
-            "xdg-open \xE2\x86\x97"},
-        model::MediaItemVM{"build-log.txt",   "\xF0\x9F\x93\x8E",
-            "84 KB \xC2\xB7 ci snapshot",    "assets/media/build-log.txt",
-            "xdg-open \xE2\x86\x97"},
-        // Links (🔗)
-        model::MediaItemVM{"maya.dev",        "\xF0\x9F\x94\x97",
-            "https://maya.dev/docs",         "https://maya.dev/docs",
-            "in browser \xE2\x86\x97"},
-        model::MediaItemVM{"github.com",      "\xF0\x9F\x94\x97",
-            "github.com/1ay1/maya",          "https://github.com/1ay1/maya",
-            "in browser \xE2\x86\x97"},
-        // Voice (🎵 / 🎬)
-        model::MediaItemVM{"voice 0:42",      "\xF0\x9F\x8E\xB5",
-            "voice note \xC2\xB7 32 kbps",   "assets/media/voice-1.m4a",
-            "mpv \xE2\x86\x97"},
-        model::MediaItemVM{"video 1:05",      "\xF0\x9F\x8E\xAC",
-            "video note \xC2\xB7 720p",      "assets/media/video-1.mp4",
-            "mpv \xE2\x86\x97"},
-    };
-
-    std::vector<model::MediaItemVM> filtered;
-    filtered.reserve(all_media.size());
-    for (const auto& it : all_media) {
-        if (detail::dm_info::item_on_tab(it, active_tab)) filtered.push_back(it);
-    }
-    rows.push_back(render_media_links_list(
-        std::span<const model::MediaItemVM>{filtered}));
+    // Shared media for the active tab — caller fetched it via TDLib.
+    // Empty span renders the bare panel chrome; the list molecule
+    // produces an empty-state line of its own.
+    rows.push_back(render_media_links_list(shared_media));
 
     return vstack().padding(1)(rows);
 }

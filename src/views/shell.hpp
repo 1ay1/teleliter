@@ -10,7 +10,10 @@
 
 #include "model/view_models.hpp"
 
+#include "util/debug_log.hpp"
+
 #include "views/atoms/divider.hpp"
+#include "views/organisms/auth_overlay.hpp"
 #include "views/organisms/chat_list.hpp"
 #include "views/organisms/conversation_pane.hpp"
 #include "views/organisms/dm_info_panel.hpp"
@@ -124,6 +127,19 @@ jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> c
     using namespace maya;
     using namespace maya::dsl;
 
+    // Auth gate — the entire three-column body is replaced by the
+    // login overlay until TDLib reports authorizationStateReady.
+    if (m.auth.stage != model::AuthStage::LoggedIn) {
+        TL_DLOG("ui", "render_shell auth_gate stage=%d term=%dx%d",
+                static_cast<int>(m.auth.stage), m.term_w, m.term_h);
+        return vstack().grow(1).width(Dimension::percent(100))
+            .align_items(Align::Center).justify(Justify::Center)(
+            render_auth_overlay(m.auth, m.tick, m.composer.caret_visible)
+        );
+    }
+    TL_DLOG("ui", "render_shell main term=%dx%d chats=%zu msgs=%zu",
+            m.term_w, m.term_h, m.chats.size(), m.messages.size());
+
     const auto header     = detail::shell::derive_header(m);
 
     // ─── Geometry — mirrors messenger.cpp's middle_width() ─────────────
@@ -211,11 +227,31 @@ jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> c
                 : c.initials;
             partner.presence    = c.partner_presence;
             partner.avatar_path = c.avatar_path;
+            // Overlay any richer userFullInfo we've fetched for this chat.
+            if (auto it = m.peer_info.find(c.id.get());
+                it != m.peer_info.end())
+            {
+                if (!it->second.phone.empty())    partner.phone    = it->second.phone;
+                if (!it->second.username.empty()) partner.username = it->second.username;
+                if (!it->second.bio.empty())      partner.bio      = it->second.bio;
+                if (!it->second.name.empty())     partner.name     = it->second.name;
+                if (!it->second.avatar_path.empty())
+                    partner.avatar_path = it->second.avatar_path;
+            }
             // Inner width = panel content width minus padding(1) on each side.
             const int panel_inner_w = std::max(8, right_w - 2);
+            // Look up cached shared media for this chat (4 buckets).
+            std::span<const model::MediaItemVM> shared_active;
+            if (auto sm = m.shared_media.find(c.id.get());
+                sm != m.shared_media.end()
+                && m.info_active_tab >= 0 && m.info_active_tab < 4)
+            {
+                shared_active = std::span<const model::MediaItemVM>{
+                    sm->second[static_cast<std::size_t>(m.info_active_tab)]};
+            }
             right_inner = render_dm_info_panel(
                 partner, m.info_active_tab, m.notifications_on,
-                panel_inner_w, false);
+                panel_inner_w, false, shared_active);
         } else {
             right_inner = render_member_list(
                 std::span<const model::MemberVM>{m.members},

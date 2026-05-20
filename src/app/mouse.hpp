@@ -153,12 +153,11 @@ namespace detail {
 }
 
 // Height (in rows) of the brand logo block above the search input.
-// Borderless, always exactly one row at every panel width. Kept as a
-// function (vs. a constant) so we can re-tier later without rewiring
-// every call site. One blank separator row always follows.
-[[nodiscard]] inline int brand_logo_h(int /*panel_w*/) noexcept
+// 3-row box-drawing wordmark at panel_w ≥ 28, 1-row `tl` chip below.
+// One blank separator row always follows.
+[[nodiscard]] inline int brand_logo_h(int panel_w) noexcept
 {
-    return 1;
+    return panel_w < 28 ? 1 : 3;
 }
 
 [[nodiscard]] inline int brand_block_h(int panel_w) noexcept
