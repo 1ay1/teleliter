@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +85,222 @@ namespace seed {
             "@you let me know if it breaks anything", "10:24", "9m",
             false, true,  false, false, false, true,  "1m later", ReadState::Sent, {},
             c.avatar_path});
+    }
+
+    // Sample voice + video notes — gives the audio_note widget some
+    // signal to render in every chat. Waveform is a hand-rolled
+    // envelope that looks like a real voice clip when binned.
+    static const std::vector<std::uint8_t> kVoiceWf = {
+         30, 80,140,200,180,150,210,240,220,180,140,110, 90,120,170,210,
+        230,200,160,110, 80, 60, 90,140,180,220,200,160,120, 80, 50, 30,
+    };
+    {
+        model::MessageVM v{};
+        v.id              = MessageId{6};
+        v.author_id       = UserId{10};
+        v.author_name     = c.title;
+        v.author_initials = c.initials;
+        v.timestamp       = "10:26";
+        v.age_label       = "7m";
+        v.read_state      = ReadState::Sent;
+        v.author_avatar_path = c.avatar_path;
+        model::AudioNoteVM an{};
+        an.file_path     = "assets/media/voice-1.m4a";
+        an.duration_secs = 42;
+        an.waveform      = kVoiceWf;
+        // Demo polish: an unplayed note with a transcript ready to expand.
+        an.unread             = true;
+        an.playback_speed     = 1.0;
+        an.transcript         = "hey, the patch landed — check it whenever you get a moment.";
+        an.transcript_expanded = false;
+        v.audio_note = std::move(an);
+        out.push_back(std::move(v));
+    }
+    {
+        model::MessageVM v{};
+        v.id              = MessageId{7};
+        v.author_id       = UserId{1};
+        v.author_name     = "you";
+        v.author_initials = "YO";
+        v.timestamp       = "10:27";
+        v.age_label       = "6m";
+        v.from_me         = true;
+        v.read_state      = ReadState::Read;
+        v.author_avatar_path = "assets/avatars/p8.jpg";
+        model::VideoNoteVM vn{};
+        vn.file_path     = "assets/media/video-1.mp4";
+        vn.duration_secs = 65;
+        vn.waveform      = kVoiceWf;
+        // Video circles are muted by default in Telegram — mirror that.
+        // The mute glyph in the top-right of the circle reflects this.
+        vn.muted          = true;
+        vn.unread         = false;
+        vn.playback_speed = 1.0;
+        v.video_note = std::move(vn);
+        out.push_back(std::move(v));
+    }
+
+    // ─── One example of every rich-media kind ─────────────────────────────────────
+    // Lets the demo exercise every renderer in views/molecules/media_cards.hpp
+    // so we can spot regressions just by scrolling the chat. Each one is
+    // attached to its own MessageVM (“at most one media kind per bubble”
+    // is the rule) so dispatch order in render_body never matters.
+
+    auto push_peer = [&](model::MessageVM v) {
+        v.author_id          = UserId{10};
+        v.author_name        = c.title;
+        v.author_initials    = c.initials;
+        v.read_state         = ReadState::Sent;
+        v.author_avatar_path = c.avatar_path;
+        out.push_back(std::move(v));
+    };
+
+    {  // photo card
+        model::MessageVM v{};
+        v.id        = MessageId{8};
+        v.timestamp = "10:28";
+        v.age_label = "5m";
+        model::PhotoVM p{};
+        p.file_path  = "assets/media/hike-sunset.jpg";
+        p.caption    = "trail was perfect";
+        p.width_px   = 1920;
+        p.height_px  = 1080;
+        p.size_bytes = 1'258'291;
+        v.photo = std::move(p);
+        push_peer(std::move(v));
+    }
+    {  // sticker
+        model::MessageVM v{};
+        v.id        = MessageId{9};
+        v.timestamp = "10:29";
+        v.age_label = "5m";
+        model::StickerVM s{};
+        s.emoji     = "\xF0\x9F\x98\xBA";   // 😺
+        s.pack_name = "Animals";
+        v.sticker = std::move(s);
+        push_peer(std::move(v));
+    }
+    {  // animation / gif
+        model::MessageVM v{};
+        v.id        = MessageId{10};
+        v.timestamp = "10:30";
+        v.age_label = "4m";
+        model::AnimationVM a{};
+        a.file_path     = "assets/media/loop.gif";
+        a.duration_secs = 3;
+        a.width_px      = 640;
+        a.height_px     = 480;
+        a.size_bytes    = 491'520;
+        a.caption       = "this gets me every time";
+        v.animation = std::move(a);
+        push_peer(std::move(v));
+    }
+    {  // full video
+        model::MessageVM v{};
+        v.id        = MessageId{11};
+        v.timestamp = "10:31";
+        v.age_label = "4m";
+        model::VideoVM vid{};
+        vid.file_path     = "assets/media/tahoe.mp4";
+        vid.title         = "Sunset over Tahoe";
+        vid.duration_secs = 42;
+        vid.width_px      = 1920;
+        vid.height_px     = 1080;
+        vid.size_bytes    = 12'998'656;
+        v.video = std::move(vid);
+        push_peer(std::move(v));
+    }
+    {  // music track (you sending)
+        model::MessageVM v{};
+        v.id              = MessageId{12};
+        v.author_id       = UserId{1};
+        v.author_name     = "you";
+        v.author_initials = "YO";
+        v.from_me         = true;
+        v.read_state      = ReadState::Read;
+        v.author_avatar_path = "assets/avatars/p8.jpg";
+        v.timestamp       = "10:32";
+        v.age_label       = "3m";
+        model::MusicTrackVM mt{};
+        mt.file_path     = "assets/media/midnight-city.mp3";
+        mt.title         = "Midnight City";
+        mt.artist        = "M83";
+        mt.duration_secs = 243;
+        mt.progress_secs = 24;
+        mt.playing       = false;
+        mt.waveform      = kVoiceWf;
+        v.music = std::move(mt);
+        out.push_back(std::move(v));
+    }
+    {  // document
+        model::MessageVM v{};
+        v.id        = MessageId{13};
+        v.timestamp = "10:33";
+        v.age_label = "3m";
+        model::DocumentVM d{};
+        d.file_path  = "assets/media/plan.pdf";
+        d.filename   = "plan.pdf";
+        d.mime       = "application/pdf";
+        d.size_bytes = 2'200'000;
+        v.document = std::move(d);
+        push_peer(std::move(v));
+    }
+    {  // contact card
+        model::MessageVM v{};
+        v.id        = MessageId{14};
+        v.timestamp = "10:34";
+        v.age_label = "2m";
+        model::ContactVM ct{};
+        ct.first_name = "Ana";
+        ct.last_name  = "Rivera";
+        ct.phone      = "+1 555 0100";
+        ct.username   = "ana";
+        v.contact = std::move(ct);
+        push_peer(std::move(v));
+    }
+    {  // location
+        model::MessageVM v{};
+        v.id        = MessageId{15};
+        v.timestamp = "10:35";
+        v.age_label = "2m";
+        model::LocationVM loc{};
+        loc.venue_name = "Blue Bottle Coffee";
+        loc.address    = "66 Mint St, SF";
+        loc.lat        = 37.7825;
+        loc.lng        = -122.4036;
+        v.location = std::move(loc);
+        push_peer(std::move(v));
+    }
+    {  // poll
+        model::MessageVM v{};
+        v.id        = MessageId{16};
+        v.timestamp = "10:36";
+        v.age_label = "1m";
+        model::PollVM p{};
+        p.question    = "What's for lunch?";
+        p.total_votes = 12;
+        p.anonymous   = true;
+        p.options = {
+            {"Pizza", 8, true},
+            {"Salad", 3, false},
+            {"Pasta", 1, false},
+        };
+        v.poll = std::move(p);
+        push_peer(std::move(v));
+    }
+    {  // text + link preview
+        model::MessageVM v{};
+        v.id        = MessageId{17};
+        v.timestamp = "10:37";
+        v.age_label = "now";
+        v.body      = "check this out";
+        model::LinkPreviewVM lp{};
+        lp.url         = "https://github.com/1ay1/maya";
+        lp.site_name   = "GitHub";
+        lp.title       = "1ay1/maya \xE2\x80\x94 Terminal UI for C++26";
+        lp.description = "Compile-time DSL, flexbox layout, SIMD-diffed frames.";
+        v.link_preview = std::move(lp);
+        push_peer(std::move(v));
     }
     return out;
 }
@@ -223,6 +440,10 @@ struct TeleliterProgram {
                         &m.help_scroll}) {
             s->step_y = 3;
         }
+        // Open the conversation pinned to the newest message — same
+        // sentinel trick used by chat-switch handlers: large y lets the
+        // first layout pass clamp to the freshly-written max_y.
+        m.msg_scroll.y = 1'000'000;
         return m;
     }
 
@@ -242,6 +463,51 @@ struct TeleliterProgram {
                 // toggle every other tick). The visible flag is read by
                 // both composer_input and search_input atoms.
                 m.composer.caret_visible = (m.tick & 0x1) == 0;
+                // Audio / video notes that are playing tick their
+                // progress forward once per second of wall-clock time
+                // (= every 4 Ticks). Loops back to 0 at the end so
+                // hitting play again restarts cleanly.
+                if ((m.tick & 0x3) == 0) {
+                    for (auto& msg_vm : m.messages) {
+                        auto advance = [](auto& note) {
+                            if (!note.playing) return;
+                            note.progress_secs += 1;
+                            if (note.progress_secs >= note.duration_secs) {
+                                note.progress_secs = 0;
+                                note.playing       = false;
+                            }
+                        };
+                        if (msg_vm.audio_note.has_value()) advance(*msg_vm.audio_note);
+                        if (msg_vm.video_note.has_value()) advance(*msg_vm.video_note);
+                        if (msg_vm.music.has_value())      advance(*msg_vm.music);
+                    }
+                    // Voice recording — ±once per second, bump the
+                    // timer. The waveform gets a fresh sample on every
+                    // tick (4×/sec) so the bars wiggle smoothly.
+                    if (m.composer.recording) {
+                        m.composer.recording_secs += 1;
+                    }
+                }
+                // Push a synthetic waveform sample every tick while
+                // recording — a deterministic-but-jittery envelope so
+                // the live waveform looks alive without needing a real
+                // microphone. Capped at a sensible buffer length.
+                if (m.composer.recording) {
+                    constexpr std::size_t kMaxSamples = 256;
+                    const int t = m.tick;
+                    // Simple bounded "vu meter": baseline + a pseudo-
+                    // random wiggle from the tick counter.
+                    const std::uint8_t sample = static_cast<std::uint8_t>(
+                        80 + ((t * 73 + 41) % 160));
+                    m.composer.recording_waveform.push_back(sample);
+                    if (m.composer.recording_waveform.size() > kMaxSamples) {
+                        m.composer.recording_waveform.erase(
+                            m.composer.recording_waveform.begin(),
+                            m.composer.recording_waveform.begin()
+                                + static_cast<std::ptrdiff_t>(
+                                    m.composer.recording_waveform.size() - kMaxSamples));
+                    }
+                }
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
             [&](msg::Resize r) {
@@ -355,31 +621,420 @@ struct TeleliterProgram {
             [&](msg::CursorHome)     { composer_ops::cursor_home(m.composer);    return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
             [&](msg::CursorEnd)      { composer_ops::cursor_end(m.composer);     return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
             [&](msg::SendComposer) {
+                // Sending while recording → commit the recording first
+                // (VoiceStop semantics) and then drop through the rest
+                // of the send flow so any pending text / attachments
+                // also get flushed.
+                if (m.composer.recording) {
+                    if (m.composer.recording_secs > 0) {
+                        model::MessageVM out{};
+                        out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                        out.author_id   = model::UserId{1};
+                        out.author_name = m.self_name;
+                        out.timestamp   = "now";
+                        out.age_label   = "now";
+                        out.from_me     = true;
+                        out.read_state  = model::ReadState::Sending;
+                        model::AudioNoteVM an{};
+                        an.duration_secs = m.composer.recording_secs;
+                        an.waveform      = m.composer.recording_waveform;
+                        out.audio_note   = std::move(an);
+                        m.messages.push_back(std::move(out));
+                    }
+                    m.composer.recording = false;
+                    m.composer.recording_secs = 0;
+                    m.composer.recording_waveform.clear();
+                }
+
                 auto body = m.composer.text;
+                auto attachments = std::move(m.composer.attachments);
+                auto reply = m.composer.reply_quote;
                 m.composer.text.clear();
                 m.composer.cursor_bytes = 0;
-                if (body.empty()) {
+                m.composer.attachments.clear();
+                m.composer.reply_quote.reset();
+
+                if (body.empty() && attachments.empty()) {
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 }
-                if (run_command(m, body)) {
+                if (!body.empty() && attachments.empty()
+                 && run_command(m, body)) {
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 }
-                model::MessageVM out{};
-                out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
-                out.author_id   = model::UserId{1};
-                out.author_name = m.self_name;
-                out.body        = std::move(body);
-                out.timestamp   = "now";
-                out.age_label   = "now";
-                out.from_me     = true;
-                out.read_state  = model::ReadState::Sending;
-                m.messages.push_back(std::move(out));
-                // scroll_to_bottom() clamps against the OLD max_y (before
-                // this push grew the content), so the new bubble lands
-                // half-clipped behind the composer. Setting y to a huge
-                // value lets the renderer's clamp pull it down to the
-                // freshly-written max_y after this frame's layout.
+
+                // Helper: build a fresh self-bubble MessageVM with all
+                // the boilerplate filled in. Caller fills the media slot.
+                auto fresh_self_msg = [&]() {
+                    model::MessageVM out{};
+                    out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                    out.author_id   = model::UserId{1};
+                    out.author_name = m.self_name;
+                    out.timestamp   = "now";
+                    out.age_label   = "now";
+                    out.from_me     = true;
+                    out.read_state  = model::ReadState::Sending;
+                    return out;
+                };
+
+                // Emit one MessageVM per attachment. The text body and
+                // the reply quote attach to the FIRST sent message —
+                // matches how Telegram groups a caption with the first
+                // photo of a media batch.
+                bool body_attached_to_first = false;
+                for (std::size_t i = 0; i < attachments.size(); ++i) {
+                    using K = model::ComposerVM::AttachmentKind;
+                    auto& a = attachments[i];
+                    auto out = fresh_self_msg();
+                    if (!body_attached_to_first) {
+                        out.body = body;
+                        out.reply_quote = reply;
+                        body_attached_to_first = true;
+                        body.clear();
+                        reply.reset();
+                    }
+                    switch (a.kind) {
+                        case K::Photo: {
+                            model::PhotoVM p{};
+                            p.file_path  = std::move(a.path);
+                            p.size_bytes = a.size_bytes;
+                            out.photo = std::move(p);
+                            break;
+                        }
+                        case K::Voice: {
+                            model::AudioNoteVM an{};
+                            an.file_path     = std::move(a.path);
+                            an.duration_secs = a.duration_secs;
+                            out.audio_note   = std::move(an);
+                            break;
+                        }
+                        case K::Video: {
+                            model::VideoVM v{};
+                            v.file_path     = std::move(a.path);
+                            v.title         = a.label;
+                            v.duration_secs = a.duration_secs;
+                            v.size_bytes    = a.size_bytes;
+                            out.video = std::move(v);
+                            break;
+                        }
+                        case K::File:
+                        default: {
+                            model::DocumentVM d{};
+                            d.file_path  = std::move(a.path);
+                            d.filename   = a.label;
+                            d.size_bytes = a.size_bytes;
+                            out.document = std::move(d);
+                            break;
+                        }
+                    }
+                    m.messages.push_back(std::move(out));
+                }
+
+                // If there's still body text (no attachments at all),
+                // push it as a plain text message.
+                if (!body.empty()) {
+                    auto out = fresh_self_msg();
+                    out.body        = std::move(body);
+                    out.reply_quote = std::move(reply);
+                    m.messages.push_back(std::move(out));
+                }
                 m.msg_scroll.y = 1'000'000;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::InsertNewline) {
+                composer_ops::insert(m.composer, std::string{"\n"});
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AttachPickFile) {
+                // Demo: cycle through a small canned set of attachments
+                // so the chip strip + send flow is exercise-able without
+                // a real picker. Cycles deterministically by
+                // (attachments.size() + tick) so repeated presses keep
+                // adding distinct items.
+                if (m.composer.attachments.size()
+                    >= model::ComposerVM::kMaxAttachments)
+                {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                using K = model::ComposerVM::AttachmentKind;
+                static const std::array<model::ComposerVM::Attachment, 4> kCanned = {
+                    model::ComposerVM::Attachment{K::Photo, "sunset.jpg",
+                        "assets/media/hike-sunset.jpg", 1'258'291, 0},
+                    model::ComposerVM::Attachment{K::File,  "notes.md",
+                        "assets/media/notes.md",         12'400,    0},
+                    model::ComposerVM::Attachment{K::Video, "clip.mp4",
+                        "assets/media/clip.mp4",         8'400'000, 27},
+                    model::ComposerVM::Attachment{K::File,  "build-log.txt",
+                        "assets/media/build-log.txt",    84'000,    0},
+                };
+                const auto idx = (m.composer.attachments.size()
+                              + static_cast<std::size_t>(m.tick))
+                              % kCanned.size();
+                m.composer.attachments.push_back(kCanned[idx]);
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AttachClipboardPaste) {
+                // Demo: synthesize a paste payload. A real client would
+                // consult the OSC-52 / bracketed-paste stream; here we
+                // just queue a stub Photo so the UI is exercise-able.
+                if (m.composer.attachments.size()
+                    >= model::ComposerVM::kMaxAttachments)
+                {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                model::ComposerVM::Attachment a{};
+                a.kind       = model::ComposerVM::AttachmentKind::Photo;
+                a.label      = "pasted-image.png";
+                a.path       = "<clipboard>";
+                a.size_bytes = 320'000;
+                m.composer.attachments.push_back(std::move(a));
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AttachRemove r) {
+                if (r.index < m.composer.attachments.size()) {
+                    m.composer.attachments.erase(
+                        m.composer.attachments.begin()
+                            + static_cast<std::ptrdiff_t>(r.index));
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::AttachClear) {
+                m.composer.attachments.clear();
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::VoiceStart) {
+                if (m.composer.recording) {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                m.composer.recording = true;
+                m.composer.recording_secs = 0;
+                m.composer.recording_waveform.clear();
+                m.focus = model::FocusedPane::Composer;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::VoiceStop) {
+                if (!m.composer.recording) {
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
+                if (m.composer.recording_secs > 0) {
+                    model::MessageVM out{};
+                    out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                    out.author_id   = model::UserId{1};
+                    out.author_name = m.self_name;
+                    out.timestamp   = "now";
+                    out.age_label   = "now";
+                    out.from_me     = true;
+                    out.read_state  = model::ReadState::Sending;
+                    model::AudioNoteVM an{};
+                    an.duration_secs = m.composer.recording_secs;
+                    an.waveform      = m.composer.recording_waveform;
+                    out.audio_note   = std::move(an);
+                    m.messages.push_back(std::move(out));
+                    m.msg_scroll.y = 1'000'000;
+                }
+                m.composer.recording = false;
+                m.composer.recording_secs = 0;
+                m.composer.recording_waveform.clear();
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::VoiceCancel) {
+                m.composer.recording = false;
+                m.composer.recording_secs = 0;
+                m.composer.recording_waveform.clear();
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ReplyLatest) {
+                // Walk messages newest → oldest, find the most recent
+                // peer (non-self, non-system) message, snapshot its
+                // author + a short preview into the composer's reply
+                // slot. Idempotent: re-running while already replying
+                // re-points to the (possibly different) latest peer
+                // message, which is what Telegram's keyboard reply
+                // shortcut does.
+                for (auto it = m.messages.rbegin(); it != m.messages.rend(); ++it) {
+                    if (it->from_me || it->is_system) continue;
+                    model::ReplyQuoteVM q{};
+                    q.source_id   = it->id;
+                    q.author_name = it->author_name;
+                    q.snippet     = it->body;
+                    // Cap snippet length so the preview row stays one
+                    // line regardless of the original message size.
+                    constexpr std::size_t kMaxSnippet = 80;
+                    if (q.snippet.size() > kMaxSnippet) {
+                        q.snippet.resize(kMaxSnippet);
+                        q.snippet += "…";
+                    }
+                    m.composer.reply_quote = std::move(q);
+                    m.focus = model::FocusedPane::Composer;
+                    break;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::CancelReply) {
+                m.composer.reply_quote.reset();
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleLatestNote) {
+                for (auto it = m.messages.rbegin(); it != m.messages.rend(); ++it) {
+                    if (!(it->audio_note.has_value() || it->video_note.has_value()
+                        || it->music.has_value()))
+                        continue;
+                    // Inline the same logic as ToggleAudioPlay so we go
+                    // through the single-track stop-others behaviour.
+                    model::MessageId target = it->id;
+                    bool starting = false;
+                    if (it->audio_note.has_value())      starting = !it->audio_note->playing;
+                    else if (it->video_note.has_value()) starting = !it->video_note->playing;
+                    else if (it->music.has_value())      starting = !it->music->playing;
+                    for (auto& msg_vm : m.messages) {
+                        auto flip = [&](auto& note) {
+                            if (msg_vm.id == target) {
+                                note.playing = starting;
+                                if (starting && note.progress_secs >= note.duration_secs)
+                                    note.progress_secs = 0;
+                            } else if (starting) {
+                                note.playing = false;
+                            }
+                        };
+                        if (msg_vm.audio_note.has_value()) flip(*msg_vm.audio_note);
+                        if (msg_vm.video_note.has_value()) flip(*msg_vm.video_note);
+                        if (msg_vm.music.has_value())      flip(*msg_vm.music);
+                    }
+                    break;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleAudioPlay tp) {
+                // Single-track playback: starting one note auto-pauses
+                // all the others, mirroring how Telegram-mobile behaves
+                // (and the only sane policy when our "audio engine" is
+                // a single shared output channel anyway).
+                model::MessageId target{tp.message_id};
+                bool starting = false;
+                for (const auto& msg_vm : m.messages) {
+                    if (msg_vm.id == target) {
+                        if (msg_vm.audio_note.has_value())
+                            starting = !msg_vm.audio_note->playing;
+                        else if (msg_vm.video_note.has_value())
+                            starting = !msg_vm.video_note->playing;
+                        else if (msg_vm.music.has_value())
+                            starting = !msg_vm.music->playing;
+                        break;
+                    }
+                }
+                for (auto& msg_vm : m.messages) {
+                    auto flip = [&](auto& note) {
+                        if (msg_vm.id == target) {
+                            note.playing = starting;
+                            if (starting && note.progress_secs >= note.duration_secs) {
+                                note.progress_secs = 0;
+                            }
+                        } else if (starting) {
+                            note.playing = false;
+                        }
+                    };
+                    if (msg_vm.audio_note.has_value()) flip(*msg_vm.audio_note);
+                    if (msg_vm.video_note.has_value()) flip(*msg_vm.video_note);
+                    if (msg_vm.music.has_value())      flip(*msg_vm.music);
+                }
+                // Tapping play clears the unread cue — you've engaged
+                // with the note, so the dot no longer applies.
+                if (starting) {
+                    for (auto& msg_vm : m.messages) {
+                        if (msg_vm.id != target) continue;
+                        if (msg_vm.audio_note.has_value()) msg_vm.audio_note->unread = false;
+                        if (msg_vm.video_note.has_value()) msg_vm.video_note->unread = false;
+                    }
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+
+            // ── Voice / video note polish controls ──
+            // Speed pill cycles 1.0 → 1.5 → 2.0 → 1.0. Applies to whichever
+            // playable kind the target message carries.
+            [&](msg::CyclePlaybackSpeed cp) {
+                auto next_speed = [](double s) noexcept {
+                    if (s < 1.25) return 1.5;
+                    if (s < 1.75) return 2.0;
+                    return 1.0;
+                };
+                for (auto& msg_vm : m.messages) {
+                    if (msg_vm.id != model::MessageId{cp.message_id}) continue;
+                    if (msg_vm.audio_note.has_value())
+                        msg_vm.audio_note->playback_speed = next_speed(
+                            msg_vm.audio_note->playback_speed);
+                    if (msg_vm.video_note.has_value())
+                        msg_vm.video_note->playback_speed = next_speed(
+                            msg_vm.video_note->playback_speed);
+                    if (msg_vm.music.has_value())
+                        msg_vm.music->playback_speed = next_speed(
+                            msg_vm.music->playback_speed);
+                    break;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::CycleLatestPlaybackSpeed) {
+                auto next_speed = [](double s) noexcept {
+                    if (s < 1.25) return 1.5;
+                    if (s < 1.75) return 2.0;
+                    return 1.0;
+                };
+                for (auto it = m.messages.rbegin(); it != m.messages.rend(); ++it) {
+                    if (it->audio_note.has_value()) {
+                        it->audio_note->playback_speed = next_speed(
+                            it->audio_note->playback_speed);
+                        break;
+                    }
+                    if (it->video_note.has_value()) {
+                        it->video_note->playback_speed = next_speed(
+                            it->video_note->playback_speed);
+                        break;
+                    }
+                    if (it->music.has_value()) {
+                        it->music->playback_speed = next_speed(
+                            it->music->playback_speed);
+                        break;
+                    }
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleVideoNoteMute t) {
+                for (auto& msg_vm : m.messages) {
+                    if (msg_vm.id != model::MessageId{t.message_id}) continue;
+                    if (msg_vm.video_note.has_value()) {
+                        msg_vm.video_note->muted = !msg_vm.video_note->muted;
+                    }
+                    break;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleLatestVideoNoteMute) {
+                for (auto it = m.messages.rbegin(); it != m.messages.rend(); ++it) {
+                    if (it->video_note.has_value()) {
+                        it->video_note->muted = !it->video_note->muted;
+                        break;
+                    }
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleTranscript t) {
+                for (auto& msg_vm : m.messages) {
+                    if (msg_vm.id != model::MessageId{t.message_id}) continue;
+                    if (msg_vm.audio_note.has_value()) {
+                        msg_vm.audio_note->transcript_expanded =
+                            !msg_vm.audio_note->transcript_expanded;
+                    }
+                    break;
+                }
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleLatestTranscript) {
+                for (auto it = m.messages.rbegin(); it != m.messages.rend(); ++it) {
+                    if (it->audio_note.has_value()) {
+                        it->audio_note->transcript_expanded =
+                            !it->audio_note->transcript_expanded;
+                        break;
+                    }
+                }
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
 
@@ -405,6 +1060,20 @@ struct TeleliterProgram {
                 return std::pair{std::move(m), maya::Cmd<Msg>{}};
             },
             [&](msg::HelpScroll hs)   { m.help_scroll.scroll_by(0, hs.dy);        return std::pair{std::move(m), maya::Cmd<Msg>{}}; },
+
+            // ── Info pane ──
+            [&](msg::InfoTabSelect t) {
+                if (t.index >= 0 && t.index < 4) m.info_active_tab = t.index;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::InfoTabCycle) {
+                m.info_active_tab = (m.info_active_tab + 1) % 4;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
+            [&](msg::ToggleNotifications) {
+                m.notifications_on = !m.notifications_on;
+                return std::pair{std::move(m), maya::Cmd<Msg>{}};
+            },
 
             // ── Jumper ──
             [&](msg::JumperChar jc) {
@@ -454,6 +1123,22 @@ struct TeleliterProgram {
                     m.right_panel_open = false;
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 }
+                // Info-pane interactions (DM right panel only). The hit
+                // tests already gate on layout.show_right + Panel::Right,
+                // so they no-op in member-list / hidden-panel modes.
+                {
+                    const int sb = static_cast<int>(m.members_scroll.y);
+                    if (auto tab = mouse::info_tab_at(layout, c.x, c.y, sb);
+                        tab >= 0)
+                    {
+                        m.info_active_tab = tab;
+                        return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                    }
+                    if (mouse::is_info_notifications(layout, c.x, c.y, sb)) {
+                        m.notifications_on = !m.notifications_on;
+                        return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                    }
+                }
                 if (mouse::is_chat_header(layout, c.x, c.y)) {
                     m.right_panel_open = !m.right_panel_open;
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
@@ -481,32 +1166,113 @@ struct TeleliterProgram {
                     m.focus = model::FocusedPane::ChatList;
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 }
+                if (mouse::is_composer_attach(layout, c.x, c.y)) {
+                    if (m.composer.attachments.size()
+                        < model::ComposerVM::kMaxAttachments)
+                    {
+                        using K = model::ComposerVM::AttachmentKind;
+                        static const std::array<model::ComposerVM::Attachment, 4> kCanned = {
+                            model::ComposerVM::Attachment{K::Photo, "sunset.jpg",
+                                "assets/media/hike-sunset.jpg", 1'258'291, 0},
+                            model::ComposerVM::Attachment{K::File,  "notes.md",
+                                "assets/media/notes.md",         12'400,    0},
+                            model::ComposerVM::Attachment{K::Video, "clip.mp4",
+                                "assets/media/clip.mp4",         8'400'000, 27},
+                            model::ComposerVM::Attachment{K::File,  "build-log.txt",
+                                "assets/media/build-log.txt",    84'000,    0},
+                        };
+                        const auto idx = (m.composer.attachments.size()
+                                      + static_cast<std::size_t>(m.tick))
+                                      % kCanned.size();
+                        m.composer.attachments.push_back(kCanned[idx]);
+                    }
+                    m.focus = model::FocusedPane::Composer;
+                    return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                }
                 if (mouse::is_composer_send(layout, c.x, c.y)) {
-                    // Re-emit as SendComposer via the existing branch.
+                    // The right-side button is context-aware:
+                    //   recording        → ⏹ commits the clip
+                    //   text+attachments → ⏎ sends the message
+                    //   empty state      → 🎤 starts a voice recording
+                    if (m.composer.recording) {
+                        // VoiceStop semantics inline.
+                        if (m.composer.recording_secs > 0) {
+                            model::MessageVM out{};
+                            out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
+                            out.author_id   = model::UserId{1};
+                            out.author_name = m.self_name;
+                            out.timestamp   = "now";
+                            out.age_label   = "now";
+                            out.from_me     = true;
+                            out.read_state  = model::ReadState::Sending;
+                            model::AudioNoteVM an{};
+                            an.duration_secs = m.composer.recording_secs;
+                            an.waveform      = m.composer.recording_waveform;
+                            out.audio_note   = std::move(an);
+                            m.messages.push_back(std::move(out));
+                            m.msg_scroll.y = 1'000'000;
+                        }
+                        m.composer.recording = false;
+                        m.composer.recording_secs = 0;
+                        m.composer.recording_waveform.clear();
+                        return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                    }
+                    if (m.composer.text.empty() && m.composer.attachments.empty()) {
+                        // Empty composer + click → start recording.
+                        m.composer.recording = true;
+                        m.composer.recording_secs = 0;
+                        m.composer.recording_waveform.clear();
+                        m.focus = model::FocusedPane::Composer;
+                        return std::pair{std::move(m), maya::Cmd<Msg>{}};
+                    }
+                    // Otherwise drop into the normal SendComposer flow.
                     auto body = m.composer.text;
+                    auto attachments = std::move(m.composer.attachments);
+                    auto reply = m.composer.reply_quote;
                     m.composer.text.clear();
                     m.composer.cursor_bytes = 0;
-                    if (!body.empty() && !run_command(m, body)) {
+                    m.composer.attachments.clear();
+                    m.composer.reply_quote.reset();
+
+                    auto fresh_self_msg = [&]() {
                         model::MessageVM out{};
                         out.id          = model::MessageId{static_cast<std::int64_t>(m.messages.size() + 1)};
                         out.author_id   = model::UserId{1};
                         out.author_name = m.self_name;
-                        out.body        = std::move(body);
                         out.timestamp   = "now";
                         out.age_label   = "now";
                         out.from_me     = true;
                         out.read_state  = model::ReadState::Sending;
+                        return out;
+                    };
+                    bool body_attached_to_first = false;
+                    for (auto& a : attachments) {
+                        using K = model::ComposerVM::AttachmentKind;
+                        auto out = fresh_self_msg();
+                        if (!body_attached_to_first) {
+                            out.body = body;
+                            out.reply_quote = reply;
+                            body_attached_to_first = true;
+                            body.clear();
+                            reply.reset();
+                        }
+                        switch (a.kind) {
+                            case K::Photo: { model::PhotoVM p{}; p.file_path = std::move(a.path); p.size_bytes = a.size_bytes; out.photo = std::move(p); break; }
+                            case K::Voice: { model::AudioNoteVM an{}; an.file_path = std::move(a.path); an.duration_secs = a.duration_secs; out.audio_note = std::move(an); break; }
+                            case K::Video: { model::VideoVM v{}; v.file_path = std::move(a.path); v.title = a.label; v.duration_secs = a.duration_secs; v.size_bytes = a.size_bytes; out.video = std::move(v); break; }
+                            default:       { model::DocumentVM d{}; d.file_path = std::move(a.path); d.filename = a.label; d.size_bytes = a.size_bytes; out.document = std::move(d); break; }
+                        }
                         m.messages.push_back(std::move(out));
-                        // Force the next layout pass to scroll to the new
-                    // bottom: scroll_to_bottom() uses the OLD max_y
-                    // (pre-content-change), so the latest message lands
-                    // off-screen. Setting y to a deliberately-large
-                    // value lets the renderer's clamp() bring it to the
-                    // newly-written max_y after this frame's layout.
+                    }
+                    if (!body.empty() && !run_command(m, body)) {
+                        auto out = fresh_self_msg();
+                        out.body        = std::move(body);
+                        out.reply_quote = std::move(reply);
+                        m.messages.push_back(std::move(out));
+                    }
                     m.msg_scroll.y = 1'000'000;
                     m.members_scroll.scroll_to_origin();
                     m.tabs_scroll.scroll_to_origin();
-                    }
                     return std::pair{std::move(m), maya::Cmd<Msg>{}};
                 }
 
@@ -625,8 +1391,22 @@ struct TeleliterProgram {
                         case SpecialKey::Right:     return msg::CursorRight{};
                         case SpecialKey::Home:      return msg::CursorHome{};
                         case SpecialKey::End:       return msg::CursorEnd{};
-                        case SpecialKey::Enter:     return msg::SendComposer{};
-                        case SpecialKey::Escape:    return msg::CycleFocus{};
+                        case SpecialKey::Enter:
+                            // Alt-Enter / Shift-Enter → newline
+                            // (a la Telegram-desktop). Bare Enter
+                            // sends.
+                            if (k.mods.alt || k.mods.shift) return msg::InsertNewline{};
+                            return msg::SendComposer{};
+                        case SpecialKey::Escape:
+                            // Escape priority while in composer focus:
+                            //   1. recording → cancel the take
+                            //   2. replying  → drop the reply
+                            //   3. else      → back to chat-list focus
+                            if (m.composer.recording)
+                                return Msg{msg::VoiceCancel{}};
+                            return m.composer.reply_quote.has_value()
+                                ? Msg{msg::CancelReply{}}
+                                : Msg{msg::CycleFocus{}};
                         case SpecialKey::Tab:       return msg::CycleFocus{};
                         case SpecialKey::Up:        return msg::ScrollUp{};
                         case SpecialKey::Down:      return msg::ScrollDown{};
@@ -643,6 +1423,22 @@ struct TeleliterProgram {
                             case U'u': return msg::DeleteToStart{};
                             case U'k': return msg::DeleteToEnd{};
                             case U'c': return msg::Quit{};
+                            case U'r': return msg::ReplyLatest{};
+                            case U'p': return msg::ToggleLatestNote{};
+                            case U's': return msg::CycleLatestPlaybackSpeed{};
+                            case U'm': return msg::ToggleLatestVideoNoteMute{};
+                            case U'x': return msg::ToggleLatestTranscript{};
+                            case U't': return msg::InfoTabCycle{};
+                            case U'v': return msg::AttachClipboardPaste{};
+                            case U'f': return msg::AttachPickFile{};
+                            case U'b': return m.composer.recording
+                                ? Msg{msg::VoiceStop{}}
+                                : Msg{msg::VoiceStart{}};
+                            // Ctrl-J inserts a literal newline —
+                            // mirrors how readline handles it, and
+                            // works on terminals that don't surface
+                            // Alt-Enter / Shift-Enter as such.
+                            case U'j': return msg::InsertNewline{};
                             default: break;
                         }
                     }
@@ -697,6 +1493,7 @@ struct TeleliterProgram {
                         case U'p': return msg::ToggleRightPanel{};
                         case U'g': return msg::ToggleJumper{};
                         case U'h': return msg::ToggleHelp{};
+                        case U't': return msg::InfoTabCycle{};
                         default: break;
                     }
                 }

@@ -75,20 +75,19 @@ namespace tl::views {
     }
     const int avatar_h = image_ok ? kHeroCellsH : 3;
 
-    // Center the hero with justify(Center) rather than flanking spacers.
-    // Flex's default cross-axis behaviour (Stretch) was forcing the hero
-    // to take the full row height, and combined with .height(fixed) on
-    // the hstack the descendant text()s ended up with a viewport that
-    // didn't match their natural sizes — visible as an empty rectangle.
-    // Natural sizing + justify(Center) keeps things simple: the row is
-    // exactly as tall as the hero, and the hero anchors mid-width.
+    // Center the hero with explicit spacer()s + a fixed height. The
+    // previous justify(Justify::Center) version was producing an empty
+    // rectangle when stacked under the panel's outer padded vstack —
+    // the per-cell text()s in the image atom ended up with a row
+    // viewport that didn't match their natural extents and painted
+    // blank. Spacers + a fixed-height hstack force exact main- and
+    // cross-axis sizing so each cell lands on its 1×1 footprint.
     auto avatar_row = hstack()
         .width(Dimension::percent(100))
-        .justify(Justify::Center)
-        .align_items(Align::Start)
+        .height(Dimension::fixed(avatar_h))
+        .align_items(Align::Center)
         .grow(0).shrink(0)
-        (std::move(hero_avatar));
-    (void)avatar_h;
+        (spacer(), std::move(hero_avatar), spacer());
     auto name_row   = center_row(text(std::string{name},
         Style{}.with_fg(palette::text()).with_bold()));
     auto presence_row = center_row(hstack().gap(1)(
@@ -98,15 +97,19 @@ namespace tl::views {
 
     // 1-row blank between the bordered avatar and the name; everything
     // below the name stacks tightly so name + subtitle + presence reads
-    // as one identity block.
+    // as one identity block. The outer vstack pins to 100% width —
+    // without it, child rows that use width(percent(100)) (avatar_row,
+    // name_row, …) resolve against an unsized parent and collapse to 0.
     auto blank = text(std::string{});
     if (subtitle.empty()) {
         return vstack()
+            .width(Dimension::percent(100))
             (avatar_row, blank, name_row, presence_row);
     }
     auto subtitle_row = center_row(text(std::string{subtitle},
         Style{}.with_fg(palette::muted()).with_italic()));
     return vstack()
+        .width(Dimension::percent(100))
         (avatar_row, blank, name_row, subtitle_row, presence_row);
 }
 

@@ -80,6 +80,7 @@ jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> c
         {"/",         "open chat jumper"},
         {"?",         "open this help"},
         {"i",         "toggle info panel"},
+        {"^t",        "cycle info tab (Media/Files/Links/Voice)"},
         {"q / Esc",   "quit"},
     };
 }
@@ -93,6 +94,15 @@ jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> c
         {"^U / ^K", "clear to start / end of line"},
         {"Bksp",    "delete previous char"},
         {"Enter",   "send (or run /command)"},
+        {"Alt-Enter", "insert a new line (also ^J)"},
+        {"^F",      "attach a file"},
+        {"^V",      "paste clipboard as attachment"},
+        {"^B",      "start / stop voice recording"},
+        {"Esc",     "cancel reply / recording / leave composer"},
+        {"^p",      "play / pause latest voice or video note"},
+        {"^s",      "cycle speed (1× → 1.5× → 2×)"},
+        {"^m",      "mute / unmute latest video circle"},
+        {"^x",      "expand / collapse voice transcript"},
     };
 }
 
@@ -201,10 +211,11 @@ jumper_matches(std::string_view filter, std::span<const model::ChatListItemVM> c
                 : c.initials;
             partner.presence    = c.partner_presence;
             partner.avatar_path = c.avatar_path;
-            // tabs viewport = panel content width minus inner padding(1) on each side.
-            const int tabs_viewport_w = std::max(8, right_w - 2);
+            // Inner width = panel content width minus padding(1) on each side.
+            const int panel_inner_w = std::max(8, right_w - 2);
             right_inner = render_dm_info_panel(
-                partner, m.tabs_scroll, tabs_viewport_w, false);
+                partner, m.info_active_tab, m.notifications_on,
+                panel_inner_w, false);
         } else {
             right_inner = render_member_list(
                 std::span<const model::MemberVM>{m.members},

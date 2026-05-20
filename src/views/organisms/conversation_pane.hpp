@@ -124,15 +124,26 @@ struct ConversationPaneInputs {
             in.clock_seconds,
             header_density));
 
-    // ─── Composer band ─ fixed 1 row, no border ──────────────────────────
+    // ─── Composer band ─ height grows with reply preview, attachments,
+    //                  multi-line input, and recording state. ────────────
+    // viewport_w ≈ inner_w minus the visual furniture the composer
+    // adds around the text area (rail + emoji + attach + send columns,
+    // roughly 12-16 cells). We give the input a conservative budget so
+    // soft-wrap kicks in slightly earlier than it would visually —
+    // safer than letting a long line punch through the send button.
+    const int composer_text_w = std::max(16, in.inner_w - 16);
+    const int composer_h = in.composer
+        ? composer_card_height(*in.composer, composer_text_w)
+        : kConversationComposerH;
     auto composer_box = vstack()
-        .height(Dimension::fixed(kConversationComposerH))
+        .height(Dimension::fixed(composer_h))
         .grow(0).shrink(0)
         .overflow(Overflow::Hidden)
         (render_composer_bar(
             in.composer ? *in.composer : model::ComposerVM{},
             in.composer_focused,
-            composer_density));
+            composer_density,
+            composer_text_w));
 
     // ─── Messages band ─ grows + scrollbar on the right ──────────────────
     auto messages_inner = render_message_list(
@@ -142,9 +153,9 @@ struct ConversationPaneInputs {
             .tick   = in.tick},
         in.inner_w);
 
-    // Scrollbar height = total column rows − header(3) − 2× hdiv − composer(1).
+    // Scrollbar height = total column rows − header(3) − 2× hdiv − composer(h).
     const int messages_sb_h = std::max(4,
-        in.term_h - kConversationHeaderH - kConversationComposerH - 2);
+        in.term_h - kConversationHeaderH - composer_h - 2);
 
     auto& mut_scroll = *in.msg_scroll;
     auto messages_box = hstack().grow(1).shrink(1)(

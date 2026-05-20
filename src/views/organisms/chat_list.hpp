@@ -10,6 +10,7 @@
 #include <maya/maya.hpp>
 
 #include "model/view_models.hpp"
+#include "views/atoms/brand_logo.hpp"
 #include "views/atoms/search_input.hpp"
 #include "views/molecules/chat_row.hpp"
 #include "views/molecules/saved_messages_row.hpp"
@@ -39,6 +40,12 @@ namespace tl::views {
 
     std::vector<Element> rows;
     rows.reserve(chats.size() + 16);
+
+    // Brand wordmark sits above the search input. caret_visible drives
+    // its blink in lockstep with the composer + search caret so every
+    // pulsing thing on the screen is in phase.
+    rows.push_back(render_brand_logo(panel_w, caret_visible));
+    rows.push_back(text(std::string{}));
 
     rows.push_back(render_search_input(search_query, "Search",
                                        focused, caret_visible));

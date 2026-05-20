@@ -60,7 +60,26 @@ constexpr int kRightAutoHideAt = 100;
     l.term_w   = std::max(40, m.term_w > 0 ? m.term_w : 120);
     l.term_h   = std::max(10, m.term_h > 0 ? m.term_h : 40);
     l.header_h   = kHeaderH;
-    l.composer_h = kComposerH;
+    // Composer card grows with whatever the user has staged on it:
+    //   reply preview (1 row), attachments strip (3 rows), multi-line
+    //   text input (up to kComposerMaxRows), recording bar (replaces
+    //   the text input). Mirrors views/organisms/composer_bar.hpp's
+    //   composer_card_height — keep these in lockstep when changing.
+    {
+        constexpr int kComposerMaxRows = 6;
+        int h = 0;
+        if (m.composer.reply_quote.has_value())   ++h;
+        if (!m.composer.attachments.empty())      h += 3;
+        if (m.composer.recording) {
+            ++h;
+        } else {
+            int lines = 1;
+            for (char c : m.composer.text) if (c == '\n') ++lines;
+            if (lines > kComposerMaxRows) lines = kComposerMaxRows;
+            h += lines;
+        }
+        l.composer_h = std::max(kComposerH, h);
+    }
 
     l.chats_w   = std::clamp(l.term_w * kChatsPct / 100, kChatsMin, kChatsMax);
     l.show_right = m.right_panel_open
@@ -133,6 +152,20 @@ namespace detail {
     return c.title.find(query) != std::string::npos;
 }
 
+// Height (in rows) of the brand logo block above the search input.
+// Borderless, always exactly one row at every panel width. Kept as a
+// function (vs. a constant) so we can re-tier later without rewiring
+// every call site. One blank separator row always follows.
+[[nodiscard]] inline int brand_logo_h(int /*panel_w*/) noexcept
+{
+    return 1;
+}
+
+[[nodiscard]] inline int brand_block_h(int panel_w) noexcept
+{
+    return brand_logo_h(panel_w) + 1;   // + blank separator below
+}
+
 }  // namespace detail
 
 // Inverse of chat_at_content_y: given a chat index, returns its y
@@ -143,6 +176,9 @@ namespace detail {
     const model::AppModel& m, std::size_t target_idx) noexcept
 {
     int row = 1;          // padding(1) top
+    row += detail::brand_block_h(m.term_w > 0
+        ? std::clamp(m.term_w * kChatsPct / 100, kChatsMin, kChatsMax)
+        : kChatsMin);    // brand logo + blank
     row += 3;             // search input (bordered)
     row += 1;             // blank
 
@@ -216,6 +252,9 @@ chat_at_content_y(const model::AppModel& m, int y_in_content) noexcept
 {
     if (y_in_content < 0) return std::nullopt;
     int row = 1;     // padding(1) top of chat_list
+    row += detail::brand_block_h(m.term_w > 0
+        ? std::clamp(m.term_w * kChatsPct / 100, kChatsMin, kChatsMax)
+        : kChatsMin);    // brand logo + blank
     row += 3;        // search input (bordered → 3 rows)
     row += 1;        // blank
 
@@ -323,22 +362,38 @@ enum class ScrollbarHit : unsigned char { None, Chats, Messages, Members };
     return x >= middle_end - 3 && x < middle_end;
 }
 
-// ─── Composer text area — any click inside the bottom composer row
-// (excluding the send button) focuses the composer. ───────────────────────
+// 📎 attach button — the cell run immediately to the left of the send
+// button on the bottom composer row. Same 3-cell hot zone. In Full
+// density only; the Compact / Minimal layouts drop the attach button
+// so the hit-test naturally no-ops there (no attach button == clicks
+// fall through to is_composer_input).
+[[nodiscard]] inline bool is_composer_attach(const Layout& l, int x, int y) noexcept
+{
+    if (y != l.term_h - 1) return false;
+    if (panel_at_x(l, x) != Panel::Middle) return false;
+    const int middle_end = l.middle_start + l.middle_w;
+    // Sits 3 cells left of the send button — leaves a 1-cell gap so
+    // adjacent clicks don't race.
+    return x >= middle_end - 7 && x < middle_end - 4;
+}
+
+
+// ─── Composer text area — any click inside the composer band
+// (excluding the send button) focuses the composer. ───────────────
 
 [[nodiscard]] inline bool is_composer_input(const Layout& l, int x, int y) noexcept
 {
-    if (y != l.term_h - 1)                  return false;
-    if (panel_at_x(l, x) != Panel::Middle)  return false;
-    if (is_composer_send(l, x, y))          return false;
+    if (panel_at_x(l, x) != Panel::Middle)        return false;
+    if (middle_region_at_y(l, y) != MiddleRegion::Composer) return false;
+    if (is_composer_send(l, x, y))                return false;
     return true;
 }
 
-// ─── Search input — top of the chat list panel ───────────────────────────────
+// ─── Search input — top of the chat list panel ────────────────────────────
 // The search input is 3 rows tall (rounded border + content + border)
-// starting after the chat list's padding(1) top, so it spans content
-// rows 1..3 of the panel. Hit-test in terminal y space accounting for
-// the chats_scroll offset.
+// starting after the chat list's padding(1) top and the brand logo
+// block, so it spans content rows (1 + brand_block_h) .. (3 + brand_block_h).
+// Hit-test in terminal y space accounting for the chats_scroll offset.
 
 [[nodiscard]] inline bool is_search_input(
     const Layout& l,
@@ -347,13 +402,14 @@ enum class ScrollbarHit : unsigned char { None, Chats, Messages, Members };
 {
     if (panel_at_x(l, x) != Panel::Chats) return false;
     const int y_in_content = y + chats_scroll_y;
-    return y_in_content >= 1 && y_in_content <= 3;
+    const int top = 1 + detail::brand_block_h(l.chats_w);
+    return y_in_content >= top && y_in_content <= top + 2;
 }
 
 // Search input's right-edge ✕ clear button. Lives on the search box's
-// middle row (content row, y=2 in panel space). The hot zone is the
-// last ~3 cells of the chats panel content area — wider than the glyph
-// itself so it's easy to hit without precise aim.
+// middle row. The hot zone is the last ~3 cells of the chats panel
+// content area — wider than the glyph itself so it's easy to hit
+// without precise aim.
 [[nodiscard]] inline bool is_search_clear(
     const Layout& l,
     int x, int y,
@@ -361,9 +417,84 @@ enum class ScrollbarHit : unsigned char { None, Chats, Messages, Members };
 {
     if (panel_at_x(l, x) != Panel::Chats) return false;
     const int y_in_content = y + chats_scroll_y;
-    if (y_in_content != 2) return false;
+    const int mid_row = 1 + detail::brand_block_h(l.chats_w) + 1;  // middle of the 3-row box
+    if (y_in_content != mid_row) return false;
     const int chats_right_edge = l.chats_w - 1;   // last col before scrollbar
     return x >= chats_right_edge - 3 && x < chats_right_edge;
+}
+
+// ─── Info pane (DM right panel) ─────────────────────────────────────────────
+// Row offsets inside the padded panel content. These mirror the row order
+// in views/organisms/dm_info_panel.hpp's render_dm_info_panel exactly —
+// keep both files in lockstep when changing the panel layout.
+//
+// Layout (y, 0-indexed, including padding(1) top):
+//   0          padding(1) top
+//   1          titlebar
+//   2          blank
+//   3..9       hero (7 rows: kCellsH)
+//   10         blank
+//   11         name row
+//   12         presence row
+//   13         blank
+//   14..15     phone (value, label)
+//   16         blank
+//   17..18     username
+//   19         blank
+//   20..21     bio
+//   22         blank
+//   23         notifications toggle
+//   24         blank
+//   25         tabs labels
+//   26         tabs underline
+//   27         blank
+//   28+        media list
+constexpr int kInfoNotifY  = 23;
+constexpr int kInfoTabsY   = 25;
+
+// y of the title bar — used by the close-button hit test (overriding the
+// existing y==1 heuristic to be panel-aware).
+[[nodiscard]] inline bool is_right_panel(const Layout& l, int x, int y) noexcept
+{
+    return l.show_right && panel_at_x(l, x) == Panel::Right && y >= 0 && y < l.term_h;
+}
+
+// Tab hit-test. Returns the active-tab index a click resolves to, or -1.
+// Mirrors render_tabs's label set + separators in dm_info_panel.
+[[nodiscard]] inline int info_tab_at(
+    const Layout& l, int x, int y, int members_scroll_y) noexcept
+{
+    if (!is_right_panel(l, x, y)) return -1;
+    const int y_in_content = y + members_scroll_y;
+    if (y_in_content != kInfoTabsY) return -1;
+
+    // panel left edge = l.right_start; padding(1) adds 1 col of inset; the
+    // tabs row itself starts with a leading " " before the first label.
+    const int label_x0 = l.right_start + 1 + 1;   // padding + leading space
+    int rel = x - label_x0;
+    if (rel < 0) return -1;
+
+    // Labels: "Media"/"Files"/"Links"/"Voice" (5 cells each) or the short
+    // form (3 cells each) below 30 inner cols. Separators are " · " = 3 cells.
+    const int panel_inner_w = std::max(8, l.right_w - 2);
+    const int label_len = (panel_inner_w >= 30) ? 5 : 3;
+
+    // Each tab spans [tab_start, tab_start + label_len). Between tabs sits
+    // a 3-cell separator that doesn't pick anything.
+    for (int i = 0; i < 4; ++i) {
+        const int tab_start = i * (label_len + 3);
+        const int tab_end   = tab_start + label_len;
+        if (rel >= tab_start && rel < tab_end) return i;
+    }
+    return -1;
+}
+
+[[nodiscard]] inline bool is_info_notifications(
+    const Layout& l, int x, int y, int members_scroll_y) noexcept
+{
+    if (!is_right_panel(l, x, y)) return false;
+    const int y_in_content = y + members_scroll_y;
+    return y_in_content == kInfoNotifY;
 }
 
 }  // namespace tl::app::mouse
